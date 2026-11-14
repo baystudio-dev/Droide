@@ -74,18 +74,20 @@ data class AndroidToolchainRequirements(
         get() = requiresNativeToolchain || effectiveNdkVersions.isNotEmpty() || effectiveCmakeVersions.isNotEmpty()
 }
 
+ 
 object AndroidProjectDetector {
     fun detect(root: File): AndroidProjectModel? {
         val safeRoot = root.canonicalFile
         if (!safeRoot.isDirectory || PathSecurity.isSymbolicLink(root)) return null
-        // Optional settings must still be a safe regular workspace file when present. Test symlink
-        // identity first so dangling links cannot look like absence.
+        // Optional settings must still be a safe regular workspace file when present.
+        // Test symlink identity first so dangling links cannot look like absence.
         if (listOf("settings.gradle.kts", "settings.gradle").any { name ->
                 val settings = File(safeRoot, name)
                 PathSecurity.isSymbolicLink(settings) ||
                     (settings.exists() && (!settings.isFile || !PathSecurity.contains(safeRoot, settings)))
             }) return null
-        // Project recognition does not imply that its Gradle wrapper is complete.
+        // Project recognition does not imply that its Gradle wrapper is complete. LocalAndroidBuildRunner performs
+        // wrapper preflight before executing anything; missing wrapper files must not hide the project model.
 
         val buildFiles = safeRoot.walkTopDown().onEnter { directory ->
             directory == safeRoot || (
@@ -195,6 +197,7 @@ object AndroidProjectDetector {
         return file.isFile && !PathSecurity.isSymbolicLink(file) && PathSecurity.contains(root, file)
     }
 
+     
     private fun stripGradleComments(text: String): String {
         val out = StringBuilder(text.length)
         var index = 0
@@ -240,6 +243,7 @@ object AndroidProjectDetector {
         return out.toString()
     }
 
+     
     private fun maskGradleStrings(text: String): String {
         val out = StringBuilder(text.length)
         var index = 0

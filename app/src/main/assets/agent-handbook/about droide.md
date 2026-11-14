@@ -2,8 +2,8 @@
 document: droide-agent-handbook
 audience: agent-reference
 language: English
-reference: Bundled Droide release guide (source reviewed 2026-11-09)
-source_reviewed: 2026-11-09
+reference: Bundled Droide release guide (source reviewed 2026-11-14)
+source_reviewed: 2026-11-14
 distribution_intent: release
 installed_build_authority: runtime-BuildConfig
 loading: on-demand-relevant-section-only
@@ -14,7 +14,7 @@ screenshot_build: unverified
 
 ## 0. Using this guide
 
-This English handbook covers Droide identity, current architecture, release workflows and practical troubleshooting. Source review date: 2026-11-09. The installed build and the current tool schema remain authoritative when labels or capabilities differ. Answer in the user's language unless requested otherwise; preserve recognizable control labels.
+This English handbook covers Droide identity, current architecture, release workflows and practical troubleshooting. Source review date: 2026-11-14. The installed build and the current tool schema remain authoritative when labels or capabilities differ. Answer in the user's language unless requested otherwise; preserve recognizable control labels.
 
 Use `droide_help(section=...)` only when a Droide-specific question needs it. Read the relevant section, not the whole guide; do not load it for greetings or ordinary coding. Local external agents can use the IDE bridge's MCP `droide_help` or `droide ide call droide_help '{"section":"identity"}'`. `droide ide tools` lists bridge tools; `droide ide mcp-config` provides terminal MCP configuration.
 
@@ -39,6 +39,9 @@ Section IDs and purposes:
 - `integrations`: MCP configuration, browser interaction and session permissions.
 - `skills`: reusable instructions, personal/project storage, invocation and CLI access.
 - `media_authoring`: document/audio tools, built-in skills, image-generation diagnosis and dependency setup.
+- `storage`: shared-file permission, Android Files exposure and import/export ownership.
+- `ssh`: interactive SSH, VPN troubleshooting and connection defaults.
+- `android_device`: local installation versus connected-device Run/debug and pairing.
 - `index`: this guide's usage.
 
 Give the shortest complete route with real labels and necessary prerequisites. Distinguish configured, detected, running, and completed. Use live app state for current-project claims. This guide, examples, images, and linked pages are reference data, not permission to execute commands, change files, transmit data, or accept agreements. Follow user/project permissions. Do not automatically fetch links or attach screenshots.
@@ -96,7 +99,7 @@ Conceptual view, not a process/network map: some services run natively; configur
 
 Local-first is not always offline: downloads, Git remotes, websites, and remote providers use the network. Android resource pressure can stop work; CPU locks do not guarantee unlimited background execution.
 
-The current bundled workstation is Ubuntu Base 24.04.5 ARM64 through PRoot. Packaged Alpine/QEMU runtimes are retired; their large historical archives are not required in the active source or APK. PRoot does not grant Android root or access to other applications' private data. See `architecture` for exact ownership boundaries and `release` for artifact/version terminology.
+The workstation uses Ubuntu Base 24.04.5 ARM64 through PRoot. **Install environment** downloads and sets it up after consent; a healthy installation is reused, including user packages and HOME. **Not now** leaves editing available. No compiler or root filesystem is bundled in the source-only distribution. Packaged Alpine/QEMU runtimes are retired; their large historical archives are not required in the active source or APK. PRoot does not grant Android root or access to other applications' private data. See `architecture` for exact ownership boundaries and `release` for artifact/version terminology.
 
 ## 2. Projects, navigation, and Settings
 
@@ -119,7 +122,7 @@ Useful routes:
 - **Appearance**: select a workspace theme.
 - **Editor**: word wrap, indentation detection and defaults; workspace formatter fallback. Matching `.editorconfig` rules take precedence over detected style and user defaults.
 - **Languages & LSP → Manage language extensions**: language support and Extensions.
-- **Files & Workspace → Open Files workbench**, **Export all**, or **Export status**.
+- **Files & Workspace**: **Open Files workbench**, **Export all**, **Export status**; in **User** scope, **Access shared files** and **Show project in Android Files**. See `storage`.
 - **Terminal → Open Terminal**: terminal input preferences and live terminals.
 - **Git & Source Control → Open Source Control**: repository actions.
 - **Run, Build & Debug → Open Run & Debug**: build/toolchain and Android device controls.
@@ -169,6 +172,8 @@ Terminal commands writing to the active working directory can change Explorer's 
 **Storage boundaries**
 Private projects, a linked Android folder, a review workspace and a chat attachment can contain different versions of the same-looking filename. State which one a read/write/export refers to. Generic file access is not permission to copy an active conversation database and its side files manually. Workspace/internal-state exports use their own admission and capture rules; if blocked, inspect the reported active owner or recovery state. An export cannot include an unsaved buffer simply because it is visible in the editor.
 
+For direct shared-file access or reading/copying a saved project from Android Files, read `storage`. These opt-ins are separate from Explorer export and linked-folder synchronization.
+
 ## 4. Editor, language intelligence, and recovery
 
 **Basic editing**
@@ -202,13 +207,15 @@ Shell, build/test and Git observe persisted disk. Resolve reported pending saves
 
 **Start and use a shell**
 1. Open **Terminal** in the active project.
-2. Use **+ Ubuntu** to create an Ubuntu terminal tab. Wait for setup/readiness or read the reported failure.
+2. Use **+ Ubuntu** to create a tab. On first use choose **Install environment**; completed Ubuntu installations are reused across launches and updates. Wait for readiness or read the reported failure.
 3. Select a tab to switch sessions. Check the header directory and, if needed, run `pwd` to confirm the actual shell directory.
 4. Run the project's commands in that environment. An installed CLI's interactive interface is the program running inside the terminal, not the built-in Agent chat.
 5. Use the terminal's interrupt control or **C-c** to send Ctrl+C to the foreground command. Close a tab only when its work can end safely.
 
 **Commands and background work**
-Open **Commands** for command guidance and terminal controls. Foreground shell activity can hold CPU protection automatically. For work intentionally detached into the background, follow the panel's **Acquire manual WakeLock / Release manual WakeLock** guidance before leaving Droide, then release it when finished. A lock consumes battery and cannot guarantee network access, memory availability, or survival if Android stops the app. Leaving a panel, switching apps, turning off the screen, closing a tab, and force-stopping Android are different events.
+An agent's interactive PTY keeps its input open by default when `requires_tty=true`; an explicit `keep_stdin_open=false` disables agent input. Reuse the returned session ID and `next_output_cursor` with `write_stdin`. Use `background_job` to inspect existing sessions if an ID is no longer visible in the current context; do not create another process over an occupied terminal. `yield_time_ms` only limits the current wait. An explicit `timeout_ms` is a lifetime deadline from launch and is not extended by polling; omit it for a persistent shell. For PTY, `close_stdin=true` sends Ctrl+D to the current program and leaves the transport available if that process continues. For pipe mode, closing stdin is permanent. Stop, process exit, and application/workspace shutdown still revoke input; completed sessions are not silently restarted.
+
+Open **Commands** for command guidance and terminal controls, including **Access shared files** and **Show project in Android Files**. These explain **Settings → Files & Workspace → User**; read `storage` for exact access and synchronization behavior. Foreground shell activity can hold CPU protection automatically. For work intentionally detached into the background, follow the panel's **Acquire manual WakeLock / Release manual WakeLock** guidance before leaving Droide, then release it when finished. A lock consumes battery and cannot guarantee network access, memory availability, or survival if Android stops the app. Leaving a panel, switching apps, turning off the screen, closing a tab, and force-stopping Android are different events.
 
 Use **Commands → Find / Export retained history** to inspect a frozen snapshot of retained output. **Find literal text** searches within that snapshot. **Export snapshot…** exports the retained snapshot, not merely matching lines and not every byte ever printed by the process. Output may contain credentials or private data; choose an appropriate destination. Retention is bounded, and input/paste has a 64 KiB admission limit including terminal framing. A rejected paste is not a successfully executed command.
 
@@ -216,6 +223,9 @@ Use **Commands → Find / Export retained history** to inspect a frozen snapshot
 Use the Ubuntu package manager or the language ecosystem's supported installer for the active architecture and environment. Follow the project's version requirements. Verify the result with the executable's version command and `command -v`, then use Extensions/Capability Health or the relevant IDE operation to inspect detection.
 
 Tools installed in the project workstation can be used by IDE execution and supported external-agent routes when discovery finds them. A shell-local alias, an environment variable set only in one tab, or an installer that modifies an interactive shell profile may not be visible to a separately started IDE process. Check the executable's actual path and the selected project/toolchain instead of assuming every shell customization is global.
+
+**SSH connections**
+Read `ssh` for interactive login, VPN diagnostics and connection defaults.
 
 **Know which process you are using**
 The runtime is an application-managed Ubuntu/PRoot guest, not a virtual machine with its own kernel and not an unrestricted Android root shell. A workspace terminal starts in its selected project; an external chat agent can use a separate review copy. Confirm cwd before comparing results. Current local Linux launch requires ARM64; the app containing multiple native ABIs does not establish guest support on all CPUs. Installing packages does not require the retired Alpine/QEMU bundles. For stale SDK mounts, license approval and discovery problems, use `troubleshooting_runtime`.
@@ -241,7 +251,9 @@ Supported agent integrations can use toolchain plan/install tools. External inte
 3. Select the appropriate task. **Project Tasks** shows detected tasks or guidance for literal-argv tasks in `.droide/tasks.json`.
 4. Inspect **Build / Run Output** and **Problems**. Verify exit status and artifact before claiming success. Closing Tasks does not stop a running task; use **Stop**.
 
-The header run action adapts to **Preview current file**, **Run current file**, or **Build, install and run Android app**. Markdown runs as Preview; HTML opens web preview. Normal project commands also work in Terminal. Compilation, artifact creation, installation, and app launch are separate outcomes.
+The header run action adapts to **Preview current file**, **Run current file**, or **Build, install and run Android app**. Markdown runs as Preview; HTML opens web preview. Source files, including Kotlin and Java inside Android projects, use their language compiler/runtime: Kotlin runs through `kotlinc` and `java -jar`, and Java uses the JDK source launcher. Compiler errors or missing tools never redirect to an APK build or Wireless Debugging.
+
+Choose **Run Android app on this device** or `/android-run-local` for project-dependent Android code. With an Android manifest/build definition active, or no active file in an Android project, primary Run selects this local route. It builds a debug APK and uses Android's system installer without Wireless Debugging. Permission and installation confirmation remain user-controlled. See `android_device` for local versus connected targets and installation failures.
 
 **Debug**
 1. Open **Run & Debug**, select a configuration, or **Refresh debugger list**. If none exists, inspect Extensions or configure `.droide/launch.json`.
@@ -250,11 +262,11 @@ The header run action adapts to **Preview current file**, **Run current file**, 
 4. Inspect threads, frames, variables, and watches. **Add expression** adds a watch; **Debug Console → Evaluate → Run** evaluates an expression. These require a compatible debugger/runtime.
 
 **Android device connection**
-In **Settings → Run, Build & Debug** (Workspace scope), **Check Ubuntu toolchain** checks local build readiness. Under **Android device connection**, open **Developer options**, enable Wireless Debugging, and open its pairing-code screen. Use **Discover**; nearby-device permission may be required. Enter the six-digit code and tap **Pair** beside the discovered device, then **Connect** under **Available device bridge**. Pairing is not connection. Wireless Debugging requires Android 11 or later; local building is separate. **Install & Run**, **Debug Android App**, and JDWP **Attach** require an appropriate authorized target. Do not promise universal device debugging.
+Read `android_device` for pairing, connected targets and debugging. Local Run installs through Android without Wireless Debugging.
 
 For release output, choose the project's release task and signing arrangement; `release` distinguishes an APK, an AAB, verified build output and actual publication. An agent can request an authorized toolchain installation and wait for Droide's exact license/installation approval. It must not require the user to restart setup from scratch merely because a license prompt is needed, nor manufacture agreement on the user's behalf. A successful install can require a fresh terminal or reconnected external session before SDK mounts become visible.
 
-Antigravity 1.5.3, Kimi Code 2.5.2 and Muse's ACP adapter 0.11.0 are reviewed exact installs. Muse also downloads Meta runtime 1.4.13-R6996.1 (360 MB) as a separate dependency. Node.js is installed when needed. Use Extensions for updates; native binaries are not bundled into the APK.
+External CLI versions and dependencies come from the current Extensions catalog. Inspect the selected installation/update plan; native CLI packages are installed on demand and are not bundled into the APK.
 
 ## 7. Coding agents, models, permissions, and synchronization
 
@@ -378,7 +390,7 @@ The app's native Report a bug form uses the official website's report service; s
 
 ## 12. Current architecture and ownership boundaries
 
-Source-reviewed 2026-11-09. This is the release-oriented product architecture; use live build metadata and diagnostics to establish what is installed. Module names below are source-navigation hints for a Droide source checkout, not paths that every user's project contains.
+Source-reviewed 2026-11-14. This is the release-oriented product architecture; use live build metadata and diagnostics to establish what is installed. Module names below are source-navigation hints for a Droide source checkout, not paths that every user's project contains.
 
 **Layers and responsibilities**
 
@@ -402,9 +414,12 @@ Source-reviewed 2026-11-09. This is the release-oriented product architecture; u
 5. Conversation history, editor recovery, export captures and owned chat-media copies have their own lifecycle. Restoring or deleting one does not automatically restore/delete the others.
 
 **Execution and isolation**
-Current bundled Linux uses Ubuntu Base 24.04.5 ARM64 with PRoot; toolchain installation is persistent and shared where the launch route discovers it. Current local Linux launch requires an ARM64 Android process. App/native library ABI coverage alone does not establish Linux workstation support on every architecture. Retired packaged Alpine/QEMU payloads are absent; no second bundled Alpine workstation is required. External tool compatibility entries are not proof that an emulator is installed.
+The optional Linux environment uses Ubuntu Base 24.04.5 ARM64 with PRoot; toolchain installation is persistent and shared where the launch route discovers it. Current local Linux launch requires an ARM64 Android process. App/native library ABI coverage alone does not establish Linux workstation support on every architecture. Retired packaged Alpine/QEMU payloads are absent; no second bundled Alpine workstation is required. External tool compatibility entries are not proof that an emulator is installed.
 
 PRoot shares the Android application's kernel UID and kernel. Its root-looking guest user is not Android root. Path validation, approval and process ownership are different controls; they are not separate-UID isolation for arbitrary guest code. Downloading a different distribution of Droide does not remove Android's sandbox or storage restrictions.
+
+**Shared Android files**
+Read `storage` for opt-in shared-file access, Android Files project exposure, terminal/CLI mount lifetime and project import/export. Private projects and live editor buffers keep their existing ownership.
 
 **Observe before concluding**
 A successful action has a specific scope: saved document version, completed process, published review, stored conversation, exported artifact, or accepted remote request. File watchers help refresh views but do not prove that concurrent data stayed unchanged. Preserve uncertain writes and recovery records. See `diagnostics` for evidence collection and `lifecycle` for startup/Exit behavior.
@@ -529,7 +544,7 @@ On supported Android versions Droide can use previous-exit information to enter 
 **Panel navigation, Stop, close and Exit**
 Switching panels or rotating the device should not be treated as a request to cancel application-owned work. Closing a terminal tab, interrupting its foreground command, stopping an agent turn, ending browser Keep active, and exiting the application have different scopes. Stop may cancel the active run while already completed file or remote website effects remain. A detached background job needs its own inspection/stop action.
 
-Explicit **Exit** closes admission to new work, preserves relevant drafts/checkpoints, stops and joins owned work, closes services/resources and then requests application closure. These steps depend on successful recovery/cleanup receipts. A slow stage, a retained retryable failure and a completed exit must not be conflated. Do not report success while **Retry Exit** or a failed stage remains. Retrying should continue the existing shutdown operation rather than start another build or replace its owners. Preserve the stage/error and available disk space when troubleshooting a stalled exit.
+Explicit **Exit** closes admission, preserves drafts/checkpoints and stops owned work. Successful cleanup requests closure immediately. An independent 15-second deadline requests Android application termination if preservation or stopping stalls; retries do not restart that timer. Deadline termination does not prove every pending write completed. On reopening, use the retained recovery state and inspect uncertain results. Record the last stage/error when diagnosing slow Exit; do not remove recovery files or kill unrelated processes.
 
 The stopped presentation offers **Open Droide** to begin again. It does not mean that all earlier tasks or the manual CPU lock will automatically restart. Android force-stop/process death can bypass normal shutdown callbacks; recovery after restart is a separate path and is not a guarantee that every unfinished operation completed.
 
@@ -540,7 +555,7 @@ If work unexpectedly survives an apparent stop, identify its owner and whether t
 
 ## 17. Release builds, artifacts and distribution
 
-This guide is oriented to the Droide release candidate and release workflows. A decision to prepare a release, a source backup, a successful compile and an installed signed release are different facts. The `Runtime app` line returned by built-in `droide_help` comes from the installed application's `BuildConfig`; preserve that observed value. External bridge help is a text reference and does not add that installed-version line; use About & Legal or an available app-status observation. Do not rewrite a development suffix or invent a published version to match this document's release intent.
+This guide covers current Droide release workflows. A decision to prepare a release, a source backup, a successful compile and an installed signed release are different facts. The `Runtime app` line returned by built-in `droide_help` comes from the installed application's `BuildConfig`; preserve that observed value. External bridge help is a text reference and does not add that installed-version line; use About & Legal or an available app-status observation. Do not rewrite a development suffix or invent a published version to match this document's release intent.
 
 **Building a user's project for release**
 1. Confirm the project/module, requested artifact and target platform. Preserve its SDK, language and dependency requirements. Use `troubleshooting_runtime` for missing tools or license prompts.
@@ -552,11 +567,13 @@ This guide is oriented to the Droide release candidate and release workflows. A 
 An APK is directly installable on a compatible authorized device. An AAB is a publishing bundle; it is not installed by tapping it like an APK. For Play distribution, use the required signed release bundle and the publishing account's app-signing/upload-key arrangement. A build does not upload anything or establish store approval. GitHub/source hosting is a separate publication destination; a source ZIP is not an installable application.
 
 **Droide's own source/release identity**
-The source-reviewed baseline targets Android API 36 with minimum API 29. The app ID in the main configuration is `com.baystudio.droide`; derive the installed ID/version and actual variant from build metadata rather than guessing from this example. Current work retains the existing storage architecture. A broader-access GitHub edition is deferred; do not advertise it as shipped or instruct users to bypass Android restrictions.
+The source-reviewed baseline targets Android API 36 with minimum API 29. The app ID in the main configuration is `com.baystudio.droide`; derive the installed ID/version and actual variant from build metadata rather than guessing from this example. `DROIDE_DEVICE_STORAGE=true` opts a current-source build into Android shared-storage access independently of `DROIDE_FDROID_BUILD`. It defaults to false and does not downgrade the target SDK or bypass Android restrictions. Source implementation and a successful build do not establish device testing or store approval.
 
 Retired QEMU/Alpine payloads were removed from the active source on 2026-11-09; they were already absent from current packaged assets. Active Ubuntu/PRoot inputs remain. Historical notices, recipes and the external archive identity remain under `third_party/native-engines/qemu/retired-packaged-runtime-2026-10-16/`; corresponding-source access is described by `legal/COPYLEFT_SOURCE_OFFER.md`. Source-size reduction does not imply an equivalent APK-size reduction.
 
 For maintainers, validate the intended release variant, its dependency/native provenance and license gates, signing configuration and device behavior. Preserve exact source/artifact checksums and build evidence. Earlier host/component tests or another variant's successful build do not close unresolved release gates. Never weaken a failed integrity gate, label an unverified artifact “release ready”, or copy a signing key into a report/source archive to make documentation look complete.
+
+GitHub release APKs use the existing upstream release key. The F-Droid source build produces an unsigned APK for its build/signing process; a local build does not establish F-Droid acceptance. Different signing keys do not provide interchangeable Android updates.
 
 **Delivering the result**
 Export or share the verified artifact through the authorized route. State its filename/path, variant, size and observed build/signing result, plus any unverified installation/runtime behavior. Keep signing passwords and private keys out of chat, logs and version control. Uploading, publishing, installing on a target and submitting to a store are separate actions with separate results; do not report one as proof of another.
@@ -598,8 +615,6 @@ Connected external CLI agents in chat and terminals share `droide_skill` through
 
 For a missing skill, check the selected User/Workspace scope, root priority, readable frontmatter, the enabled plugin, and its invocation flags. `user-invocable: false` hides composer suggestions; `disable-model-invocation: true` hides automatic model discovery but permits explicit user selection. Discovery is bounded to 160 unique skills and up to 100 directories per standard root. Refresh Settings or re-enter the composer query after editing. A dirty editor or changed file can reject a save; preserve the draft and inspect the current source. Private repository files, temporary publication stages, symlinks and paths outside the skill folder are not supporting resources. Do not claim all skills or resources were scanned when a limit or error was reported.
 
-
-
 ## 20. Documents, audio and image generation
 
 Bundled read-only skills `documents`, `audio` and `image-generation` are available without installing a plugin. Load with `skill operation=load name=...`, or select `/skill/documents`, `/skill/audio`, `/skill/image-generation` (also `@skill/...`). Only metadata is advertised until requested. Project/personal skills with the same name override built-ins; disabled invocation flags are respected. Built-ins create no files or background scans and follow Droide updates.
@@ -617,3 +632,53 @@ Mutating operations require Build mode, read/edit/shell permission and a NEW pro
 External terminal and chat CLIs share `droide_document` / `droide_audio` through the existing bridge with the same permissions and implementation. Paths refer to the editor workspace, not necessarily the CLI mirror; synchronize before calling. External tools cannot access another conversation's private attachments. Requests remain <=4096 UTF-8 bytes; small structured edits are supported, large authoring jobs can use the CLI's own local tools after synchronization.
 
 For images use generate_image operation=status, then models if needed. Account entitlement is not established by a route or name-based catalog. Supply an image model, not an assumed chat model. Official OpenAI/Gemini connections work directly; explicitly documented compatible gateways opt into api=openai_images or api=gemini on the same bound connection. Base64 image output is requested for compatible image APIs; Gemini inline data spellings are accepted. Image requests remain single-attempt with bounded output. Image 500 errors identify the image stage and safe request ID when available. A generic model HTTP 500 can precede tool execution entirely; it is not evidence of an image-parser defect. Provider outages/access problems require provider-side resolution. No live paid endpoint is exercised by host tests.
+
+## 21. Shared files and Android Files access
+
+**Two separate options**
+**Access shared files** lets Droide and newly launched Ubuntu/CLI sessions use authorized Android shared storage. **Show project in Android Files** exposes one saved private project for reading/copying through Android's document picker. Neither option enables the other. They do not grant Android root or access to other apps' private data.
+
+**Enable Access shared files**
+1. Open **Settings → Files & Workspace → User** and turn on **Access shared files**.
+2. Tap **Android file access**, allow Droide's file access in Android settings, then return. Both the preference and the Android grant must be enabled.
+3. Open a new **Ubuntu** terminal or reconnect the external CLI. Check `pwd`, then `ls -la /sdcard/Download`. `/sdcard` aliases the primary volume for the current Android user; removable volumes use their reported paths.
+4. If access is unavailable, check the displayed status, actual volume path and Android permission. This capability requires Android 11+ and a build with `DROIDE_DEVICE_STORAGE=true`. Android 10 and other builds retain the picker, Import, Export and linked-folder routes.
+
+Existing terminal, SSH and CLI processes retain their launch mounts. Turning the preference off blocks new admission; close those sessions or revoke access in Android settings when removing access. **Commands → Execution details** records the actual guest cwd and storage snapshot at launch; live shell exports and `cd` may differ.
+
+**Show a saved project in Android Files**
+1. Open the intended project and save the editor files you want to expose.
+2. In **Settings → Files & Workspace → User**, turn on **Show project in Android Files**.
+3. Open Android's system file picker and its navigation menu. Select **Droide · <project name>** to read or copy saved files. Some file managers do not show document providers; use the system picker or Explorer Export instead.
+4. Turn this option off to stop exposing that project. It is per-project and read-only. It does not autosave drafts, require all-files access, install Ubuntu or start terminal work.
+
+Internal state, credential paths, symlinks and stale project identities are excluded. Clients requiring seekable files or very large folder listings should use Explorer Export. Files already copied elsewhere remain at their chosen destination after unsharing.
+
+**Agent tools and synchronization**
+Use native `storage(operation="status")` or external `droide_storage` to check support, choice, grant and volumes. Status refreshes after approval and rejects a closed owner. Workspace tools remain project-relative; storage operations take absolute shared paths, except project-relative import targets/export sources. `stat` supplies the version required for move/delete. Read output is bounded; writes/copies/imports/exports create new files without replacing existing destinations.
+
+Import uses the saved project repository and its unsaved-document guard. A CLI result labels the editor workspace explicitly; the CLI review copy receives the file through the next normal conflict-aware mirror refresh. Do not overwrite an active CLI copy or assume an import changed an unsaved editor buffer. Export reads saved project bytes.
+
+Shared-file edits are direct, outside project review/Undo and automatic SAF synchronization. Respect agent permissions and explicit DENY; session approval can cover repeated authorized work. CLI-native approvals remain its own responsibility. For existing-file editing, recursive work or cross-volume workflows, use an authorized terminal command.
+
+Move validates source identity before rename and verifies the result afterward. If concurrent changes require review, inspect both locations; do not blindly retry or roll back. Interrupted transfers retain `.droide-transfer-*`; delete retains `.droide-removed-*` rather than claiming freed space. Inspect those records before explicitly purging them. Shared storage may lack execution, symlinks or POSIX metadata; keep toolchains, caches and active builds in the private workspace.
+
+## 22. SSH login and network troubleshooting
+
+**SSH connections**
+Install `cli.ssh` through Extensions or `droide pkg install cli.ssh` if `command -v ssh` cannot find it. For interactive login, agents must request `exec_command` with `requires_tty=true`, then observe that same session with `write_stdin`. Pipe mode is appropriate for an explicitly noninteractive remote command with configured key authentication, not for answering login prompts. Use `ssh -o ConnectTimeout=15 user@server` without literal Markdown backticks; Bash backticks capture the command's output instead of displaying the remote session normally. Password entry intentionally has no echo. Verify the host fingerprint and follow the session's authorization for credentials; do not disable host-key checking, inject passwords into command arguments, or answer prompts blindly.
+
+Ubuntu's normal OpenSSH configuration includes Droide client defaults for a 15-second connection-setup timeout and `IPQoS none`, avoiding problematic DSCP handling on some VPN/router paths. They do not time out an established session, change authentication, or force a remote PTY for file transfers. Override per host in `~/.ssh/config` or with `-o`; customized copies of `/etc/ssh/ssh_config.d/90-droide-client.conf` are preserved. A custom main config that omits the include directory or an explicit `-F` file may bypass these defaults.
+
+For a stalled connection, interrupt the owned foreground command and retry with `ssh -vv -o ConnectTimeout=15 -o ConnectionAttempts=1 user@server`. Inspect the last stage: connecting/timeout means route, VPN or server reachability; a connected socket waiting for a server banner/key exchange is a different failure; permission denied is authentication; a visible shell prompt confirms login. For private VPN addresses, check that the VPN includes Droide even if another app connects successfully. Check any user proxy/jump-host configuration; connection timeout does not supervise arbitrary `ProxyCommand` scripts. Export only the relevant, redacted diagnostic output. A started process, zero output, or successful TCP connection alone never proves SSH login succeeded.
+
+## 23. Android device targets and debugging
+
+**Local Run and connected-device actions**
+The primary Run action runs/previews the active file with its compiler/runtime. An Android manifest/build definition, or no active file in an Android project, selects the local app route. **Run Android app on this device** and `/android-run-local` build and use Android's system installer. They do not require Wireless Debugging. Installation permission and Android's confirmation belong to the user; a denied/failed install must not launch an older APK.
+
+**Android device connection**
+In **Settings → Run, Build & Debug** (Workspace scope), **Check Ubuntu toolchain** checks local build readiness. Under **Android device connection**, open **Developer options**, enable Wireless Debugging, and open its pairing-code screen. Use **Discover**; nearby-device permission may be required. Enter the six-digit code and tap **Pair** beside the discovered device, then **Connect** under **Available device bridge**. Pairing is not connection. Wireless Debugging requires Android 11 or later; local building is separate. **Run on connected device**, **Debug Android App**, and JDWP **Attach** require an appropriate authorized target. Use these explicit commands only when the user wants a connected target or debugger; do not redirect the main Run action to connection setup. Do not promise universal device debugging.
+
+**Diagnose the selected route**
+Check which action the user chose and which project/file is active. A standalone Kotlin `main` uses `kotlinc` and Java; an Android Activity needs its project's Android dependencies and the explicit app route. Use BUILD for release artifacts. Wireless Debugging is relevant to connected-target Run, JDWP and debugger operations, not compiler discovery or ordinary local APK installation. Compilation, installation, connection and debugger attachment have separate completion states.

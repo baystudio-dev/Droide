@@ -1,7 +1,6 @@
 package com.baystudio.droide.core
 
-/** Measures inactivity between provider events, not a deadline for the whole response. */
-
+/** Provider-configurable idle timeout for decoded events. It does not cap the total response or turn. */
 internal object ProviderStreamPolicy {
     fun validateIdleTimeout(value: Long?) {
         require(value == null || (value > 0 && value <= Long.MAX_VALUE / 1_000_000L)) {

@@ -1,7 +1,7 @@
 package com.baystudio.droide.ui
 
-/** Read all three insets in the same layout pass; source/target are endpoints, not previous
- * frames. */
+/** Use one controller per accessory and sample IME insets together. Native geometry owns motion; observe raw
+ * visibility after composition to handle interrupted and floating-keyboard transitions. */
 internal class AccessoryImeMotionController {
     private var source = 0
     private var target = 0
@@ -23,6 +23,8 @@ internal class AccessoryImeMotionController {
         }
     }
 
+    // A new raw show can be used in composition before its SideEffect commits it.
+    // Neither this query nor allowsInput mutates the trajectory or closing latch.
     fun permitsFallback(rawImeVisible: Boolean): Boolean =
         closingCycleAllows(rawImeVisible) && (rawImeVisible || !nativeGeometryObserved)
 
@@ -69,8 +71,8 @@ internal class AccessoryImeMotionController {
             hiddenObservedSinceClosing = !rawImeVisible
         }
 
-        // Equal endpoints provide no native trajectory (including reduced motion). A positive current
-        // inset still shows the accessory on OEMs without endpoints.
+        // Equal endpoints provide no native trajectory (including reduced motion).
+        // A positive current inset still shows the accessory on OEMs without endpoints.
         if (nextSource == nextTarget) {
             nativeTransitionActive = false
             lastFraction = if (current > 0) 1f else 0f
@@ -91,14 +93,15 @@ internal class AccessoryImeMotionController {
             (target.toDouble() - source.toDouble())).toFloat().coerceIn(0f, 1f)
         val targetFraction = if (target > 0) 1f else 0f
         lastFraction = (sourceFraction + (targetFraction - sourceFraction) * progress).coerceIn(0f, 1f)
-
+        // Reaching an endpoint, or an equal/all-zero sample above, ends continuity.
+        // A later transition with the same endpoints therefore gets a fresh origin.
         nativeTransitionActive = progress < 1f
         return lastFraction
     }
 }
 
-/** Focus ownership and expanded mode must still be checked by the caller at dispatch time. */
-
+/** Disable input on native closing intent even while presentation exits. The caller must still verify focus and
+ * expansion ownership; the controller handles stale visibility after coordinates reset. */
 internal fun accessoryImeAllowsInput(
     rawImeVisible: Boolean,
     currentBottomPx: Int,

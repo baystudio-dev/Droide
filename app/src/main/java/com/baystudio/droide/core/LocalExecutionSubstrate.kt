@@ -66,8 +66,8 @@ object LocalExecutionSubstrate {
 
     private fun ubuntuGuestRoot(): File = File(filesDir, "guest/${FoundryUbuntuGuestEnvironmentSpec.ROOT_DIR}")
 
-    // Reconciles command-only leases left by an older app process. Native PTY leases remain
-    // unresolved; numeric legacy cleanup has no native identity guarantee.
+    // Reconciles command-only leases left by an older app process. Native PTY leases
+    // remain unresolved; numeric legacy cleanup has no native identity guarantee.
     suspend fun reconcileStaleLocalProcesses(): Int = withContext(Dispatchers.IO) {
         check(::filesDir.isInitialized) { "Local execution substrate has not been initialized" }
         val marker = File(filesDir, "run/.app-process")
@@ -139,8 +139,25 @@ object LocalExecutionSubstrate {
         SubstrateState(healthy, engine, installed).also { inspectionContext.ensureActive(); _state.value = it }
     }
 
-    fun linuxLaunchSpec(workDir: File, alpine: Boolean = false, workspaceRoot: File = workDir, toolchainWorkspaceRoot: File = workspaceRoot): TerminalLaunchSpec =
-        buildLinuxLaunchSpec(workDir, alpine, workspaceRoot, toolchainWorkspaceRoot, null, {})
+     
+    fun linuxLaunchSpec(workDir: File, alpine: Boolean = false, workspaceRoot: File = workDir, toolchainWorkspaceRoot: File = workspaceRoot,
+        storagePurpose: com.baystudio.droide.core.storage.StorageLaunchPurpose = com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE): TerminalLaunchSpec =
+        withDeviceStorage(buildLinuxLaunchSpec(workDir, alpine, workspaceRoot, toolchainWorkspaceRoot, null, {}), storagePurpose)
+
+    private fun withDeviceStorage(spec: TerminalLaunchSpec, purpose: com.baystudio.droide.core.storage.StorageLaunchPurpose): TerminalLaunchSpec {
+        if (purpose == com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE) return spec
+        return com.baystudio.droide.core.storage.ExternalMountPlan.apply(spec,
+            com.baystudio.droide.core.storage.StorageAccessController.get(appContext).refresh(), purpose)
+    }
+
+    internal fun requireStorageLaunchCurrent(spec: TerminalLaunchSpec) {
+        val access = spec.storageAccess
+        if (access.purpose == com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE) return
+        val observed = com.baystudio.droide.core.storage.StorageAccessController.get(appContext).refresh()
+        check(observed.generation == access.generation) {
+            "Storage access changed before launch; open a new terminal or reconnect the CLI"
+        }
+    }
 
     /** Observe user environment without changing the caller's existing runtime preparation policy. */
     internal suspend fun userToolchainLaunchSpec(workDir: File, workspaceRoot: File = workDir,
@@ -154,11 +171,13 @@ object LocalExecutionSubstrate {
         resolveUserToolchainLaunch(workDir, workDir, workDir) { linuxLaunchSpec(workDir) }
     }
 
+    /** Ordinary STDIO consumers keep their existing complete native preparation. */
     internal suspend fun prepareUserToolchainLaunchSpec(workDir: File, workspaceRoot: File = workDir,
-        toolchainWorkspaceRoot: File = workspaceRoot): TerminalLaunchSpec = withContext(Dispatchers.IO) {
+        toolchainWorkspaceRoot: File = workspaceRoot,
+        storagePurpose: com.baystudio.droide.core.storage.StorageLaunchPurpose = com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE): TerminalLaunchSpec = withContext(Dispatchers.IO) {
         resolveUserToolchainLaunch(workDir, workspaceRoot, toolchainWorkspaceRoot) {
             prepareUbuntuLaunchSpec(workDir, workspaceRoot, toolchainWorkspaceRoot)
-        }.spec
+        }.spec.let { withDeviceStorage(it, storagePurpose) }
     }
 
     /** Refresh an IDE task's subprocess, never the user's already-running interactive terminal. */
@@ -168,7 +187,9 @@ object LocalExecutionSubstrate {
         val rootIndex = current.prefix.indexOf("-r")
         val currentRoot = current.prefix.getOrNull(rootIndex + 1).takeIf { rootIndex >= 0 } ?: return null
         if (File(currentRoot).canonicalFile != File(ubuntuGuestRoot(), "rootfs").canonicalFile) return null
-        return prepareUserToolchainLaunchSpec(directory, workspaceRoot, workspaceRoot)
+        return prepareUserToolchainLaunchSpec(directory, workspaceRoot, workspaceRoot,
+            storagePurpose = if (current.storageAccess.purpose == com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE)
+                com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE else com.baystudio.droide.core.storage.StorageLaunchPurpose.USER_TASK)
     }
 
     private suspend fun resolveUserToolchainLaunch(workDir: File, workspaceRoot: File,
@@ -227,6 +248,7 @@ object LocalExecutionSubstrate {
                 "Local managed-package/CLI projection is unavailable"
             }
         }
+        
 
         checkCancelled()
         val launcher = SystemLinkerExec.wrap((admitted?.launcher ?: PackagedLinuxEngine.requireReady(appContext)).absolutePath, emptyList())
@@ -329,11 +351,12 @@ object LocalExecutionSubstrate {
             workspaceSelections,
             if (alpine) null else LocalLinuxUserEnvironment.installedUserAndroidSdkRoot(rootfs),
         )
-
+        // Recheck the full tuple after registry/PATH construction and before publishing launch values.
         val finalAdmission = attempt?.require(checkCancelled)
         val prefix = buildList {
             addAll(launcher)
             addAll(listOf("-0", "--link2symlink", "--kill-on-exit", "-r", rootfs.absolutePath, "-b", "/dev", "-b", "/proc", "-b", "/sys"))
+            addAll(UbuntuRuntimeFilesystem.bindings(filesDir))
             addAll(listOf("-b", "$workspace:$workspace", "-b", "${temp.absolutePath}:/tmp"))
             if (!alpine) {
                 addAll(listOf("-b", "${packageRoot.absolutePath}:/opt/droide/packages"))
@@ -344,7 +367,7 @@ object LocalExecutionSubstrate {
                     addAll(listOf("-b", "${binding.hostPath}:${binding.guestPath}"))
                 }
             }
-            addAll(listOf("-w", cwd, "/usr/bin/env", "-i", "HOME=/root", "TMPDIR=/tmp", "LANG=C.UTF-8"))
+            addAll(listOf("-w", cwd, "/usr/bin/env", "-i", "HOME=/root", "USER=root", "LOGNAME=root", "TMPDIR=/tmp", "LANG=C.UTF-8"))
             add("TERM=xterm-256color")
             add(if (alpine) "SHELL=/bin/sh" else "SHELL=/bin/bash")
             injectedGuestEnvironment.toSortedMap().forEach { (key, value) -> add("$key=$value") }
@@ -367,8 +390,9 @@ object LocalExecutionSubstrate {
         return spec
     }
 
-    suspend fun ensureLinuxReady(workDir: File): TerminalLaunchSpec = withContext(Dispatchers.IO) {
-        prepareUbuntuLaunchSpec(workDir).also {
+    suspend fun ensureLinuxReady(workDir: File,
+        storagePurpose: com.baystudio.droide.core.storage.StorageLaunchPurpose = com.baystudio.droide.core.storage.StorageLaunchPurpose.PRIVATE): TerminalLaunchSpec = withContext(Dispatchers.IO) {
+        withDeviceStorage(prepareUbuntuLaunchSpec(workDir), storagePurpose).also {
             currentCoroutineContext().ensureActive()
             _state.value = SubstrateState(true, true, true)
         }
@@ -403,8 +427,8 @@ object LocalExecutionSubstrate {
         val executable=if(node==null)"${stage.absolutePath}/payload/tree/node-v22.23.3-linux-arm64/bin/node" else LspTomlLaunchPolicy.NODE
         val context=currentCoroutineContext();val active={context.ensureActive();deadline.reserve(TomlResourcePolicy.RETIRE_MS).check()}
         active();val owner=TomlHealthPrivateState.allocate(filesDir,executable);LocalPackageInstallJournal.bindTomlHealthOwner(hold,owner.localRoot.absolutePath,owner.token,owner.identity)
-        // Preparation/proof share this deadline. Filesystem operations are cooperatively checked; an
-        // uninterruptible filesystem syscall is not claimed to have a hard JVM wall bound.
+        // Preparation/proof share this deadline. Filesystem operations are cooperatively checked;
+        // an uninterruptible filesystem syscall is not claimed to have a hard JVM wall bound.
         val spec=withTimeout(deadline.reserve(TomlResourcePolicy.RETIRE_MS).remainingMillis().coerceAtLeast(1)){prepareUbuntuLaunchSpec(owner.localWorkspace,owner.localWorkspace,owner.localWorkspace,tomlHealth=owner,tomlHealthStage=stage)}
         active();owner.verify();LocalUbuntuTomlInstaller.proveStaged(appRoot,stage,active);node?.let{LocalUbuntuTomlInstaller.provePackage(appRoot,it,active)};active()
         val args=if(node==null)listOf("${stage.absolutePath}/${LspTomlLaunchPolicy.NODE_HEALTH}","--node-health",owner.guestRoot)else listOf("${stage.absolutePath}/${LspTomlLaunchPolicy.HEALTH}",stage.absolutePath,owner.guestRoot)
@@ -500,7 +524,7 @@ object LocalExecutionSubstrate {
                 val command = spec.prefix + ElpResourcePolicy.HEALTH.shellPrefix() + argv(owner)
                 val builder = ProcessBuilder("/system/bin/sh", "-c", owner.shellCommand(command)).directory(owner.localRoot)
                     .apply { environment().clear(); environment().putAll(spec.environment) }
-
+                // This admits creation of the fixed host shell. The later guest executable remains selected data.
                 owner.create { execution.check(); check(current()); builder.start() }
             }
             val process = owner.awaitFactory(execution); owner.awaitBirth(execution)
@@ -627,8 +651,7 @@ object LocalExecutionSubstrate {
             val spec = elpLaunchSpec(execution, selection.copy(rebar = selection.rebar.takeIf { request.permit.needsRebar }), workspaceRoot, request.rootPath, work)
             LocalElpPreparedOwner(identity, request, evidence, execution, spec, preflight)
         } catch (failure: Throwable) {
-            // Allocation may have retained custody before returning; absence of a returned owner is not
-            // proof of cleanup.
+            // Allocation may have retained custody before returning; absence of a returned owner is not proof of cleanup.
             withContext(kotlinx.coroutines.NonCancellable) { owned?.retire(deadline) }
             throw failure
         }
@@ -747,6 +770,7 @@ object LocalExecutionSubstrate {
         }}}
     }
 
+    /** TOML discovery is health-free metadata; execution additionally proves both original package trees. */
     internal suspend fun reviewedTomlLaunchIdentity(resolvedExecutable:String,toolchainWorkspaceRoot:File):TomlManagedLaunchIdentity?=withContext(Dispatchers.IO){
         if(!::appContext.isInitialized||!::filesDir.isInitialized)return@withContext null
         ManagedPackageMutationGate.mutex.withLock{val registry=ManagedPackageRegistry(appContext);val preferences=WorkspaceToolchainPreferences(appContext,toolchainWorkspaceRoot)
@@ -762,7 +786,7 @@ object LocalExecutionSubstrate {
     }
     internal fun buildReviewedTomlLaunchSpec(owner:LocalTomlPreparedOwner,launcher:List<String>,rootfs:File,workspace:String,temp:File,packageRoot:File,hardLinkStore:File,loaderEnvironment:Map<String,String>,checkCancelled:()->Unit):TerminalLaunchSpec {
         checkCancelled();owner.verifyPrivate();require(':' !in owner.localRoot.absolutePath&&':' !in owner.guestRoot)
-
+        // Callback reads are immutable snapshots; no project bind is needed for this route.
         val prefix=launcher+listOf("-0","--link2symlink","--kill-on-exit","-r",rootfs.absolutePath,"-b","/dev","-b","/proc","-b","/sys",
             "-b","${packageRoot.absolutePath}:/opt/droide/packages","-b","${owner.localRoot.absolutePath}:${owner.guestRoot}","-w",owner.guestRoot,"/usr/bin/env","-i")+
             LspTomlLaunchPolicy.privateEnvironment(owner.guestRoot,owner.identity.nodeExecutable).map{(k,v)->"$k=$v"}
@@ -803,7 +827,7 @@ object LocalExecutionSubstrate {
             owner.verifyProject();owner.verifyPrivate();owner.storePreparedLaunchSpec(spec);return owner
         }catch(failure:Throwable){withContext(NonCancellable){owner.retire()};throw failure}
     }
-
+    /** Dedicated clean environment, assembled before generic user or terminal defaults. */
     internal fun buildReviewedCSharpLaunchSpec(owner:LocalCSharpPreparedOwner,launcher:List<String>,rootfs:File,
         workspace:String,temp:File,packageRoot:File,hardLinkStore:File,loaderEnvironment:Map<String,String>,checkCancelled:()->Unit):TerminalLaunchSpec {
         checkCancelled();owner.verifyPrivate();require(':' !in owner.localRoot.absolutePath && ':' !in owner.guestRoot)
@@ -816,14 +840,14 @@ object LocalExecutionSubstrate {
         return TerminalLaunchSpec(prefix=prefix,shell="/bin/bash",interactiveArgs=emptyList(),interactiveEnvironment=emptyMap(),
             environment=mapOf("PROOT_TMP_DIR" to temp.absolutePath,"PROOT_NO_SECCOMP" to "1","PROOT_L2S_DIR" to hardLinkStore.absolutePath)+loaderEnvironment)
     }
-
+    /** Full proof after suspendable host preparation, then exact non-suspending manager admission. */
     internal suspend fun <T> withReviewedCSharpLaunchIdentity(identity:CSharpManagedLaunchIdentity,owner:LocalCSharpPreparedOwner,
         toolchainWorkspaceRoot:File,create:(selectionAdmission:(()->T)->T)->T):T {
         check(::appContext.isInitialized&&::filesDir.isInitialized)
         return LocalPackageInstallJournal.transactionMutex.withLock { ManagedPackageMutationGate.mutex.withLock {
             val context=currentCoroutineContext();val registry=ManagedPackageRegistry(appContext)
             val preferences=WorkspaceToolchainPreferences(appContext,toolchainWorkspaceRoot)
-
+            // Tokens precede every read and the potentially long full proof.
             val packageToken=registry.csharpPackageGeneration();val selectionToken=preferences.csharpSelectionGeneration()
             val selections=preferences.selections();val records=registry.list()
             val record=records.single {it.familyId==identity.familyId&&it.version==identity.version}
@@ -864,7 +888,7 @@ object LocalExecutionSubstrate {
             owner.verifyProject();owner.verifyPrivate();owner.storePreparedLaunchSpec(spec);return owner
         }catch(failure:Throwable){withContext(NonCancellable){owner.retire()};throw failure}
     }
-
+    /** Dedicated clean environment, assembled before generic user or terminal defaults. */
     internal fun buildReviewedVueLaunchSpec(owner:LocalVuePreparedOwner,launcher:List<String>,rootfs:File,
         workspace:String,temp:File,packageRoot:File,hardLinkStore:File,loaderEnvironment:Map<String,String>,checkCancelled:()->Unit):TerminalLaunchSpec {
         checkCancelled();owner.verifyPrivate();require(':' !in owner.localRoot.absolutePath && ':' !in owner.guestRoot)
@@ -876,14 +900,14 @@ object LocalExecutionSubstrate {
         return TerminalLaunchSpec(prefix=prefix,shell="/bin/bash",interactiveArgs=emptyList(),interactiveEnvironment=emptyMap(),
             environment=mapOf("PROOT_TMP_DIR" to temp.absolutePath,"PROOT_NO_SECCOMP" to "1","PROOT_L2S_DIR" to hardLinkStore.absolutePath)+loaderEnvironment)
     }
-
+    /** Full proof after suspendable host preparation, then exact non-suspending manager admission. */
     internal suspend fun <T> withReviewedVueLaunchIdentity(identity:VueManagedLaunchIdentity,owner:LocalVuePreparedOwner,
         toolchainWorkspaceRoot:File,create:(selectionAdmission:(()->T)->T)->T):T {
         check(::appContext.isInitialized&&::filesDir.isInitialized)
         return LocalPackageInstallJournal.transactionMutex.withLock { ManagedPackageMutationGate.mutex.withLock {
             val context=currentCoroutineContext();val registry=ManagedPackageRegistry(appContext)
             val preferences=WorkspaceToolchainPreferences(appContext,toolchainWorkspaceRoot)
-
+            // Tokens precede every read and the potentially long full proof.
             val packageToken=registry.vuePackageGeneration();val selectionToken=preferences.vueSelectionGeneration()
             val selections=preferences.selections();val records=registry.list()
             val record=records.single {it.familyId==identity.familyId&&it.version==identity.version}
@@ -923,7 +947,7 @@ object LocalExecutionSubstrate {
             owner.verifyProject();owner.verifyPrivate();owner.storePreparedLaunchSpec(spec);return owner
         }catch(failure:Throwable){withContext(NonCancellable){owner.retire()};throw failure}
     }
-
+    /** Dedicated clean environment, assembled before generic user or terminal defaults. */
     internal fun buildReviewedNimLaunchSpec(owner:LocalNimPreparedOwner,launcher:List<String>,rootfs:File,
         workspace:String,temp:File,packageRoot:File,hardLinkStore:File,loaderEnvironment:Map<String,String>,checkCancelled:()->Unit):TerminalLaunchSpec {
         checkCancelled();owner.verifyPrivate();require(':' !in owner.localRoot.absolutePath && ':' !in owner.guestRoot)
@@ -935,7 +959,7 @@ object LocalExecutionSubstrate {
         return TerminalLaunchSpec(prefix=prefix,shell="/bin/bash",interactiveArgs=emptyList(),interactiveEnvironment=emptyMap(),
             environment=mapOf("PROOT_TMP_DIR" to temp.absolutePath,"PROOT_NO_SECCOMP" to "1","PROOT_L2S_DIR" to hardLinkStore.absolutePath)+loaderEnvironment)
     }
-
+    /** Full proof after suspendable host preparation, then exact non-suspending manager admission. */
     internal suspend fun <T> withReviewedNimLaunchIdentity(identity:NimManagedLaunchIdentity,owner:LocalNimPreparedOwner,
         toolchainWorkspaceRoot:File,create:(selectionAdmission:(()->T)->T)->T):T {
         check(::appContext.isInitialized&&::filesDir.isInitialized)
@@ -1046,8 +1070,8 @@ object LocalExecutionSubstrate {
                     put("path", kotlinx.serialization.json.JsonPrimitive(LocalUbuntuCMakeLaunchPolicy.environment(identity, state).getValue("PATH")))
                 }
                 state.writeRecord("launch.json", launch.toString())
-                // Complete our own directory/bind/native preparation writes before observing ancestor metadata.
-                // The exact typed spec stays with this prepared owner.
+                // Complete our own directory/bind/native preparation writes before observing
+                // ancestor metadata. The exact typed spec stays with this prepared owner.
                 val launchSpec = prepareReviewedCMakeLaunchSpec(owner, workspaceRoot, toolchainWorkspaceRoot)
                 val (records, selections, captured) = ManagedPackageMutationGate.mutex.withLock {
                     val records = registry.list(); val selections = preferences.selections()
@@ -1093,6 +1117,7 @@ object LocalExecutionSubstrate {
         return prepareUbuntuLaunchSpec(source, workspaceRoot = workspaceRoot, toolchainWorkspaceRoot = toolchainWorkspaceRoot, cmakeOwner = owner)
     }
 
+    /** A typed clean branch, assembled before any generic shell/user/package environment. */
     internal fun buildReviewedCMakeLaunchSpec(owner: LocalCMakePreparedOwner, launcher: List<String>, rootfs: File,
         workspace: String, temp: File, packageRoot: File, hardLinkStore: File,
         loaderEnvironment: Map<String, String>, checkCancelled: () -> Unit): TerminalLaunchSpec {
@@ -1141,7 +1166,7 @@ object LocalExecutionSubstrate {
     internal suspend fun <T> withReviewedSqruffLaunchIdentity(identity: SqruffManagedLaunchIdentity,
         toolchainWorkspaceRoot: File, create: (selectionAdmission: (() -> T) -> T) -> T): T {
         check(::appContext.isInitialized && ::filesDir.isInitialized) { "Local substrate is not initialized" }
-
+        // Tree promotion uses the transaction gate before registry mutation. Preserve that existing order.
         return LocalPackageInstallJournal.transactionMutex.withLock {
             ManagedPackageMutationGate.mutex.withLock {
                 val preferences = WorkspaceToolchainPreferences(appContext, toolchainWorkspaceRoot)
@@ -1167,7 +1192,7 @@ object LocalExecutionSubstrate {
         val receipt = authority.ownedReceipt(LocalUbuntuSqruffPolicy.FAMILY, LocalUbuntuSqruffPolicy.VERSION) ?: return null
         val identity = LocalUbuntuSqruffLaunchAuthority.inspect(filesDir.absolutePath, receipt, records, selections, resolvedExecutable)
         currentCoroutineContext().ensureActive()
-
+        // Selection preferences can change independently of package mutations; detect an observed change.
         return if (records != registry.list() || selections != preferences.selections() ||
             receipt != authority.ownedReceipt(LocalUbuntuSqruffPolicy.FAMILY, LocalUbuntuSqruffPolicy.VERSION)) null else identity
     }

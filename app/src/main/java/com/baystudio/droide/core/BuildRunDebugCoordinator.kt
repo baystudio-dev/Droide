@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.supervisorScope
 
+
 class BuildRunDebugCoordinator(
     context: Context,
     private val root: File,
@@ -81,8 +82,7 @@ class BuildRunDebugCoordinator(
     }
 
     private suspend fun <T> operation(kind: Operation, message: String, block: suspend () -> T): T {
-        // Rotation/navigation may cancel the waiter, but not the work itself; explicit cancelActive() or
-        // workspace shutdown still cancels the owned Job.
+        // Run user-visible operations under the retained workspace scope rather than the Composable caller.
         ApplicationWorkAdmission.requireOpen()
         val deferred = operationScope.async {
             ExportWriterAdmission.withSuspendingWriter(root, "Build/run/debug $kind") {
@@ -109,6 +109,7 @@ class BuildRunDebugCoordinator(
         return awaitWorkspaceOperation(deferred)
     }
 
+     
     private fun foregroundWorkload(operation: Operation): DevelopmentExecutionPolicy.Workload? = when (operation) {
         Operation.BUILD_DEBUG,
         Operation.BUILD_RELEASE_APK,
@@ -127,8 +128,8 @@ class BuildRunDebugCoordinator(
     }
 
     suspend fun stopAndJoinForExit(): Unit = supervisorScope {
-        // Dispatch both independent owners before waiting for either cleanup receipt. A failed owner
-        // must not cancel the other shutdown or hide its failure.
+        // Dispatch both independent owners before waiting for either cleanup receipt.
+        // A failed owner must not cancel the other shutdown or hide its failure.
         val operationShutdown = async { operations.closeAndJoin() }
         val taskShutdown = async { projectTasks.closeAndJoin() }
         OwnedResourceCleanup.runSuspend(
@@ -170,6 +171,7 @@ class BuildRunDebugCoordinator(
         }
     }
 
+     
     suspend fun executeContributedTool(toolId: String, relativePath: String? = null): String =
         operation(Operation.CONTRIBUTED_TOOL, "Running contributed tool…") {
             val registry = capabilities ?: error("Universal capability registry is unavailable")
@@ -178,6 +180,7 @@ class BuildRunDebugCoordinator(
                 ?: error("Contributed tool is unresolved or not applicable to ${relativePath ?: "this workspace"}: ${tool.qualifiedId}")
             runContributedTool(tool, plan)
         }
+
 
     suspend fun executePreparedContributedTool(
         toolId: String,
@@ -248,23 +251,36 @@ class BuildRunDebugCoordinator(
         }
     }
 
+    suspend fun runAndroidOnThisDevice(buildTask: String = "assembleDebug"): AndroidRunResult =
+        operation(Operation.INSTALL_RUN, "Building Android app for this device…") {
+            requireDebugApkTask(buildTask)
+            val build = android.build(buildTask)
+            if (!build.success) return@operation AndroidRunResult(build, null, null)
+            val apk = requireSingleBuiltApk(build)
+            AndroidLocalAppInstaller(appContext).install(apk)
+            AndroidRunResult(build, apk, "Confirm installation in Android to run your app")
+        }
+
+    private fun requireSingleBuiltApk(build: AndroidDevelopmentManager.BuildResult): File {
+        val apks = build.localArtifacts.filter { it.isFile && it.extension.equals("apk", ignoreCase = true) }
+        require(apks.size <= 1) {
+            "Debug build produced ${apks.size} APKs. Choose an explicit application module/APK instead of guessing."
+        }
+        return apks.singleOrNull() ?: error("Debug build completed but no APK artifact was produced")
+    }
+
     suspend fun installAndRun(existingApk: File? = null, buildTask: String = "assembleDebug"): AndroidRunResult =
         operation(Operation.INSTALL_RUN, "Building, installing and running Android app…") {
             requireDebugApkTask(buildTask)
             android.requireRuntimeConnection()
-
+            // Rebuild and use invocation evidence even if the UI has an older APK selected.
             val build = android.build(buildTask)
             if (!build.success) return@operation AndroidRunResult(build, null, null)
-            val apks = build.localArtifacts.filter {
-                it.isFile && it.extension.equals("apk", ignoreCase = true)
-            }
-            require(apks.size <= 1) {
-                "Debug build produced ${apks.size} APKs. Choose an explicit application module/APK instead of guessing."
-            }
-            val apk = apks.singleOrNull() ?: error("Debug build completed but no APK artifact was produced")
+            val apk = requireSingleBuiltApk(build)
             val launch = android.installAndRun(apk)
             AndroidRunResult(build, apk, launch)
         }
+
 
     suspend fun debugAndroid(activeFile: String, buildTask: String = "assembleDebug", configurationName: String? = null): AndroidDebugResult =
         operation(Operation.DEBUG, "Building and starting Android debugger…") {
@@ -300,6 +316,7 @@ class BuildRunDebugCoordinator(
             }
         }
 
+     
     suspend fun debugFile(relativePath: String, configurationName: String? = null): DebugConfiguration =
         operation(Operation.DEBUG, "Starting debugger…") {
             val configs = debugger.configurations(checkedSourcePath(relativePath))

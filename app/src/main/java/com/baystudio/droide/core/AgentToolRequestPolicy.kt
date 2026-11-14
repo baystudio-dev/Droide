@@ -11,6 +11,6 @@ internal object AgentToolRequestPolicy {
     fun denial(name: String, advertised: Set<String>): String? = if (name in advertised) null else
         "DENIED (request tool surface): tool '$name' was not advertised in this model request. No requested tool or tool lifecycle hook was executed."
 
-    // Compatibility aliases are independently advertised schemas.
-
+    // Compatibility aliases are independently advertised schemas. Canonical mode/profile/resource checks still
+    // apply after exact membership succeeds.
 }

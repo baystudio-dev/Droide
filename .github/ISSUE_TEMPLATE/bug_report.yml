@@ -1,32 +1,40 @@
 name: Bug report
-description: Report a reproducible application problem.
+description: Report reproducible application behavior.
+title: "[Bug]: "
 body:
+  - type: markdown
+    attributes:
+      value: Do not include passwords, API keys, tokens or private project content.
   - type: input
     id: version
     attributes:
-      label: Application version
+      label: Droide version and distribution
+      description: Include the version shown in About & Legal and where the APK came from.
     validations:
       required: true
   - type: input
     id: device
     attributes:
-      label: Device model and Android version
+      label: Device and Android version
     validations:
       required: true
   - type: textarea
-    id: reproduction
+    id: steps
     attributes:
       label: Steps to reproduce
+      description: Include the smallest example that demonstrates the problem.
     validations:
       required: true
   - type: textarea
-    id: behavior
+    id: expected
     attributes:
-      label: Expected and observed behavior
+      label: Expected behavior
     validations:
       required: true
   - type: textarea
-    id: evidence
+    id: actual
     attributes:
-      label: Relevant logs or example project
-      description: Remove credentials, private code, and personal information before attaching files.
+      label: Actual behavior
+      description: Add the error text or a screenshot if useful; remove private information first.
+    validations:
+      required: true

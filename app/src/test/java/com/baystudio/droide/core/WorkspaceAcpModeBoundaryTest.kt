@@ -9,7 +9,7 @@ import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Candidate sources only, NOT compiled or run. Real host, fake process/workspace only. */
+/** Uses the real host with simulated process and workspace owners. */
 class WorkspaceAcpModeBoundaryTest {
     private class Peer : AutoCloseable {
         private val alive = AtomicBoolean(true)

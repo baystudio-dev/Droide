@@ -364,6 +364,7 @@ private data class StoredExtensionLifecycleState(
     val disabledExtensionIds: Set<String> = emptySet(),
 )
 
+ 
 class ExtensionLifecycleStore(
     root: File,
     workspaceId: String,
@@ -443,6 +444,8 @@ data class ExtensionActivationPlan(
 ) {
     val canActivate: Boolean get() = blockers.isEmpty()
 }
+
+
 
 class ExtensionContributionRegistry(
     private val lifecycle: ExtensionLifecycleStore,

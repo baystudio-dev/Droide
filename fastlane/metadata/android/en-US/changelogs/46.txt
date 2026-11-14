@@ -1,0 +1,5 @@
+Optional shared-file access for the terminal and agents, with saved projects available through Android Files.
+Terminal Commands now explains both access options step by step.
+Updated agent handbook with focused storage, SSH and device guidance.
+Improved terminal, editor, Explorer and external-agent synchronization, including concurrent file changes and launch diagnostics.
+Ubuntu and development tools remain installed on demand.

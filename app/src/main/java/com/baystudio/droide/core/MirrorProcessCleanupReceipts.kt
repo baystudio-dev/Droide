@@ -4,8 +4,8 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
 
-/** Immutable evidence of an exact handle's completed cleanup, not a process inventory. */
-
+/** Publish cleanup receipts under the authority transaction for exact owned handles. Preserve pending or
+ * mismatched evidence; a PID, stop request or runtime death does not prove cleanup. */
 internal class MirrorProcessCleanupReceipts(
     private val directory: File,
     private val binding: String,
@@ -42,8 +42,8 @@ internal class MirrorProcessCleanupReceipts(
                     val owner = readOwner(receipts, id)
                     val key = requireReceipt(receipts, owner, fingerprint)
                     checkpoint("writer-cleanup-retirement-before-unlink")
-                    // Unsupported descriptor-relative unlink preserves evidence and lets admission use remaining
-                    // capacity. Never fall back to paths.
+                    // Unsupported descriptor-relative unlink preserves evidence and
+                    // lets admission use remaining capacity. Never fall back to paths.
                     if (!deleteMetadata(receipts, id + SUFFIX, key)) return
                     checkpoint("writer-cleanup-retirement-after-unlink")
                 }
@@ -101,11 +101,11 @@ internal class MirrorProcessCleanupReceipts(
                     receipts.createNew(name).use { output ->
                         output.write(expected(owner, authorityFingerprint(authority)))
                         checkpoint("writer-cleanup-receipt-before-force")
-                        output.force(384)
+                        output.force(384) // private metadata, 0600
                     }
                 }
-                // A retry never overwrites a torn/mismatched receipt. Re-force a valid existing record before
-                // allowing a SQL commit after a lost response.
+                // A retry never overwrites a torn/mismatched receipt. Re-force a valid
+                // existing record before allowing a SQL commit after a lost response.
                 requireReceipt(receipts, owner, authorityFingerprint(authority))
                 receipts.openRead(name).use { it.forceContents() }
                 receipts.forceDirectory()
@@ -157,8 +157,8 @@ internal class MirrorProcessCleanupReceipts(
     }
 
     private fun authorityFingerprint(authority: AnchoredWorkspaceFiles): String {
-        // Include the immutable authority nonce, not just inode numbers which can be reused after
-        // replacement. The authority validates this marker before access.
+        // Include the immutable authority nonce, not just inode numbers which can be
+        // reused after replacement. The authority validates this marker before access.
         val bytes = authority.openRead("identity").use { input ->
             val before = input.observe()
             check(before.attributes.size() in 1L..4096L) { "Authority identity is unavailable" }

@@ -25,7 +25,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import org.robolectric.annotation.GraphicsMode
 
-/** Actual Tool/Approval/Controller paths with controlled native callbacks. Authored, not executed. */
+/** Actual Tool/Approval/Controller paths with controlled native callbacks. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class,
     shadows = [BrowserDialogResultShadow::class, BrowserDialogPromptResultShadow::class])
@@ -90,11 +90,10 @@ class BrowserOutputConsentIntegrationTest {
     }
     private fun approve(c: AgentTools.Ctx) {
         val request = pending(c)
-        assertFalse(request.canAllowForSession)
-        assertEquals("", request.approvalSessionId)
-        assertEquals("", request.sessionGrantAction)
-        assertEquals("", request.sessionGrantResource)
-        assertFalse(c.approvals.resolve(request.id, ApprovalResolution.ALLOW_SESSION))
+        assertTrue(request.canAllowForSession)
+        assertEquals(c.provenance.sessionId, request.approvalSessionId)
+        assertEquals(BrowserSiteSession.ACTION, request.sessionGrantAction)
+        assertEquals(BrowserSiteSession.resource(view.page), request.sessionGrantResource)
         assertTrue(c.approvals.resolve(request.id, ApprovalResolution.ALLOW_ONCE))
     }
 
@@ -127,6 +126,10 @@ class BrowserOutputConsentIntegrationTest {
         assertEquals(ApprovalDecision.Approved, runBlocking { ordinary.await() })
         log("remembered-read-still-needs-consent")
         val result = start(c)
+        pumpUntil { c.approvals.pending.value != null }
+        val siteRead = requireNotNull(c.approvals.pending.value)
+        assertEquals("webfetch", siteRead.kind)
+        assertTrue(c.approvals.resolve(siteRead.id, ApprovalResolution.ALLOW_ONCE))
         approve(c)
         assertTrue(finish(result).contains("remembered-read-still-needs-consent"))
     }

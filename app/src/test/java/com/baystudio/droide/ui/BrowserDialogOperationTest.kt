@@ -3,6 +3,7 @@ package com.baystudio.droide.ui
 import com.baystudio.droide.core.ApplicationWorkAdmission
 
 import android.app.Application
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Looper
@@ -10,6 +11,8 @@ import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
+import android.view.View
+import android.widget.FrameLayout
 import com.baystudio.droide.core.AgentBrowserController
 import com.baystudio.droide.core.AgentBrowserDialogs
 import java.nio.file.Files
@@ -37,20 +40,25 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Robolectric
+import org.robolectric.android.controller.ActivityController
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import org.robolectric.annotation.GraphicsMode
 
 /** Controlled Android callbacks prove dialog ownership/routing; they do not execute device Chromium. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class,
     shadows = [BrowserDialogResultShadow::class, BrowserDialogPromptResultShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class BrowserDialogOperationTest {
     private val directory = Files.createTempDirectory("browser-dialog-").toFile()
     private val controller = AgentBrowserController(directory)
     private val caller = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private val views = mutableListOf<DialogWebView>()
+    private val activities = mutableListOf<ActivityController<Activity>>()
 
     private class DialogWebView(context: Context, var page: String) : WebView(context) {
         val evaluations = mutableListOf<ValueCallback<String>>()
@@ -58,6 +66,9 @@ class BrowserDialogOperationTest {
         var onLoad: (() -> Unit)? = null
         var loads = 0
         var destroyed = 0
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            setMeasuredDimension(View.MeasureSpec.getSize(widthMeasureSpec), View.MeasureSpec.getSize(heightMeasureSpec))
+        }
         override fun getUrl(): String = page
         override fun getTitle() = "Dialog fixture"
         override fun evaluateJavascript(script: String, resultCallback: ValueCallback<String>?) {
@@ -84,11 +95,35 @@ class BrowserDialogOperationTest {
     @After fun release() {
         caller.cancel()
         views.forEach { if (it.destroyed == 0) it.destroy() }
+        activities.forEach { it.pause().stop().destroy() }
         directory.deleteRecursively()
     }
 
     private fun surface(): DialogWebView = DialogWebView(RuntimeEnvironment.getApplication(), controller.htmlPreviewUrl("index.html"))
         .also { views += it; controller.configure(it); controller.attach(it) }
+
+    private fun visibleSurface(): DialogWebView {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().visible().also(activities::add)
+        val view = DialogWebView(activity.get(), controller.htmlPreviewUrl("index.html"))
+            .also { views += it; controller.configure(it); controller.attach(it) }
+        val host = FrameLayout(activity.get())
+        host.addView(view, FrameLayout.LayoutParams(320, 480))
+        activity.get().setContentView(host)
+        shadowOf(Looper.getMainLooper()).idle()
+        host.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(480, View.MeasureSpec.EXACTLY))
+        host.layout(0, 0, 320, 480)
+        view.forceLayout()
+        view.measure(View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(480, View.MeasureSpec.EXACTLY))
+        view.layout(0, 0, 320, 480)
+        view.left = 0; view.top = 0; view.right = 320; view.bottom = 480
+        assertTrue(view.isAttachedToWindow)
+        assertTrue(view.isShown)
+        assertTrue(view.isLaidOut)
+        assertFalse(view.isLayoutRequested)
+        return view
+    }
 
     private fun execute(operation: String, target: String? = null, text: String? = null, dialogText: String? = null,
         url: String? = null, expectedUrl: String? = null, allowLoopback: Boolean = false, reviewedOrigin: String? = null) = caller.async {
@@ -113,7 +148,7 @@ class BrowserDialogOperationTest {
     private fun snapshot(url: String): String = JsonPrimitive(buildJsonObject { put("ok", true); put("url", url) }.toString()).toString()
 
     @Test fun dialogDuringJavascriptReturnsPendingWithoutTimeoutOrAutomaticReplayThenFreshReadWorks() {
-        val view = surface()
+        val view = visibleSurface()
         val result = BrowserDialogTestResults.alert()
         view.onEvaluate = { view.webChromeClient!!.onJsConfirm(view, view.page, "Continue?", result) }
 

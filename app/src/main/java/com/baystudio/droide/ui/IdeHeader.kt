@@ -27,9 +27,9 @@ internal fun primaryRunTarget(activeFile: String, androidProject: Boolean): Prim
     if (com.baystudio.droide.core.WorkspaceHtmlPreview.isHtml(activeFile) || isMarkdownPreviewPath(activeFile))
         return PrimaryRunTarget.PREVIEW
     val name = activeFile.substringAfterLast('/').lowercase()
-    val androidSource = name.substringAfterLast('.', "") in setOf("kt", "java", "xml") ||
-        name in setOf("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties")
-    return if (androidProject && (activeFile.isBlank() || androidSource)) PrimaryRunTarget.ANDROID_APP
+    val androidProjectFile = name in setOf("androidmanifest.xml", "build.gradle", "build.gradle.kts",
+        "settings.gradle", "settings.gradle.kts", "gradle.properties")
+    return if (androidProject && (activeFile.isBlank() || androidProjectFile)) PrimaryRunTarget.ANDROID_APP
         else PrimaryRunTarget.FILE
 }
 
@@ -65,6 +65,7 @@ class DroideIdeHeaderActions(
     val onBuildOutput: () -> Unit,
     val onApkAnalyzer: () -> Unit,
     val onCancel: () -> Unit,
+    val onRunAndroidApp: () -> Unit,
     val onDebugAndroid: () -> Unit,
     val onInstallRun: () -> Unit,
     val onLogcat: () -> Unit,
@@ -94,6 +95,11 @@ class DroideIdeHeaderActions(
     val onManageMcp: () -> Unit,
     val onNotificationSettings: () -> Unit = {},
 )
+
+
+
+
+
 
 @Composable
 fun DroideIdeHeader(
@@ -136,8 +142,9 @@ fun DroideIdeHeader(
 
     val debugActions = listOf(
         DroideHeaderAction("Run & Debug", Icons.Default.BugReport, "Workspace", onClick = actions.onRunDebug),
+        DroideHeaderAction("Run Android app on this device", Icons.Default.PlayArrow, "Android", state.androidProject && !state.busy, androidDisabledHint, actions.onRunAndroidApp),
         DroideHeaderAction("Debug Android App", Icons.Default.BugReport, "Android", androidDeviceEnabled, androidDeviceHint, actions.onDebugAndroid),
-        DroideHeaderAction("Install & Run", Icons.Default.InstallMobile, "Android", androidDeviceEnabled, androidDeviceHint, actions.onInstallRun),
+        DroideHeaderAction("Run on connected device", Icons.Default.InstallMobile, "Android", androidDeviceEnabled, androidDeviceHint, actions.onInstallRun),
         DroideHeaderAction("Logcat", Icons.Default.Article, "Inspect", state.deviceConnected, deviceDisabledHint, actions.onLogcat),
         DroideHeaderAction("Problems", Icons.Default.ErrorOutline, "Inspect", onClick = actions.onProblems),
     )

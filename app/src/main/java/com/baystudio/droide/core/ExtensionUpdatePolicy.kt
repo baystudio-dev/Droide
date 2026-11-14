@@ -24,8 +24,8 @@ internal object ExtensionUpdatePolicy {
         "runtime.powershell" to "lsp.powershell-editor-services",
     )
 
-    // Updating their upstream executable alone does not update Droide's integration.
-
+    // These adapters depend on a coordinated ABI, data model, or source-specific repairs. Keep this explicit: a
+    // newly added external package must not silently become app-only.
     private val integrated = mapOf(
         "lsp.graphql-library" to "GraphQL libraries and their private runtime",
         "lsp.taplo-wasm" to "Taplo WASM API and its private runtime",
@@ -44,6 +44,11 @@ internal object ExtensionUpdatePolicy {
     )
 
     private val upstream = mapOf(
+        "toolchain.goose" to Policy(Route.UPSTREAM_MANAGER, GooseLanguage.INSTALL_NOTE,
+            documentationUrl = GooseLanguage.DOCUMENTATION),
+        "lsp.goose" to Policy(Route.UPSTREAM_MANAGER,
+            "The language server is part of the selected Goose compiler. Update the compiler and keep its matching stdlib; Droide uses goose-lang lsp without pinning its version.",
+            relatedFamilies = listOf("toolchain.goose"), documentationUrl = GooseLanguage.DOCUMENTATION),
         "lsp.metals" to Policy(Route.UPSTREAM_MANAGER,
             "Update Metals through Coursier using a JDK supported by that release, then expose metals on the Ubuntu PATH. Droide uses the selected executable without a version pin.",
             documentationUrl = "https://scalameta.org/metals/docs/editors/new-editor/"),

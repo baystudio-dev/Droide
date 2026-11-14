@@ -38,7 +38,6 @@ internal data class ExitDraftRecord(
 
 internal object ExitDraftCodec {
     // Older accumulated saved copies still require explicit selected-copy deletion.
-
     const val MAX_BYTES = 24 * 1024 * 1024
     const val MAX_RECORDS = 64
     private const val CAPACITY_ERROR = "Saved unsent drafts are full. Review Saved drafts and explicitly delete a selected saved copy before retrying Exit. Current drafts are unchanged."
@@ -69,8 +68,8 @@ internal object ExitDraftCodec {
     }
     fun encode(records: List<ExitDraftRecord>): ByteArray {
         require(records.size <= MAX_RECORDS) { CAPACITY_ERROR }
-        // Enforce the byte ceiling incrementally instead of first building an unbounded all-record JSON
-        // string. Reject the whole change, never clip any user text.
+        // Enforce the byte ceiling incrementally instead of first building an unbounded
+        // all-record JSON string. Reject the whole change, never clip any user text.
         val output = java.io.ByteArrayOutputStream()
         fun append(bytes: ByteArray) {
             require(bytes.size <= MAX_BYTES - output.size()) { CAPACITY_ERROR }
@@ -150,8 +149,8 @@ internal class ExitDraftStore internal constructor(
         val merged = ExitDraftCodec.merge(previous, current)
         if (merged != previous) publishLocked(merged)
         else if (Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-            // Retry durability without serializing/encrypting the same accumulated drafts again.
-
+            // The exact plaintext was just authenticated under the shared archive mutex. Retry durability without
+            // serializing/encrypting the same accumulated drafts again.
             FileChannel.open(file.toPath(), StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { it.force(true) }
             syncDirectory(root)
         }

@@ -48,6 +48,7 @@ import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.component.EditorAutoCompletion
 import kotlinx.coroutines.*
 
+
 @Composable
 internal fun EditorPane(
     files: FileRepository,
@@ -115,12 +116,22 @@ internal fun EditorPane(
     var renameName by rememberSaveable(workspaceKey, path) { mutableStateOf("") }
     var pendingRenameEdit by remember(workspaceKey, path) { mutableStateOf<LspWorkspaceEdit?>(null) }
     var codeIntelBusy by remember(workspaceKey, path) { mutableStateOf(false) }
+    var codeActionRequest by remember(workspaceKey, path) { mutableLongStateOf(0L) }
+    var codeActionJob by remember(workspaceKey, path) { mutableStateOf<Job?>(null) }
+    fun dismissCodeActions() {
+        codeActionRequest++
+        codeActionJob?.cancel()
+        codeActionJob = null
+        codeIntelBusy = false
+        showCodeActions = false
+    }
     fun launchEditorAction(block: suspend () -> Unit) = scope.launchUiCatching(
         onError = { failure ->
             codeIntelBusy = false
             document.status = "Editor action failed: ${failure.message ?: failure::class.java.simpleName}"
         }, block = block,
     )
+    
 
     val effectiveWordWrap = wordwrap && !document.largeFileOptimized
     val languageId = remember(path) { LanguageRegistry.forFile(path)?.id ?: "plaintext" }
@@ -195,7 +206,7 @@ internal fun EditorPane(
         val ed = editorRef ?: return@LaunchedEffect
         val line = navigateLine ?: return@LaunchedEffect
         if (!document.loaded || document.kind != EditorDocumentKind.TEXT) return@LaunchedEffect
-
+        
         val lineIndex = (line - 1).coerceIn(0, (ed.text.lineCount - 1).coerceAtLeast(0))
         val lineLength = runCatching { ed.text.getColumnCount(lineIndex) }.getOrDefault(0)
         val columnIndex = (navigateColumn - 1).coerceIn(0, lineLength)
@@ -205,6 +216,7 @@ internal fun EditorPane(
     }
     BindDroideSoraFeatures(editorRef, document, lsp, files, path)
 
+
     LaunchedEffect(document, findQuery, document.content, document.performanceMode) {
         findCount = if (document.largeFileOptimized || findQuery.length < 2) 0 else countOccurrences(document.content, findQuery)
     }
@@ -212,13 +224,13 @@ internal fun EditorPane(
         val captureSnapshot: () -> Unit = {
             val editor = editorRef
             if (editor != null && !editor.isReleased) {
-
+                
                 editor.nativeCapture?.invoke()
             }
         }
         bridge.snapshot = captureSnapshot
         onDispose {
-
+            // Dispose this pane's buffer even if a new pane has already bound the bridge.
             runUiCatching(onError = { document.status = "Could not capture editor: ${it.message}" }) { captureSnapshot() }
             if (bridge.nativeHandoff?.owner === editorRef) bridge.nativeHandoff = null
             if (bridge.snapshot === captureSnapshot) bridge.clear()
@@ -263,22 +275,29 @@ internal fun EditorPane(
         editorRef?.restoreInputFocus(showKeyboard = true)
     }
 
-    fun requestCodeActionsAtCursor() = launchEditorAction {
-        if (!document.canEdit) { document.status = "Review Mode · code actions that mutate buffers are disabled"; return@launchEditorAction }
-        if (!requireFullIntelligence("Quick Fix / Refactor")) return@launchEditorAction
-        bridge.capture()
-        val (line, col) = cursorLineColumn()
-        codeIntelBusy = true
-        codeActionError = null
-        val result = runSuspendCatching { lsp.codeActionsAt(path, line, col) }
-        codeActions = result.getOrElse {
-            codeActionError = it.message ?: it::class.java.simpleName
-            emptyList()
+    fun requestCodeActionsAtCursor() {
+        if (codeIntelBusy || codeActionJob?.isActive == true) return
+        dismissCodeActions()
+        val request = codeActionRequest
+        codeActionJob = launchEditorAction {
+            if (!document.canEdit) { document.status = "Review Mode · code actions that mutate buffers are disabled"; return@launchEditorAction }
+            if (!requireFullIntelligence("Quick Fix / Refactor")) return@launchEditorAction
+            bridge.capture()
+            val (line, col) = cursorLineColumn()
+            codeIntelBusy = true
+            codeActionError = null
+            val result = runSuspendCatching { lsp.codeActionsAt(path, line, col) }
+            if (request != codeActionRequest) return@launchEditorAction
+            codeActions = result.getOrElse {
+                codeActionError = it.message ?: it::class.java.simpleName
+                emptyList()
+            }
+            codeActions = codeActions.filter { it.activationGuard?.accepts() != false }
+            codeIntelBusy = false
+            showCodeActions = true
         }
-        codeActions = codeActions.filter { it.activationGuard?.accepts() != false }
-        codeIntelBusy = false
-        showCodeActions = true
     }
+
 
     fun requestCallHierarchy() = launchEditorAction {
         if (!requireFullIntelligence("Call Hierarchy")) return@launchEditorAction
@@ -430,7 +449,7 @@ internal fun EditorPane(
         val cur = ed.cursor?.left ?: 0
         val idx = text.indexOf(findQuery, cur).let { if (it >= 0) it else text.indexOf(findQuery) }
         if (idx != -1) {
-
+            
             ed.setSelectionOffsets(idx, idx + findQuery.length)
             ed.commitText(replaceQuery, false)
         }
@@ -607,6 +626,7 @@ internal fun EditorPane(
         )
     }
 
+
     locationTitle?.let { title ->
         AlertDialog(
             onDismissRequest = { locationTitle = null; locationItems = emptyList() },
@@ -694,7 +714,7 @@ internal fun EditorPane(
 
     if (showCodeActions) {
         AlertDialog(
-            onDismissRequest = { showCodeActions = false },
+            onDismissRequest = ::dismissCodeActions,
             title = { Text("Quick Fix / Refactor") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -703,8 +723,8 @@ internal fun EditorPane(
                         Text("No code actions available at the cursor.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     LazyColumn(Modifier.heightIn(max = 320.dp)) {
-                        items(codeActions, key = { "${it.title}:${it.kind}:${it.preferred}" }) { action ->
-                            val enabled = document.canEdit && action.activationGuard?.accepts() != false && action.disabledReason == null && (action.edit != null || !action.rawJson.isNullOrBlank())
+                        items(codeActions) { action ->
+                            val enabled = !codeIntelBusy && document.canEdit && action.activationGuard?.accepts() != false && action.disabledReason == null && (action.edit != null || !action.rawJson.isNullOrBlank())
                             ListItem(
                                 headlineContent = { Text(action.title) },
                                 supportingContent = {
@@ -716,11 +736,18 @@ internal fun EditorPane(
                                     )
                                 },
                                 modifier = if (enabled) Modifier.clickable {
-                                    launchEditorAction {
-                                        if (action.activationGuard?.accepts() == false) return@launchEditorAction
-                                        codeIntelBusy = true
+                                    if (codeIntelBusy || !showCodeActions) return@clickable
+                                    val request = codeActionRequest
+                                    codeIntelBusy = true
+                                    codeActionJob = launchEditorAction {
+                                        if (action.activationGuard?.accepts() == false) {
+                                            codeIntelBusy = false
+                                            return@launchEditorAction
+                                        }
                                         val result = runSuspendCatching { lsp.resolveCodeAction(path, action) }
+                                        if (request != codeActionRequest || !showCodeActions) return@launchEditorAction
                                         codeIntelBusy = false
+                                        if (!document.canEdit) return@launchEditorAction
                                         val pending = result.exceptionOrNull() as? LspProjectAnalysisNotReadyException
                                         if (pending != null) {
                                             codeActionError = pending.message
@@ -737,7 +764,7 @@ internal fun EditorPane(
                                         if (edit != null && onApplyWorkspaceEdit != null) {
                                             onApplyWorkspaceEdit(edit)
                                             document.status = "Code action applied to buffer — review before saving"
-                                            showCodeActions = false
+                                            dismissCodeActions()
                                         } else {
                                             codeActionError = resolved.disabledReason
                                                 ?: if (resolved.commandTitle != null) "This action requires a server command and cannot be previewed safely."
@@ -750,7 +777,7 @@ internal fun EditorPane(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showCodeActions = false }) { Text("Close") } },
+            confirmButton = { TextButton(onClick = ::dismissCodeActions) { Text("Close") } },
         )
     }
 
@@ -1083,7 +1110,7 @@ internal fun EditorPane(
                         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                         applyDroideTheme(theme)
                         document.viewport?.let { setTextSize(it.textSizeSp) }
-
+                        
                         setLineNumberEnabled(true)
                         setPinLineNumber(true)
                         setFirstLineNumberAlwaysVisible(true)
@@ -1098,7 +1125,7 @@ internal fun EditorPane(
                         val highlightController = if (document.fullIntelligence) DroideEditorHighlightController(this, path, languageId, lsp, scope, codeStyle) else null
                         highlightControllerRef[0]?.release()
                         highlightControllerRef[0] = highlightController
-
+                        
                         props.autoCompletionOnComposing = true
                         props.cancelCompletionNs = 25L * 1_000_000L
                         getComponent(EditorAutoCompletion::class.java).apply {
@@ -1155,7 +1182,7 @@ internal fun EditorPane(
                                 val selectionEnd = document.selectionEnd.coerceIn(0, replacement.length)
                                 applyingDocumentText = true
                                 try {
-
+                                    // Keep the existing Content and its undo history. No setText/IME restart.
                                     if (expectedText != replacement) {
                                         text.beginBatchEdit()
                                         try { text.replace(0, text.length, replacement) }
@@ -1166,7 +1193,7 @@ internal fun EditorPane(
                                     publish()
                                     document.captureSelection(selectionStart, selectionEnd)
                                     lastAppliedRevision = document.revision
-
+                                    // Mirroring listeners were suppressed; refresh their non-content work once.
                                     signatureControllerRef[0]?.onContentChanged(ContentChangeEvent.ACTION_SET_NEW_TEXT, replacement)
                                     highlightControllerRef[0]?.installSafeBaseStyles(replacement)
                                     if (document.fullIntelligence) highlightControllerRef[0]?.schedule(replacement, immediate = true)

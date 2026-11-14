@@ -5,13 +5,14 @@ import org.junit.Test
 
 class PrimaryRunTargetTest {
     @Test fun standaloneLanguagesDoNotInheritAndroidRoutingFromTheirParentWorkspace() {
-        for (path in listOf("untitled.cs", "tools/check.py", "main.js", "main.ts", "main.cpp", "demo.kts", "custom.abc")) {
+        for (path in listOf("okjiss.kt", "Main.java", "app/src/main/kotlin/Main.kt", "app/src/main/java/Main.java",
+            "untitled.cs", "tools/check.py", "main.js", "main.ts", "main.cpp", "demo.kts", "data.xml", "custom.abc")) {
             assertEquals(path, PrimaryRunTarget.FILE, primaryRunTarget(path, androidProject = true))
         }
     }
 
-    @Test fun androidSourceAndBuildDefinitionsRetainAppRouting() {
-        for (path in listOf("Main.kt", "Main.java", "app/src/main/AndroidManifest.xml", "app/build.gradle.kts", "settings.gradle", "")) {
+    @Test fun androidProjectDefinitionsRetainAppRouting() {
+        for (path in listOf("app/src/main/AndroidManifest.xml", "app/build.gradle.kts", "settings.gradle", "")) {
             assertEquals(path, PrimaryRunTarget.ANDROID_APP, primaryRunTarget(path, androidProject = true))
         }
     }

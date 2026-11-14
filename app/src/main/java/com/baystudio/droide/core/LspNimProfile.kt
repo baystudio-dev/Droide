@@ -72,7 +72,6 @@ internal object LspNimProfile {
             candidate = parent
         }
         // This exact parent was already scanned without a manifest/marker.
-
         return immediate
     }
 
@@ -193,7 +192,7 @@ internal object LspNimProfile {
         val completion = caps["completionProvider"] as? JsonObject ?: error("Nim completion contract missing")
         require((completion["resolveProvider"] as? JsonPrimitive)?.booleanOrNull == false) { "Nim completion resolve contract changed" }
         require(caps["renameProvider"] == JsonPrimitive(true)) { "Nim prepare-rename must remain unadvertised" }
-
+        // Native inlays/commands/code actions remain masked, even though the original server advertises them.
     }
 
     const val DISPLAY_NAME = "Nim 2.2.12 fixed-toolchain analysis (nimlangserver 1.16.0)"

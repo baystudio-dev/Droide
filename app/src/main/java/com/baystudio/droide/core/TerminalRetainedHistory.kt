@@ -3,8 +3,8 @@ package com.baystudio.droide.core
 import java.io.OutputStream
 import java.util.Collections
 
-/** Runtime capture owns choosing the retained tail; this helper does no work for terminal output
- * events. */
+/** An on-demand, immutable copy of an already-retained terminal transcript. All lengths and offsets are UTF-16
+ * units. Runtime capture owns choosing the retained tail; this helper does no work for terminal output events. */
 internal class TerminalRetainedHistory private constructor(val text: String) {
     data class Match(
         val startUtf16: Int,
@@ -19,8 +19,8 @@ internal class TerminalRetainedHistory private constructor(val text: String) {
         val capped: Boolean,
     )
 
-    /** Case-insensitive comparison uses Kotlin/JVM regionMatches semantics without case-folded
-     * copies, locale dependence, or changed offsets. */
+    /** Search original text with bounded, non-overlapping comparisons and unchanged offsets. Propagate callback
+     * cancellation and retain only bounded matches and snippets. */
     fun search(
         query: String,
         ignoreCase: Boolean = false,
@@ -47,8 +47,8 @@ internal class TerminalRetainedHistory private constructor(val text: String) {
                 val end = candidate + query.length
                 var snippetStart = (candidate - SNIPPET_CONTEXT_UTF16).coerceAtLeast(0)
                 var snippetEnd = (end + SNIPPET_CONTEXT_UTF16).coerceAtMost(text.length)
-                // Move context cuts inward so the bound is never exceeded and a complete match is kept even when
-                // adjacent context contains emoji.
+                // Move context cuts inward so the bound is never exceeded and a
+                // complete match is kept even when adjacent context contains emoji.
                 if (snippetStart < text.length && Character.isLowSurrogate(text[snippetStart])) {
                     snippetStart++
                 }
@@ -66,8 +66,8 @@ internal class TerminalRetainedHistory private constructor(val text: String) {
         return SearchResult(Collections.unmodifiableList(matches), capped = false)
     }
 
-    /** Writes precisely this snapshot as UTF-8, without a BOM, header, or added newline. */
-
+    /** Write exact UTF-8 without added framing; the caller owns flush, close and partial-output cleanup.
+     * Propagate cancellation and I/O errors without logging terminal content. */
     fun writeUtf8(output: OutputStream, checkCancelled: () -> Unit = {}): Int {
         var start = 0
         var written = 0

@@ -4,8 +4,8 @@ import kotlinx.serialization.json.*
 import java.io.InputStreamReader
 import java.nio.charset.CodingErrorAction
 
-/** Mixed-batch ingress planner. Only write_file takes the new large-source route. No executor.
- * All other tools keep their bounded legacy JsonObject path; never drop an unsupported call. */
+/** Mixed-batch ingress planner. Only write_file takes the new large-source route. No executor. All other tools
+ * keep their bounded legacy JsonObject path; never drop an unsupported call. */
 internal object OwnedChatToolPlanner {
     sealed class Input {
         class WriteFile(val prepared: StreamedFileArgumentExtractor.Prepared) : Input()

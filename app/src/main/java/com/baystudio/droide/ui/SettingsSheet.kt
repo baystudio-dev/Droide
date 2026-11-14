@@ -81,6 +81,7 @@ fun SettingsScreen(
     deviceBridge: DeviceBridgeManager,
     githubAccount: GitHubAccountManager,
     projectName: String,
+    sharedWorkspace: java.io.File? = null,
     initialPermissionPolicy: PermissionPolicyDocument,
     onWordwrap: suspend (Boolean) -> Unit,
     onHardwareShortcuts: suspend (Boolean) -> Unit,
@@ -255,6 +256,7 @@ fun SettingsScreen(
         }
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
+        
 
         val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
         val compactHeight = maxHeight < 480.dp * fontScale
@@ -276,7 +278,8 @@ fun SettingsScreen(
             snackbarHost = { DismissibleSnackbarHost(snackbar) },
             topBar = {
                 Surface(tonalElevation = 2.dp) {
-
+                    // A large font or keyboard may make the controls taller than the window.
+                    // Bound and scroll the header so the settings list always retains room.
                     Column(Modifier.fillMaxWidth().heightIn(max = maxHeight * .5f)
                         .verticalScroll(rememberScrollState()).statusBarsPadding()) {
                         PreferenceReadFailureRow("Provider preferences", preferenceRead.state.failed, preferenceRead::retry)
@@ -342,6 +345,7 @@ fun SettingsScreen(
                         androidDevelopment = androidDevelopment,
                         deviceBridge = deviceBridge,
                         projectName = projectName,
+                        sharedWorkspace = sharedWorkspace,
                         agentPrefs = agentPrefs,
                         agentPreferencesReady = preferenceRead.state.ready,
                         githubAccountState = githubAccountState,
@@ -420,6 +424,7 @@ fun SettingsScreen(
                     androidDevelopment = androidDevelopment,
                     deviceBridge = deviceBridge,
                     projectName = projectName,
+                    sharedWorkspace = sharedWorkspace,
                     agentPrefs = agentPrefs,
                         agentPreferencesReady = preferenceRead.state.ready,
                     githubAccountState = githubAccountState,
@@ -535,6 +540,7 @@ private fun SettingsDetail(
     androidDevelopment: AndroidDevelopmentManager,
     deviceBridge: DeviceBridgeManager,
     projectName: String,
+    sharedWorkspace: java.io.File?,
     agentPrefs: AgentPreferences.Snapshot,
     agentPreferencesReady: Boolean,
     githubAccountState: GitHubAccountManager.Snapshot,
@@ -593,8 +599,8 @@ private fun SettingsDetail(
         LegalSettingsContent(legalRoute, selectedLicenseId, onLicense, onLegalBack, onOpenOfficialLink, showNestedBack, modifier.droideContentMotion(Pair(legalRoute, selectedLicenseId)))
         return
     }
-    // Category and scope own their scroll state. Do not reveal a new page at the old page's bottom,
-    // or reset the user's position just because a setting value changed.
+    // Category and scope own their scroll state. Do not reveal a new page at the old page's
+    // bottom, or reset the user's position just because a setting value changed.
     val detailScroll = rememberSaveable(category, settingsScope, saver = androidx.compose.foundation.ScrollState.Saver) {
         androidx.compose.foundation.ScrollState(0)
     }
@@ -662,6 +668,8 @@ private fun SettingsDetail(
                 onExportStatus?.let {
                     ActionRow("Export status", "View progress, results and previous exports", it)
                 }
+                if (settingsScope == SettingsScope.USER) StorageAccessSection(sharedWorkspace, projectName)
+                else ActionRow("Device storage", "Configure shared-file access in User settings", { onSettingsScopeChange(SettingsScope.USER) })
             }
             SettingsCategory.TERMINAL -> {
                 SectionTitle("Input")
@@ -905,6 +913,7 @@ private fun PermissionRow(label: String, selected: PermEffect, enabled: Boolean,
     HorizontalDivider()
 }
 
+
 @Composable
 private fun LegalSettingsContent(
     route: LegalRoute,
@@ -973,6 +982,7 @@ private fun LegalSettingsContent(
     }
 }
 
+/** Existing nested route, with explicit external actions rather than a remotely fetched policy. */
 @Composable
 private fun WebsiteLegalPage(
     title: String,

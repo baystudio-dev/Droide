@@ -12,8 +12,8 @@ internal object AgentActivityMotion {
 /** Stream part IDs are local to a run (for example tool:1:0), never globally unique. */
 internal fun agentActivityItemKey(runId: Long, partId: String): String = "stream:$runId:$partId"
 
-/** Seed with the whole initial live snapshot, not only visible rows, so reopening/restoring a
- * pane never stages old activity. */
+/** Consume motion claims once per mounted conversation/run, including hidden or disabled motion. The bounded
+ * UI-owned ledger may omit a fade, but cannot replay one or change tool state. */
 internal class AgentActivityEntrancePolicy(
     initialPartIds: Iterable<String>,
     private val capacity: Int = AgentActivityMotion.MaxRememberedEntrances,

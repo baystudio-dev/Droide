@@ -17,8 +17,8 @@ import java.nio.file.attribute.FileTime
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 
-/** Explicit Vue-fixture boundary, never installed globally or used by production. */
-
+/** Explicit Vue-fixture boundary, never installed globally or used by production. NIO does not expose allocation
+ * blocks/block size: those two unused fields are zero and are NOT certified by this fixture. */
 @Implements(Os::class)
 class VueHostFileStat {
     companion object {

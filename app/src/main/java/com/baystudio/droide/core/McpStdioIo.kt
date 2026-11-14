@@ -12,8 +12,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Bounded isolation for blocking MCP streams. */
-
+/** Reserve bounded I/O capacity before launching providers. Stalled writers or cleanup retain their slots; Java
+ * task completion does not prove that an OS process exited. */
 internal class McpStdioIoPool(
     private val capacity: Int,
     blockingWorkers: Int = minOf(4, capacity),
@@ -77,8 +77,8 @@ internal class McpStdioIoPool(
 
     internal fun closeOwnedStreams(process: HostedStdioProcess): Boolean {
         var succeeded = true
-        // Never flush/close the BufferedWriter: doing so can acquire a lock held by the blocked write,
-        // or transmit a partial frame after its caller has timed out. The process owns stdin.
+        // Never flush/close the BufferedWriter: doing so can acquire a lock held by the blocked
+        // write, or transmit a partial frame after its caller has timed out. The process owns stdin.
         runCatching { process.close() }.onFailure { succeeded = false }
         runCatching { process.stdout.close() }.onFailure { succeeded = false }
         runCatching { process.stderr.close() }.onFailure { succeeded = false }
@@ -160,7 +160,7 @@ internal class McpStdioIo internal constructor(
         private val deadlineNanos: Long,
         private val caller: Job?,
     ) : Runnable {
-        private val state = AtomicInteger(0)
+        private val state = AtomicInteger(0) // queued, running, finished
         val completion = CompletableDeferred<Unit>() // deliberately not a child of the caller
 
         override fun run() {
@@ -209,8 +209,8 @@ internal class McpStdioIo internal constructor(
             pendingWrite
         }
         queued?.cancelQueued()
-        // One cleanup admission is reserved per session. No blocking operation runs on the caller. A
-        // failed close conservatively quarantines its owner permit too.
+        // One cleanup admission is reserved per session. No blocking operation runs on the caller.
+        // A failed close conservatively quarantines its owner permit too.
         pool.submitCleanup {
             if (pool.closeOwnedStreams(process)) workFinished()
         }

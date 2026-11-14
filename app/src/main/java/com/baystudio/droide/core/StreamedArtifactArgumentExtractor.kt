@@ -4,8 +4,8 @@ import java.io.InputStreamReader
 import java.io.Reader
 import java.nio.charset.CodingErrorAction
 
-/** No execution/permission/publication authority is minted here. */
-
+/** Strict flat artifact schema. No execution/permission/publication authority is minted here. Type metadata is
+ * bounded; content is file-backed and admitted by the owned store's disk policy. */
 internal object StreamedArtifactArgumentExtractor {
     class Prepared internal constructor(
         val callId: String,

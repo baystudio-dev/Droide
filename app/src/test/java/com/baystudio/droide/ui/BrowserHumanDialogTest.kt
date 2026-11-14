@@ -44,8 +44,8 @@ class BrowserHumanDialogTest {
         return ReflectionHelpers.callInstanceMethod(registry, "getRegisteredComposeRoots")
     }
 
-    // A bounded twenty-frame diagnostic confirmed one actual owner pass drains that work
-    // permanently.
+    // Let the normal idler pump focus animations before and after native layout. A bounded owner traversal drains
+    // deferred relayout; recurring requests must still fail the fixture.
     private fun traverseNativeDialogWindow() {
         assertTrue("Dialog traversal keeps automatic Compose idling enabled", compose.mainClock.autoAdvance)
         var idleAfterTraversal = false
@@ -157,7 +157,8 @@ class BrowserHumanDialogTest {
         compose.onNodeWithText("Website prompt").assertExists()
         compose.onNodeWithText("Response").assertIsDisplayed()
         val response = compose.onNode(hasSetTextAction() and hasText("Response"))
-
+        // performTextReplacement requests focus then synchronizes before SetText.
+        // Deliver the missing dialog traversal between those two native phases.
         response.performSemanticsAction(SemanticsActions.RequestFocus)
         traverseNativeDialogWindow()
         response.assertIsFocused().performTextReplacement("Human draft title")

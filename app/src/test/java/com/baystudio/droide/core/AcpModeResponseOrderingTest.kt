@@ -10,7 +10,7 @@ import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Candidate regression sources only. NOT compiled or executed. Uses only fake process pipes. */
+/** Uses simulated process pipes; no provider or OS process is started. */
 class AcpModeResponseOrderingTest {
     private class Peer(private val root: File, inputCapacity: Int = 1_024) : AutoCloseable {
         val clientInput = PipedOutputStream()

@@ -31,8 +31,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowProcess
 
-/** No live identity store, sockets, discovery, device, or process launch. */
-
+/** Uses isolated pairing state without live sockets, discovery, devices or process launch. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, qualifiers = "w900dp-h640dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -152,7 +151,7 @@ class AndroidDevelopmentPairingRecoveryBaselineTest {
         mountSettings()
         compose.onNodeWithText(failure).assertExists()
         compose.runOnIdle { assertEquals("Rendering an error must not reset identity", 0, resets.get()) }
-        // This assertion should fail on unmodified . It must become reachable after the UI repair.
+        // The reset action must remain reachable during pairing recovery.
         compose.onNodeWithText("Reset pairing").assertExists().performScrollTo().assertIsEnabled().performClick()
         compose.waitUntil(timeoutMillis = 3_000) { resets.get() == 1 }
         compose.onNodeWithText("Pairing reset.").assertExists()
@@ -214,6 +213,7 @@ class AndroidDevelopmentPairingRecoveryBaselineTest {
         }
     }
 
+    /** Commands are compared and answered in memory; no shell, socket or Kadb is created. */
     private class FixtureTransport(private val blockProbe: Boolean = false) : DeviceBridgeTransport {
         override val kadb: Kadb? = null
         override val encrypted = true

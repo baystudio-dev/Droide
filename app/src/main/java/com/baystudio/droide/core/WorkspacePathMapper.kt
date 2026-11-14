@@ -3,6 +3,7 @@ package com.baystudio.droide.core
 import java.io.File
 import java.net.URI
 
+ 
 class WorkspacePathMapper(localRoot: File, remoteRoot: String) {
     private val local = localRoot.canonicalFile
     val localRoot: File get() = local
@@ -37,8 +38,8 @@ class WorkspacePathMapper(localRoot: File, remoteRoot: String) {
 
     fun uriToLocal(uri: String): File? {
         val parsed = runCatching { URI(uri) }.getOrNull() ?: return null
-        // This bridge owns authority-less absolute file URIs produced by fileUri().
-
+        // This bridge owns authority-less absolute file URIs produced by fileUri(). Validate before looking only at
+        // path, or a foreign host/query/fragment could silently alias a real document in this workspace.
         if (parsed.scheme != "file" || parsed.isOpaque || !parsed.rawAuthority.isNullOrEmpty() ||
             parsed.rawQuery != null || parsed.rawFragment != null) return null
         val path = parsed.path?.takeIf { it.startsWith('/') } ?: return null

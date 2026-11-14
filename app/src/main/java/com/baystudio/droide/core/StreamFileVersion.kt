@@ -14,8 +14,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
-/** Stable identity/size/mtime/ctime then avoid rehashing large artifacts during publication. */
-
+/** Reuse streamed fingerprints only while identity and metadata remain stable; missing ctime requires a content
+ * check. A final check and rename are not compare-and-swap against external writers. */
 class StreamFileVersion private constructor(
     private val canonicalRoot: File,
     private val relativePath: String,
@@ -27,6 +27,7 @@ class StreamFileVersion private constructor(
     val bytes: Long get() = observed?.bytes ?: 0L
     val executable: Boolean get() = observed?.permissions?.contains(PosixFilePermission.OWNER_EXECUTE) == true
 
+    /** No content allocation, and no following links at the leaf or in project parents. */
     internal fun requireMetadataMatches(root: File, relative: String) {
         require(root.canonicalFile == canonicalRoot && normalize(relative) == relativePath) {
             "File version belongs to a different workspace path"
@@ -73,7 +74,7 @@ class StreamFileVersion private constructor(
             val observed = observe(file)
             val digest = if (observed == null) "" else hash(file, observed.bytes)
             StreamFileVersion(canonicalRoot, relative, parents, observed, digest).also {
-
+                // Reject replacement, growth, chmod or ordinary in-place edits during hashing.
                 it.requireMetadataMatches(root, relative)
                 currentCoroutineContext().ensureActive()
             }
@@ -90,7 +91,7 @@ class StreamFileVersion private constructor(
         private fun checkedPath(root: File, relative: String): File {
             var current = root
             val parts = relative.split('/')
-
+            // Inspect lexical components before canonical resolution; in-root symlinks are aliases too.
             for (index in -1 until parts.size) {
                 if (index >= 0) current = File(current, parts[index])
                 val attrs = try {

@@ -1,7 +1,7 @@
 package com.baystudio.droide.ui
 
-/** The separate orientation/pane-stability grace must not retain an invisible typing surface
- * here. */
+/** The compact navigation returns at the observed hidden IME endpoint. The separate orientation/pane-stability
+ * grace must not retain an invisible typing surface here. No duration or prediction is used. */
 internal fun compactNavigationHiddenForIme(
     typingTarget: Boolean,
     rawImeVisible: Boolean,

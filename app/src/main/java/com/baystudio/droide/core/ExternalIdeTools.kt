@@ -4,6 +4,7 @@ import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 
+/** Complement CLI execution with editor observations and explicitly approved toolchain setup. */
 internal class ExternalIdeTools(
     private val files: FileRepository,
     documents: WorkspaceDocumentAuthority?,
@@ -16,12 +17,14 @@ internal class ExternalIdeTools(
     private val toolchain: (suspend (JsonObject, AgentRequestProvenance, () -> Unit) -> String)? = null,
     private val skills: SkillManagement? = null,
     private val media: MediaAuthoringTools? = null,
+    private val storage: com.baystudio.droide.core.storage.StorageOperationService? = null,
 ) : ExternalIdeToolRegistry.Provider {
     private val reads = AgentReadContext(files, documents, lsp, UUID.randomUUID().toString(), "external-cli-ide")
     private val reader = AgentWorkspaceReader(files, documents)
     private val search = AgentSearchResultPages()
     private val analysis = AgentLspResultPages()
     @Volatile private var closed = false
+    private val storageSessionId = "external-storage-${UUID.randomUUID()}"
     private val names = linkedMapOf(
         "droide_read_file" to "read_file", "droide_search_files" to "search_files",
         "droide_list_files" to "list_files", "droide_project_instructions" to "project_instructions",
@@ -31,6 +34,7 @@ internal class ExternalIdeTools(
         if (status != null) put("droide_ide_status", "ide_status")
         if (toolchain != null) put("droide_toolchain", "toolchain")
         if (skills != null) put("droide_skill", "skill")
+        if (storage != null) put("droide_storage", "storage")
         if (media != null) { put("droide_document", "document"); put("droide_audio", "audio") }
     }
 
@@ -45,7 +49,7 @@ internal class ExternalIdeTools(
                 val property = value.jsonObject
                 val supported = if (native == "toolchain" && key == "operation") JsonObject(property +
                     ("enum" to JsonArray(property.getValue("enum").jsonArray.filterNot { it == JsonPrimitive("refresh_environment") }))) else property
-                if (supported["type"] == JsonPrimitive("string")) JsonObject(supported + ("maxLength" to JsonPrimitive(if (native == "skill" && key == "content") 2000 else if (native == "skill" || key in setOf("path", "destination")) 500 else 256)))
+                if (supported["type"] == JsonPrimitive("string")) JsonObject(supported + ("maxLength" to JsonPrimitive(if (native == "storage" && key == "content") 1500 else if (native == "storage" && key in setOf("path", "destination")) 1000 else if (native == "skill" && key == "content") 2000 else if (native == "skill" || key in setOf("path", "destination")) 500 else 256)))
                 else supported
             }
             add(buildJsonObject {
@@ -56,11 +60,12 @@ internal class ExternalIdeTools(
                         "Install waits for exact SDK license/installation approval in Droide; keep the call running. Preserve required SDK versions. " +
                         "After setup, resume this CLI in a new Droide Ubuntu terminal or reconnected external chat session before building with your shell tools. " +
                         "A child shell cannot refresh the old process's SDK mounts."
+                    else if (native == "storage") original?.get("description")?.jsonPrimitive?.content.orEmpty() + " Bridge content is limited to 1500 characters; use your terminal for larger writes."
                     else if (native == "skill") original?.get("description")?.jsonPrimitive?.content.orEmpty() +
                         " This bridge accepts at most 4096 UTF-8 bytes per request; save inline instructions up to 2000 characters, or import a complete folder already synchronized to the Droide workspace."
                     else "Observe the Droide editor workspace, which may differ from the CLI working copy. " + original?.get("description")?.jsonPrimitive?.content.orEmpty())
                 put("inputSchema", JsonObject(parameters + mapOf("properties" to JsonObject(properties), "additionalProperties" to JsonPrimitive(false))))
-                put("annotations", buildJsonObject { put("readOnlyHint", native !in setOf("toolchain", "skill", "document", "audio")); put("destructiveHint", native in setOf("toolchain", "skill")) })
+                put("annotations", buildJsonObject { put("readOnlyHint", native !in setOf("toolchain", "skill", "document", "audio", "storage")); put("destructiveHint", native in setOf("toolchain", "skill", "storage")) })
             })
         }
     }
@@ -92,6 +97,10 @@ internal class ExternalIdeTools(
         }
         try {
             val result = when (native) {
+                "storage" -> requireNotNull(storage).execute(arguments, AgentMode.BUILD, ::checkCurrent) { action, resource, grant ->
+                    com.baystudio.droide.core.storage.StorageToolAccess.allow(permissions, approvals, action, resource, grant,
+                        reads.permissionScope, AgentRequestProvenance.primary(storageSessionId), ::checkCurrent)
+                }
                 "document", "audio" -> requireNotNull(media).execute(native, arguments, AgentMode.BUILD, current = ::checkCurrent) { action, resource -> allow(action, resource); null }
                 "skill" -> SkillToolOperations.execute(arguments, requireNotNull(skills), AgentMode.BUILD) { action, resource ->
                     allow(action, resource)
@@ -152,9 +161,16 @@ internal class ExternalIdeTools(
                 else -> error("Unsupported IDE tool")
             }
             checkCurrent()
+            val resultSource = when {
+                native != "storage" -> "[DROIDE_IDE_RESULT source=editor_workspace; CLI working copy may differ]\n"
+                string(arguments, "operation") == "import" ->
+                    "[DROIDE_STORAGE_RESULT source=editor_workspace; import target=saved project; CLI working copy may differ]\n"
+                string(arguments, "operation") == "export" ->
+                    "[DROIDE_STORAGE_RESULT source=editor_workspace; export target=direct_shared_storage; CLI working copy may differ]\n"
+                else -> "[DROIDE_STORAGE_RESULT direct_shared_storage]\n"
+            }
             AgentToolResultSemantics.classify(if (native == "ide_status") "ide" else native, result,
-                if (native == "ide_status") "status" else null).annotate(native,
-                "[DROIDE_IDE_RESULT source=editor_workspace; CLI working copy may differ]\n" + result)
+                if (native == "ide_status") "status" else null).annotate(native, resultSource + result)
         } finally { approvals.clearSessionApprovals(approvalId, reads.permissionScope) }
     }
 
@@ -170,7 +186,11 @@ internal class ExternalIdeTools(
     }
 
     private fun checkCurrent() { check(!closed) { "IDE tool workspace closed" }; requireOwner() }
-    override fun close() { closed = true; search.close(); analysis.close() }
+    override fun close() {
+        closed = true
+        approvals.clearSessionApprovals(storageSessionId, reads.permissionScope)
+        search.close(); analysis.close()
+    }
 
     companion object {
         private val nativeDefinitions by lazy { AgentToolCatalog.definitions.map { it.jsonObject.getValue("function").jsonObject }

@@ -24,6 +24,7 @@ import com.baystudio.droide.core.runSuspendCatching
 import com.baystudio.droide.core.PathSecurity
 import java.io.File
 import java.net.URI
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 private data class ProblemRow(
@@ -52,6 +53,16 @@ fun ProblemsSheet(
     var actions by remember { mutableStateOf<List<LspCodeAction>>(emptyList()) }
     var loadingActions by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    var actionRequest by remember { mutableLongStateOf(0L) }
+    var actionJob by remember { mutableStateOf<Job?>(null) }
+    fun dismissActions() {
+        actionRequest++
+        actionJob?.cancel()
+        actionJob = null
+        actionTarget = null
+        actions = emptyList()
+        loadingActions = false
+    }
     val rows = remember(diagnostics, buildDiagnostics, files.root.absolutePath, statusRevision) {
         val lspRows = diagnostics.entries.flatMap { (uri, list) ->
             val path = runCatching {
@@ -70,13 +81,12 @@ fun ProblemsSheet(
 
     LaunchedEffect(statusRevision) {
         if (actionTarget?.lspDiagnostic?.reportGuard?.accepts() == false || actions.any { it.activationGuard?.accepts() == false }) {
-            actionTarget = null
-            actions = emptyList()
+            dismissActions()
         }
     }
     Column(Modifier.fillMaxWidth().fillMaxHeight(0.82f)) {
         if (onClose != null) {
-            DroidePanelHeader(title = "Problems", subtitle = "${rows.size} issue${if (rows.size == 1) "" else "s"}", onClose = onClose)
+            DroidePanelHeader(title = "Problems", subtitle = "${rows.size} issue${if (rows.size == 1) "" else "s"}", onClose = { dismissActions(); onClose() })
         } else {
             Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text("Problems", style = MaterialTheme.typography.titleLarge)
@@ -122,12 +132,15 @@ fun ProblemsSheet(
                             {
                                 IconButton(onClick = {
                                     if (diagnostic.reportGuard?.accepts() == false) return@IconButton
+                                    dismissActions()
+                                    val request = actionRequest
                                     actionTarget = row
                                     actions = emptyList()
                                     actionError = null
                                     loadingActions = true
-                                    scope.launch {
+                                    actionJob = scope.launch {
                                         val result = runSuspendCatching { lsp.codeActions(row.path, diagnostic) }
+                                        if (request != actionRequest || actionTarget !== row) return@launch
                                         actions = result.getOrElse {
                                             actionError = it.message ?: it::class.java.simpleName
                                             emptyList()
@@ -150,7 +163,7 @@ fun ProblemsSheet(
     val target = actionTarget
     if (target != null) {
         AlertDialog(
-            onDismissRequest = { actionTarget = null },
+            onDismissRequest = ::dismissActions,
             title = { Text("Quick Fix") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -161,8 +174,8 @@ fun ProblemsSheet(
                         Text("No code actions available for this diagnostic.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     LazyColumn(Modifier.heightIn(max = 280.dp)) {
-                        items(actions, key = { "${it.title}:${it.kind}:${it.preferred}" }) { action ->
-                            val applicable = target.lspDiagnostic?.reportGuard?.accepts() != false && action.activationGuard?.accepts() != false && action.disabledReason == null && (action.edit != null || !action.rawJson.isNullOrBlank())
+                        items(actions) { action ->
+                            val applicable = !loadingActions && target.lspDiagnostic?.reportGuard?.accepts() != false && action.activationGuard?.accepts() != false && action.disabledReason == null && (action.edit != null || !action.rawJson.isNullOrBlank())
                             ListItem(
                                 headlineContent = { Text(action.title) },
                                 supportingContent = {
@@ -176,22 +189,29 @@ fun ProblemsSheet(
                                     )
                                 },
                                 modifier = if (applicable) Modifier.clickable {
-                                    scope.launch {
-                                        if (target.lspDiagnostic?.reportGuard?.accepts() == false || action.activationGuard?.accepts() == false) return@launch
-                                        loadingActions = true
+                                    if (loadingActions || actionTarget !== target) return@clickable
+                                    loadingActions = true
+                                    val request = actionRequest
+                                    actionJob = scope.launchUiCatching(onError = { failure ->
+                                        if (request == actionRequest && actionTarget === target) {
+                                            loadingActions = false
+                                            actionError = failure.message ?: "Code action could not be applied"
+                                        }
+                                    }) {
                                         val result = runSuspendCatching { lsp.resolveCodeAction(target.path, action) }
+                                        if (request != actionRequest || actionTarget !== target) return@launchUiCatching
                                         loadingActions = false
                                         if (target.lspDiagnostic?.reportGuard?.accepts() == false || action.activationGuard?.accepts() == false ||
                                             (action.activationGuard != null && result.isFailure)) {
                                             actionError = "Code action expired. Request it again."
-                                            return@launch
+                                            return@launchUiCatching
                                         }
                                         val resolved = result.getOrNull() ?: action
-                                        if (resolved.activationGuard?.accepts() == false) return@launch
+                                        if (resolved.activationGuard?.accepts() == false) return@launchUiCatching
                                         val edit = resolved.edit
                                         if (edit != null) {
                                             onApplyWorkspaceEdit(edit)
-                                            actionTarget = null
+                                            dismissActions()
                                         } else {
                                             actionError = resolved.disabledReason
                                                 ?: if (resolved.commandTitle != null) "This action requires a server command; no opaque command was executed."
@@ -204,7 +224,7 @@ fun ProblemsSheet(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { actionTarget = null }) { Text("Close") } },
+            confirmButton = { TextButton(onClick = ::dismissActions) { Text("Close") } },
         )
     }
 }

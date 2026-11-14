@@ -1,0 +1,5 @@
+Akses file bersama opsional untuk terminal dan agent, serta proyek tersimpan melalui Android Files.
+Menu Commands terminal kini memandu pengaktifan kedua opsi tersebut.
+Handbook agent diperbarui dengan panduan storage, SSH dan perangkat yang terarah.
+Penyempurnaan sinkronisasi terminal, editor, Explorer dan agent eksternal, termasuk perubahan file bersamaan dan diagnostik proses.
+Ubuntu dan alat pengembangan tetap dipasang sesuai kebutuhan.

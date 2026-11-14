@@ -17,6 +17,7 @@ object AgentToolPermissionPolicy {
         tool in setOf("run_command", "bash", "exec_command", "write_stdin") -> "shell"
         tool == "background_job" -> "read"
         tool == "environment_probe" -> "read"
+        tool == "storage" -> "read"
         tool == "ide" -> "ide_execute"
         tool == "undo_agent_edit" -> "edit"
         tool == "question" -> "question"
@@ -41,6 +42,7 @@ object AgentToolPermissionPolicy {
     }
 
     // Every returned requirement must be resolved immediately before the corresponding branch runs.
+
 
     fun runtimeRequirements(tool: String, args: JsonObject, sessionId: String?): List<AgentRuntimePermissionRequirement> = when (tool) {
         "background_job" -> listOf(AgentRuntimePermissionRequirement(

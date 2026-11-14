@@ -41,8 +41,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** These intentionally do not create WebView or invoke native project tooling. */
-
+/** Fake-content host contract tests. These intentionally do not create WebView or invoke native project tooling.
+ * Authored by static review only; this increment has not been compiled or executed. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, qualifiers = "w800dp-h600dp")
 class WorkspaceBrowserHostTest {
@@ -85,7 +85,7 @@ class WorkspaceBrowserHostTest {
     private fun mount(direction: LayoutDirection = LayoutDirection.Ltr) {
         compose.setContent {
             CompositionLocalProvider(LocalLayoutDirection provides direction) {
-
+                // Nonzero root origin ensures physical slot positions are translated to the host.
                 Box(Modifier.size(workspaceWidth, workspaceHeight).padding(start = 13.dp, top = 17.dp)) {
                     Box(Modifier.fillMaxSize().testTag("test-workspace")
                         .onGloballyPositioned { placement.updateRoot(it.boundsInRoot()) }) {

@@ -14,8 +14,8 @@ import androidx.compose.ui.unit.dp
 
 private enum class SheetPart { HEADER, BODY, FOOTER }
 
-/** Pin the footer only if a readable body fits; otherwise scroll the whole sheet. */
-
+/** Measure the chrome first so wrapping labels, typography and font scaling determine the available reading
+ * area. Pin the footer only if a readable body fits; otherwise scroll the whole sheet. */
 @Composable
 internal fun AdaptiveSheetColumn(
     minimumBodyHeight: Dp,

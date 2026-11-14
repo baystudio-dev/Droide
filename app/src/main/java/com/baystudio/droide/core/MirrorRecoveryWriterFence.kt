@@ -2,8 +2,8 @@ package com.baystudio.droide.core
 
 import java.io.File
 
-/** Recovery publishes metadata from an observed filesystem version. */
-
+/** Recovery publishes metadata from an observed filesystem version. Keep participating writers excluded until
+ * publication finishes, using the same source-before-working order as repository synchronization. */
 internal object MirrorRecoveryWriterFence {
     suspend fun <T> mutate(source: File, working: File,
         action: suspend (WorkspaceMutationGuard, WorkspaceMutationGuard) -> T): T =

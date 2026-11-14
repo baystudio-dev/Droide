@@ -3,8 +3,8 @@ package com.baystudio.droide.core
 import java.io.FilterInputStream
 import java.io.InputStream
 
-/** Migration seam, not yet the production LlmStreamResult or tool turn. */
-
+/** Migration seam, not yet the production LlmStreamResult or tool turn. Large public content and admitted native
+ * replay stay owned references, never a whole response String. */
 internal class OwnedNormalizedResponse(
     val target: ProviderReplayTarget,
     val publicText: PublicText?,
@@ -29,8 +29,8 @@ internal class OwnedNormalizedResponse(
     ) {
         val byteLength: Long get() = reference.byteLength
         companion object {
-            /** Native OBJECT envelope only. */
-
+            /** Native OBJECT envelope only. Arrays/scalars need a separately reviewed extraction seam. The
+             * callback is trusted app code, never model instructions. No default/no-op validator is supplied here. */
             fun admit(
                 session: OwnedResponseContentStore.Session,
                 handle: OwnedResponseContentStore.Handle,
@@ -82,8 +82,8 @@ internal class OwnedNormalizedResponse(
     }
 }
 
-/** Trusted configuration identity, not supplied by response JSON. endpointIdentity must identify
- * the canonical configured endpoint (or its stable fingerprint). */
+/** Trusted configuration identity, not supplied by response JSON. endpointIdentity must identify the canonical
+ * configured endpoint (or its stable fingerprint). */
 internal data class ProviderReplayTarget(
     val providerId: String,
     val modelId: String,

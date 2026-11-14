@@ -53,16 +53,16 @@ class SettingsEmbeddedControlsWorkflowTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
             .performClick()
         server.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
-        compose.onNodeWithText("Retry check").performClick()
-        compose.onNodeWithText("Open .droide/mcp.json").performClick()
-        compose.onNodeWithText("Agent Permissions").performClick()
+        compose.onNodeWithText("Connect").performClick()
+        compose.onAllNodesWithText("Open config")[0].performClick()
+        compose.onNodeWithText("Permissions").performClick()
         compose.runOnIdle {
             assertEquals(1, retries)
             assertEquals(1, configurations)
             assertEquals(1, permissions)
         }
         server.performClick()
-        compose.onNodeWithText("Retry check").assertDoesNotExist()
+        compose.onNodeWithText("Connect").assertDoesNotExist()
     }
 
     @Test fun pendingMcpActionsAreDisabledButDetailsRemainAvailable() {
@@ -75,8 +75,8 @@ class SettingsEmbeddedControlsWorkflowTest {
             } }
         }
         compose.onNodeWithText("fixture").performClick()
-        compose.onNodeWithText("Retry check").assertIsNotEnabled()
-        compose.onNodeWithText("Open .droide/mcp.json").assertIsNotEnabled()
-        compose.onNodeWithText("Agent Permissions").assertIsEnabled()
+        compose.onNodeWithText("Connect").assertIsNotEnabled()
+        compose.onAllNodesWithText("Open config")[0].assertIsNotEnabled()
+        compose.onNodeWithText("Permissions").assertIsEnabled()
     }
 }

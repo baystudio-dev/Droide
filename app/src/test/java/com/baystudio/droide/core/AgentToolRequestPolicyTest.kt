@@ -4,7 +4,6 @@ import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Authored only; no checks have been executed in this environment. */
 class AgentToolRequestPolicyTest {
     private fun request(vararg names: String) = buildJsonObject {
         put("tools", buildJsonArray { names.forEach { name -> add(buildJsonObject {

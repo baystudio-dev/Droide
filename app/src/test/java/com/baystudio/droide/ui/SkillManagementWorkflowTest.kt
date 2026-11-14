@@ -69,9 +69,10 @@ class SkillManagementWorkflowTest {
         assertTrue("Native dialog layout and the normal Compose clock must settle", idleAfterTraversal)
     }
 
+
     @Test fun createAndOpenSkillThroughSettingsOnNarrowScreen() {
         mount()
-        compose.waitUntil(5000) { compose.onAllNodesWithText("No skills in this scope yet.").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(5000) { compose.onAllNodes(hasContentDescription("Create skill") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("Create skill").performClick()
         traverseNativeDialogWindow()
         compose.onNodeWithText("Save", substring = false).performClick()

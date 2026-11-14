@@ -1,59 +1,49 @@
-# Testing
+# Testing and verification
 
-Tests are organized by the behavior and environment they verify. Keep tests independent of source comments, formatting, or development-history labels.
+Tests are retained by the behavior they protect, not their age or checkpoint-shaped filename. Remove coverage only when it is obsolete or a verified replacement covers the same failure boundary. A failure is evidence to investigate, not a reason to delete a test.
 
-## Repository and dependency checks
+## Test organization
 
-`tools/tests/` contains tests for repository policies, dependency verification, licensed artifacts, compiler/native inspection, and release packaging. Run the maintained release source checks before building a distribution artifact. Dependency changes must retain strict checksums and configuration locks.
+| Location | Purpose |
+| --- | --- |
+| `app/src/test` | Unit, protocol, filesystem, lifecycle and Compose/Robolectric regressions |
+| `app/src/androidTest` | Instrumented Android behavior |
+| `tools/tests` | Build/export, dependency trust, artifact parsing and native contract checks |
+| `tools/host-regressions` | Focused host fixtures with explicit Android/native boundaries |
+| `tools/agent-behavior-tests.txt` | Focused built-in/external-agent suite selection |
+| `docs/verification` | Scoped result summaries and required source/license provenance |
 
-These checks cover source hygiene, required documentation, accidental credential/build-output inclusion, dependency policy, license coverage, catalog consistency, and native/artifact verification. A failing integrity check needs investigation; updating an expected hash is a reviewed maintenance action.
+Maintain separate evidence for source integrity, host tests, APK packaging, physical Android workflows and abrupt process/power loss. Do not sum repeated executions as distinct tests. A source inventory of buttons is not proof that every rendered control has been tapped on every device.
 
-Run the source gate on a clean checkout:
+## Running relevant checks
 
-```sh
-bash tools/verify_release_source.sh
-```
-
-The source-only gate explicitly skips tests requiring compiled terminal output or an APK. CI runs those tests again with real build artifacts after release assembly.
-
-## Application tests
-
-`app/src/test/` contains JVM and Robolectric tests for application behavior. Prioritize startup and Exit, draft preservation, safe file publication/export, process ownership, provider/agent protocols, credentials, and browser lifecycle when preparing a release.
-
-The maintained critical suite is listed in `tools/release-test-suites.json`. Run it with `python3 tools/run_release_tests.py`; use `--offline` when the dependencies are cached. The runner rejects missing, failed, skipped or empty reports for every selected class.
-
-The runner verifies the pinned API 35 Robolectric runtime in `tools/host-test-runtime.json` and compiles the current filesystem JNI source for Linux x86_64. Install a C compiler and set `JAVA_HOME` first. These fixtures remain under `app/build-host-jvm-tests/host-runtime/`; they are not application dependencies. `--offline` requires the verified runtime to be cached already. Interrupted or corrupt downloads are rejected.
-
-Each selected class runs in a separate worker process so Robolectric sandboxes and ordinary JVM tests cannot conflict over JVM ownership of the native library.
-
-Use the explicit host test mode for focused JVM tests. It does not package an application or establish native/device validation:
+The fast repository commands are in [development](DEVELOPMENT.md). Additional independently runnable tooling tests include:
 
 ```sh
-python3 tools/provision_test_runtime.py
-./gradlew :app:testDebugUnitTest \
-  --tests com.baystudio.droide.CompletedExitProcessTest \
-  -PDROIDE_HOST_JVM_TESTS_ONLY=true \
-  -PDROIDE_HOST_TEST_RUNTIME_DIR="$PWD/app/build-host-jvm-tests/host-runtime" \
-  -Pandroid.builder.sdkDownload=false \
-  --dependency-verification=strict --no-daemon --max-workers=1 \
-  --no-configuration-cache --no-build-cache
+python3 -B -m unittest discover -s tools/tests -p 'test_source_hygiene.py' -v
+python3 -B -m unittest discover -s tools/tests -p 'test_document_file_icons.py' -v
+python3 -B -m unittest discover -s tools/tests -p 'test_goose_editor_data.py' -v
 ```
 
-The selected tests must actually run. An empty selection, failed process, or incomplete test report is a failure. Keep native/device-dependent tests separate from host-only fixtures.
+Use the selected build lane's verified classpath to run `:app:testDebugUnitTest --tests fully.qualified.TestClass`. The explicit `DROIDE_HOST_JVM_TESTS_ONLY` mode admits exact reviewed test selectors and rejects APK/native/device work; it is not a substitute for a release build. Its task graph, failure handling and strict dependency verification must remain enabled. Supply the applicable terminal/JGit inputs and test JVM through the reviewed host configuration; do not assemble a partial production classpath from stale JARs.
 
-## Android device tests
+`tools/verify_terminal_workstation.py` drives seven terminal suites through Gradle. It accepts an external `--gradle`, a supported `--test-task`, an optional host `--init-script` and repeated `--gradle-arg` values. Its `--help` describes the interface. Browser DOM fixtures use `tools/verify_browser_actions.py`; Chromium results do not establish Android WebView input behavior.
 
-`app/src/androidTest/` contains platform and workbench integration checks. Run them on the intended Android variant and supported device configurations. A debug test cannot establish that the optimized release variant behaves correctly.
+An environment that can compile only selected test sources must report that selection. It must still compile unchanged production sources and fail if a selected suite is missing. Restore global registries/admission state, dispose Compose views and join owned work between tests. Never disable production lifecycle guards to repair a fixture.
 
-For release acceptance, exercise startup and recovery, editor input and saving, project import/export, Exit, terminal/process cleanup, agent tools, and browser lifecycle. Include orientation changes and keyboard interactions for workbench changes. Record the Android version, device/ABI, variant, and observed results.
+## Current action audit
 
-## Artifact tests
+The [workbench audit](verification/workbench-actions-20261114/AUDIT.md) and [machine-readable results](verification/workbench-actions-20261114/RESULTS.json) record the explicit suite selection and verification limits for the action repairs. They are historical evidence for those measured inputs, not blanket certification of later commits. Raw logs, source snapshots and cleanup archives are maintained outside the application source.
 
-Release verification checks the actual APK after optimization and packaging. Native binding tests also exercise invalid declarations and corrupted inputs:
+## Android acceptance
 
-```sh
-DROIDE_SOURCE_RELEASE_APK=/absolute/path/app-release.apk \
-  python3 -B -m unittest discover -s tools/tests -p test_source_release_verification.py -v
-```
+Test the exact APK hash on supported Android versions and representative phones/tablets. Include:
 
-Keep the APK checksum, source revision, verification receipt, lint report, test reports, signature fingerprint, and matching R8 mapping together for a release. Document which checks ran and any missing device coverage.
+- Startup, last-file restoration, binary input rejection, drafts, process death and the 15-second Exit deadline.
+- Portrait/landscape navigation, editor selection/IME/zoom, restored expansion and rapid panel reversals.
+- Kotlin/Java file Run inside an Android Gradle project must use the language compiler/runtime. Verify the explicit local Android app action with no wireless bridge, install permission denial/cancellation/update, connected-device Run and debug attach.
+- Explorer rename/move/delete/undo/export, dirty conflicts and document-provider grant loss.
+- SSH/VPN, long-running PTY, Unicode/TUI, input modifiers, resize, interrupt/tab close and detached jobs.
+- Built-in/external agents, approvals, streaming, pending saves, browser forms/dialogs, MCP and extensions.
+
+Record failures, skips, actual device/OEM and test prerequisites. A successful targeted rerun does not erase an unsuccessful full-suite run. Network accounts, live services and package installation need their own evidence; host fixtures do not claim them.

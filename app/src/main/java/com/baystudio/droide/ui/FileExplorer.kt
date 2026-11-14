@@ -214,20 +214,25 @@ private fun WorkspaceFileExplorer(
         }
     }
 
-    suspend fun performMove(observation: FileRepository.MoveObservation, target: FileEntry, historyDirection: Int = 0) {
+    suspend fun performMove(observation: FileRepository.MoveObservation, target: FileEntry, historyDirection: Int = 0, renaming: Boolean = false) {
+        val operationName = if (renaming) "Rename" else "Move"
         var failure: Throwable? = null
-        try { check(files.moveObserved(observation)) { "Move failed" } }
+        try { check(files.moveObserved(observation)) { "$operationName failed" } }
         catch (error: Throwable) { failure = error }
         if (observation.committed) {
-            state.moved(observation.from, target.copy(path = observation.to))
-            state.recordMove(if (failure == null && observation.failure == null && !movingRecoveredFile) observation.undo else null, historyDirection)
+            if (renaming) state.renamed(observation.from, observation.to)
+            else {
+                state.moved(observation.from, target.copy(path = observation.to))
+                state.recordMove(if (failure == null && observation.failure == null && !movingRecoveredFile) observation.undo else null, historyDirection)
+            }
             state.moveNotice = (failure ?: observation.failure)?.let {
-                "Moved to /${observation.to}. Workspace update incomplete: ${it.message ?: "refresh to check synchronization"}"
+                "$operationName completed at /${observation.to}. Workspace update incomplete: ${it.message ?: "refresh to check synchronization"}"
             }
             showMove = null
+            if (renaming) showRename = null
             try { onRenamed(observation.from, observation.to) }
             catch (error: Exception) {
-                state.moveNotice = "Moved to /${observation.to}. Editor refresh incomplete: ${error.message}"
+                state.moveNotice = "$operationName completed at /${observation.to}. Editor refresh incomplete: ${error.message}"
                 state.recordMove(null, 0)
                 if (failure == null) failure = error
             }
@@ -235,8 +240,9 @@ private fun WorkspaceFileExplorer(
         } else if (observation.uncertain) {
             // Do not guess a remap when an external writer changed the observed object or parents.
             state.selectRoot(); state.recordMove(null, 0)
-            state.moveNotice = "Move needs review. Inspect /${observation.from} and /${observation.to}; existing data was preserved."
+            state.moveNotice = "$operationName needs review. Inspect /${observation.from} and /${observation.to}; existing data was preserved."
             showMove = null
+            if (renaming) showRename = null
             refreshLocalTreeAfterMutation(); searchRevision++
         }
         failure?.let { if (it is CancellationException || it !is Exception || !observation.committed) throw it }
@@ -294,8 +300,8 @@ private fun WorkspaceFileExplorer(
         if (uri != null) runUiCatching(onError = { err = it.message ?: "Cannot start file import" }) {
             if (ticket == null || imports == null) err = "Import destination changed; select a project folder and import again"
             else {
-                // Capture the native editor now; the runtime's repository validates the actual destination when
-                // publication begins. No view callback travels with the copy.
+                // Capture the native editor now; the runtime's repository validates the actual
+                // destination when publication begins. No view callback travels with the copy.
                 onBeforeImport()
                 when (imports.submit(ticket, uri)) {
                     WorkspaceImportAdmission.ACCEPTED -> { err = null; mutationNotice = null; state.importNotice = null }
@@ -310,8 +316,8 @@ private fun WorkspaceFileExplorer(
         val result = importState.result ?: return@LaunchedEffect
         if (state.lastImportResult === result) return@LaunchedEffect
         state.lastImportResult = result
-        // Directory refresh owns its loading error only. The bounded import outcome must survive that
-        // refresh and a detached/recreated pane, including cleanup warnings.
+        // Directory refresh owns its loading error only. The bounded import outcome must
+        // survive that refresh and a detached/recreated pane, including cleanup warnings.
         state.importNotice = result.message
         if (result.status == WorkspaceImportResultStatus.SYNC_PENDING) {
             result.relativePath?.let { path -> state.selectEntry(FileEntry(path, false, result.bytes ?: 0L, 0L)) }
@@ -400,8 +406,7 @@ private fun WorkspaceFileExplorer(
         state.children.toMap(), state.moreAfter.toMap(), state.loadingPages.toMap(), state.refreshOutcome) {
         val target = state.pendingReveal ?: return@LaunchedEffect
         if (state.refreshOutcome == ExplorerRefreshOutcome.PENDING) return@LaunchedEffect
-        // Resolve each ancestor through the normal paged loader. Never invent entries or bypass
-        // stale-page guards.
+        // Resolve each ancestor through the normal paged loader. Never invent entries or bypass stale-page guards.
         var parent = ""
         for (segment in target.split('/')) {
             if (state.loadingPages[parent] == state.pageGeneration) return@LaunchedEffect
@@ -418,7 +423,7 @@ private fun WorkspaceFileExplorer(
         val rows = flattenExplorerRows(state.children, state.expandedPaths, state.moreAfter)
         val index = rows.indexOfFirst { it.entry?.path == target }
         if (index >= 0) {
-
+            // Like Explorer reveal, jump directly to the result, including across many directory pages.
             treeListState.scrollToItem(index)
             if (state.pendingReveal == target) state.pendingReveal = null
         }
@@ -575,6 +580,7 @@ private fun WorkspaceFileExplorer(
                     if (progress.phase == StreamWritePhase.COPYING && progress.fraction != null && progress.completedBytes > 0L) {
                         LinearProgressIndicator(progress = { progress.fraction!! }, modifier = Modifier.fillMaxWidth())
                     } else {
+
 
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     }
@@ -863,10 +869,11 @@ private fun WorkspaceFileExplorer(
                         preparePathMutation(listOf(old, newPath))
                         check(canMutatePath(old)) { "Save or discard unsaved editor changes before renaming this path" }
                         check(canMutatePath(newPath)) { "Save or discard unsaved editor changes at the destination" }
-                        check(files.move(old, newPath, requireExistingParent = true)) { "Rename failed" }
-                        state.renamed(old, newPath)
-                        onRenamed(old, newPath)
-                        refreshLocalTreeAfterMutation(); searchRevision++
+                        val entry = withContext(Dispatchers.IO) {
+                            val file = files.resolveChecked(old)
+                            FileEntry(old, file.isDirectory, file.length(), file.lastModified())
+                        }
+                        performMove(files.observeMove(old, newPath), entry, renaming = true)
                     }
                     showRename = null; newName = ""
                 }

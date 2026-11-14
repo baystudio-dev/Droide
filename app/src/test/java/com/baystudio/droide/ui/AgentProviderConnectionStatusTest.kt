@@ -103,7 +103,6 @@ class AgentProviderConnectionStatusTest {
 
     private fun awaitUiCondition(predicate: () -> Boolean) {
         // runOnIdle waits before its action, not for the resulting snapshot/frame work.
-
         compose.waitUntil(5_000) {
             compose.waitForIdle()
             predicate()

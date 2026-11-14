@@ -3,7 +3,7 @@ package com.baystudio.droide.core
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 
-/** Workspace files use JSONC; remove comments only outside JSON strings. */
+/** Workspace configuration accepts JSONC; strip comments only outside JSON strings. */
 internal object WorkspaceJsonConfig {
     const val MAX_BYTES = 256_000
     private val json = Json { ignoreUnknownKeys = true; isLenient = false }

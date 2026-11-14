@@ -20,6 +20,7 @@ import com.baystudio.droide.core.InstallerProgressEntry
 import com.baystudio.droide.core.InstallerProgressOutcome
 import com.baystudio.droide.core.InstallerProgressPresentation
 
+/** Workspace footer, outside conditional panes. No overlay/scrim exists when minimized. */
 @Composable
 internal fun InstallerProgressHost(
     presentation: InstallerProgressPresentation,
@@ -29,8 +30,8 @@ internal fun InstallerProgressHost(
 ) {
     val state by presentation.state.collectAsState()
     val expanded = state.expanded
-    // No padding is emitted for an empty host or a dialog-only presentation.
-
+    // Insets belong to the shared parent when this footer is present. No padding is emitted for an empty host or a
+    // dialog-only presentation.
     val footerModifier = if (expanded == null && state.entries.isNotEmpty())
         modifier.windowInsetsPadding(insets) else modifier
     Column(footerModifier) {

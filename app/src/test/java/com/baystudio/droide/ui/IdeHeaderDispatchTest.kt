@@ -30,6 +30,7 @@ class IdeHeaderDispatchTest {
                     onTest = record("Test"), onTestExplorer = record("Test Explorer"), onLint = record("Lint"),
                     onReleaseApk = record("APK"), onReleaseBundle = record("Bundle"), onBuildOutput = record("Output"),
                     onApkAnalyzer = record("Analyzer"), onCancel = record("Cancel"), onDebugAndroid = record("Debug Android"),
+                    onRunAndroidApp = record("Run Android locally"),
                     onInstallRun = record("Install"), onLogcat = record("Logcat"), onLocalLinux = record("Ubuntu"),
                     onAndroidDevelopment = record("Device"), onQuickOpen = record("Quick Open"), onSearchFiles = record("Search"),
                     onWorkspaceSymbols = record("Symbols"), onProblems = record("Problems"), onTerminal = record("Terminal"),
@@ -79,7 +80,7 @@ class IdeHeaderDispatchTest {
         val actions = listOf("Projects" to "Projects", "Open AI" to "Agent", "Run current file or app" to "Run", "Manage MCP" to "MCP", "Project Tasks" to "Tasks", "Build Debug APK" to "Build", "Test Tasks" to "Test Explorer",
             "Android Test" to "Test", "Lint" to "Lint", "Release APK" to "APK", "Release Bundle" to "Bundle",
             "Build / Run Output" to "Output", "APK Analyzer" to "Analyzer", "Cancel active operation" to "Cancel",
-            "Run & Debug" to "Debug", "Debug Android App" to "Debug Android", "Install & Run" to "Install",
+            "Run & Debug" to "Debug", "Run Android app on this device" to "Run Android locally", "Debug Android App" to "Debug Android", "Run on connected device" to "Install",
             "Logcat" to "Logcat", "Problems" to "Problems", "Quick Open" to "Quick Open", "Search in Files" to "Search",
             "Workspace Symbols" to "Symbols", "Terminal" to "Terminal", "Source Control" to "Git",
             "Review Changes" to "Review", "Isolated Workspaces" to "Workspaces", "Capability Health" to "Health",
@@ -99,7 +100,7 @@ class IdeHeaderDispatchTest {
         compose.runOnIdle { busy = true; android = false }
         compose.onNodeWithContentDescription("Run current file").assertIsNotEnabled()
         compose.onNodeWithContentDescription("More").performClick()
-        for (label in listOf("Build Debug APK", "Android Test", "Lint", "Release APK", "Release Bundle", "Debug Android App", "Install & Run"))
+        for (label in listOf("Build Debug APK", "Android Test", "Lint", "Release APK", "Release Bundle", "Run Android app on this device", "Debug Android App", "Run on connected device"))
             compose.onNodeWithText(label).assertIsNotEnabled()
         assertTrue(events.isEmpty())
     }

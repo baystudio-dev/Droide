@@ -1,0 +1,33 @@
+{
+  "addedMethod": {
+    "exportDescriptorLock": "(IZ)I"
+  },
+  "apkAdmitted": false,
+  "currentInputContractSha256": "2c50fd3b7ba33f15b2d20a6033db9cf8c97f4dd3815d2380ff3ae5dde65769cf",
+  "deviceValidated": false,
+  "historicalArchiveRole": "Base-source ancestry only; not an archive hash of this successor tree",
+  "historicalBaseArchiveSha256": "989ce467c3daae57246377c0915cdab985ac3e6146ee4ec9809ed2045eab8504",
+  "kind": "REVIEWED_NATIVE_INPUT_CONTRACT_UPDATE_NOT_BUILD_RECEIPT",
+  "nativeRebuilt": false,
+  "previousInputContractSha256": "fead60dd5d4187656c325ec510a4a7a759b7eb6a13c5fd5638fc8e7cc11a22e0",
+  "receiptsReissued": false,
+  "reviewedExportDeltaManifestSha256": "d0d2c5fb1f3d666a45067586152edc0732f8f62bbfbccb49b59209cbcbb81959",
+  "unchanged": [
+    "legacy17methodDescriptors",
+    "sourceArchiveSha256 historical ancestry",
+    "CMake source pin",
+    "Termux source pin",
+    "all toolSha256 pins",
+    "ABI/API/NDK/CMake build configuration"
+  ],
+  "updatedSourcePins": {
+    "app/src/main/cpp/droide_files.c": {
+      "current": "2e94aa06ee4c2f37b78b65b74cc1ca5e8a925062344cdf756723e9a124bf36d5",
+      "previous": "303e7c7cfebd4bb36c1166386e368f7a99759ac67714c91a654bb3cfa50e1ed4"
+    },
+    "app/src/main/java/com/baystudio/droide/core/ProjectFilePublication.kt": {
+      "current": "e2d7d6b94a45f0b913abd61b2902fc5f24b785d4c79910f474407f558aee5805",
+      "previous": "cceb392dac56814b4702c6333a647314efa8656adba80d55215ac2eb57e338ad"
+    }
+  }
+}

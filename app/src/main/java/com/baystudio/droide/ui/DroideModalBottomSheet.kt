@@ -14,6 +14,8 @@ import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
+/** Retain the existing Material surface through a user-requested close animation. No second sheet, custom
+ * geometry, fixed delay or independent animation clock. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun DroideModalBottomSheet(

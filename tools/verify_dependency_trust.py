@@ -7,11 +7,14 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 NS = {'v': 'https://schema.gradle.org/dependency-verification'}
 
-def inspect(root: Path) -> dict:
-    lock = root / 'app/gradle.lockfile'
+def inspect(root: Path, *, lock_name: str = 'gradle.lockfile') -> dict:
+    if lock_name not in {'gradle.lockfile', 'gradle-fdroid.lockfile'}:
+        raise ValueError('unsupported dependency lock profile')
+    lock = root / 'app' / lock_name
     metadata = root / 'gradle/verification-metadata.xml'
     if not lock.is_file() or not metadata.is_file():
-        raise ValueError('dependency lock state or verification metadata is missing; run tools/generate_dependency_trust.sh')
+        raise ValueError('dependency lock state or verification metadata is missing for ' + lock_name +
+                         '; review the approved inputs for the selected build lane')
     properties = root / 'gradle.properties'
     if properties.is_file() and re.search(r'(?m)^\s*org\.gradle\.dependency\.verification\s*=\s*(off|lenient)\s*$', properties.read_text()):
         raise ValueError('dependency verification cannot be disabled or made lenient')

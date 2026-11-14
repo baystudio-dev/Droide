@@ -4,8 +4,8 @@ import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
 
-/** Public-answer bridge over the owned store; no provider/private/tool content is exposed. */
-
+/** Public-answer bridge over the owned store; no provider/private/tool content is exposed. No methods accept a
+ * session ID from a content reference or expose a whole-answer String. */
 internal class AgentPublicContentArchive(
     private val store: OwnedResponseContentStore,
     private val authorizedSessionId: String,
@@ -28,8 +28,8 @@ internal class AgentPublicContentArchive(
         fun append(text: CharSequence) = writer.append(text)
         fun appendUtf8(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size - offset) = writer.appendUtf8(bytes, offset, length)
 
-        /** Upstream caller must have validated protocol completion, not just EOF. Public plaintext has no
-         * tool semantics; strict Unicode and integrity are store-owned. */
+        /** Upstream caller must have validated protocol completion, not just EOF. Public plaintext has no tool
+         * semantics; strict Unicode and integrity are store-owned. */
         fun finishAfterProviderCompletion(): ArchivedPublicAnswer = archived(runId, itemId,
             writer.sealCompleted { input -> drain(input) }.content)
 
@@ -37,8 +37,8 @@ internal class AgentPublicContentArchive(
          * recoverable stage; do not convert an I/O failure into successful completion. */
         fun finishIncomplete(): ArchivedPublicAnswer = archived(runId, itemId, writer.sealIncomplete())
 
-        /** Runs blocking I/O: caller must run it off the UI thread. */
-
+        /** Finite cleanup of already received data, including inline data before spill. Runs blocking I/O:
+         * caller must run it off the UI thread. */
         fun abortToIncomplete(): PublicAnswerAbortCheckpoint {
             val checkpoint = writer.abortToIncomplete()
             check(checkpoint.content.state == OwnedResponseContentStore.State.INCOMPLETE)
@@ -67,8 +67,8 @@ internal class AgentPublicContentArchive(
         return session(reference.runId, reference.itemId).openPages(handle(reference))
     }
 
-    /** Exact UTF-8 export, including an intentionally incomplete public answer. Caller owns
-     * destination permission and atomic staging; this method never closes the destination. */
+    /** Exact UTF-8 export, including an intentionally incomplete public answer. Caller owns destination
+     * permission and atomic staging; this method never closes the destination. */
     fun export(reference: AgentPublicContentRef, destination: OutputStream): Long {
         verified(reference)
         return session(reference.runId, reference.itemId).openBytes(handle(reference)).use { source ->
@@ -76,8 +76,8 @@ internal class AgentPublicContentArchive(
         }.also { check(it == reference.bytes) { "Public content length changed during export" } }
     }
 
-    /** Source authority is this archive; target authority is separately supplied by the caller, not
-     * taken from untrusted content. */
+    /** Explicit copy before committing child session metadata. Parent blob remains intact even if fork
+     * publication later fails. */
     fun copyForFork(reference: AgentPublicContentRef, target: AgentPublicContentArchive, runId: String, itemId: String): ArchivedPublicAnswer {
         verified(reference)
         target.begin(runId, itemId).use { capture ->
@@ -101,8 +101,8 @@ internal class AgentPublicContentArchive(
         return content
     }
 
-    /** Pure descriptor construction: in particular, safe after the writer's scoped abort cleanup,
-     * when ordinary store reads correctly remain cancelled. */
+    /** Pure descriptor construction: in particular, safe after the writer's scoped abort cleanup, when ordinary
+     * store reads correctly remain cancelled. */
     private fun referenceForContent(runId: String, itemId: String, content: OwnedResponseContentStore.Content): AgentPublicContentRef {
         check(content.kind == OwnedResponseContentStore.Kind.ANSWER &&
             (content.utf16Length >= 0 || content.state == OwnedResponseContentStore.State.INCOMPLETE))
@@ -126,8 +126,8 @@ internal class AgentPublicContentArchive(
             }
         }
         } catch (invalidText: java.nio.charset.CharacterCodingException) {
-            // Incomplete byte artifacts may have an interrupted UTF-8 suffix. Do not repair/replace bytes,
-            // hide disk errors, or mislabel partial output complete.
+            // Incomplete byte artifacts may have an interrupted UTF-8 suffix. Do not
+            // repair/replace bytes, hide disk errors, or mislabel partial output complete.
             check(content.state == OwnedResponseContentStore.State.INCOMPLETE) { "Completed public content has invalid UTF-8" }
             textAvailable = false
         }

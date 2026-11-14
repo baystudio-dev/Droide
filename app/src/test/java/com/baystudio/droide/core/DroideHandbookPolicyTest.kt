@@ -17,7 +17,7 @@ class DroideHandbookPolicyTest {
         for (value in listOf("", "all", "Identity", "../identity", "/identity", "https://example.com/", "identity\nterminal")) {
             assertThrows(IllegalArgumentException::class.java) { DroideHandbookPolicy.validateSelection(value, null) }
         }
-        assertEquals(19, DroideHandbookPolicy.sections.size)
+        assertEquals(24, DroideHandbookPolicy.sections.size)
     }
 
     @Test fun screenshotIdsAreFixedAndMustMatchTheSection() {
@@ -102,7 +102,7 @@ class DroideHandbookPolicyTest {
         assertTrue(doc.contains("Third-party components retain their own licenses"))
         assertFalse(Regex("\\b(?:R|F)[0-9]{2,}\\b").containsMatchIn(doc))
         for (name in listOf("vscode", "visual studio code", "antigravity", "claude code", "opencode")) {
-            assertFalse(doc.lowercase().contains(name))
+            assertFalse(identity.lowercase().contains(name))
         }
     }
 

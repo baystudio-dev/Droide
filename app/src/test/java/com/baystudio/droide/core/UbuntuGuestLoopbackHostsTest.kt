@@ -15,8 +15,8 @@ import java.util.concurrent.CancellationException
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Actual production helper against disposable rootfs fixtures only. */
-
+/** Actual production helper against disposable rootfs fixtures only. Never reads/writes /etc, invokes a
+ * resolver, changes host network settings, or launches guest/host executables. */
 class UbuntuGuestLoopbackHostsTest {
     private class Fixture {
         val base = Files.createTempDirectory("ubuntu-loopback-hosts-").toFile()

@@ -3,7 +3,6 @@ package com.baystudio.droide.core
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Source-authored only. Unknown contributors conservatively retain every applicable DENY. */
 class BrowserUnverifiedOutputPolicyTest {
     private val allow = PermRule("*", "*", PermEffect.ALLOW)
     private val remote = PermRule("webfetch", "https://private.test/secret", PermEffect.DENY)

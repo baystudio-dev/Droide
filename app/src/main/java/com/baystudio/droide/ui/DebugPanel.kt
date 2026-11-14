@@ -96,14 +96,15 @@ fun DebugPanel(
                                 supportingContent = { Text("PID ${process.pid}", fontFamily = FontFamily.Monospace) },
                                 trailingContent = {
                                     TextButton(onClick = {
+                                        val sourcePath = activeFile
                                         runAction {
-                                            check(activeFile.isNotBlank()) { "Open a Kotlin/Java source file before attaching" }
+                                            check(sourcePath.isNotBlank()) { "Open a Kotlin/Java source file before attaching" }
                                             check(onEnsureSaved()) { "Save failed; debugger was not started" }
-                                            val attachConfigs = debugger.androidAttachConfigurations(activeFile, process.pid)
+                                            val attachConfigs = debugger.androidAttachConfigurations(sourcePath, process.pid)
                                             val config = attachConfigs.firstOrNull()
                                                 ?: error("No Android JDWP adapter. Install one or add an androidJdwp launch configuration.")
                                             showAndroidAttach = false
-                                            debugger.start(config)
+                                            onStartDebug(config, sourcePath)
                                         }
                                     }) { Text("Attach") }
                                 },

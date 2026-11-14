@@ -17,8 +17,8 @@ import java.nio.channels.FileChannel
 import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 
-/** Guest-local name data only. */
-
+/** Guest-local name data only. Never changes DNS/NSS policy or invokes a resolver. Existing explicit localhost
+ * records win. Atomic rename prevents partial publication; before/after checks detect ordinary concurrent edits. */
 internal object UbuntuGuestLoopbackHosts {
     internal const val MAX_BYTES = 65_536
     internal const val DEFAULTS = "127.0.0.1 localhost\n::1 localhost\n"

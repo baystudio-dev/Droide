@@ -3,6 +3,7 @@ package com.baystudio.droide.core
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
 
+/** JSON-RPC adapter over the existing workspace-bound CLI socket; no new listening port. */
 internal object ExternalIdeProtocol {
     val stdioScript = ExternalIdeMcpTransport.stdioScript
 
@@ -51,8 +52,8 @@ internal object ExternalIdeProtocol {
         val params = request["params"] ?: JsonObject(emptyMap())
         if (params !is JsonObject) return error(id, -32602, "params must be an object")
         return try {
-            // The same generation/cancellation gate applies, but install approval/download is not an
-            // observation and can legitimately take more than sixty seconds.
+            // The same generation/cancellation gate applies, but install approval/download is
+            // not an observation and can legitimately take more than sixty seconds.
             if (method == "tools/call") {
                 val name = (params["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                     ?: return error(id, -32602, "Tool name must be a string")
@@ -108,6 +109,7 @@ internal object ExternalIdeProtocol {
     private fun ok(text: String) = DroideCliExecutionResult(DroideCliExitCode.OK, stdout = text)
     val usage = "Usage: droide ide tools | droide ide call <tool-name> '<JSON arguments>' | droide ide mcp-config\n" +
         "IDE tools include live buffers, search, instructions and language analysis. droide_toolchain prepares build dependencies with installation/license approval in Droide. " +
+        "When advertised, droide_storage accesses Android shared files directly, outside project review and Undo; start with operation=status. " +
         "mcp-config prints a stdio MCP configuration for this open workspace; reconnect after closing/reopening it. " +
         "Existing CLI files/configuration are not modified."
 }

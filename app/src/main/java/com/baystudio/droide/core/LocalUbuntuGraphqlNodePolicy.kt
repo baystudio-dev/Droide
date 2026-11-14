@@ -3,8 +3,7 @@ package com.baystudio.droide.core
 import java.io.File
 import kotlinx.serialization.json.*
 
-/** Independent GraphQL-only receipt/tree for the accepted original Node artifact.
- * npm/npx/corepack stay data. */
+/** Independent GraphQL-only receipt/tree for the accepted original Node artifact. npm/npx/corepack stay data. */
 internal object LocalUbuntuGraphqlNodePolicy {
     const val FAMILY = "runtime.graphql-node"
     const val VERSION = "22.23.3"

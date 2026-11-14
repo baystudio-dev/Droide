@@ -70,8 +70,8 @@ internal class LspTomlRequests(
             if (remaining <= 0) throw NotAdmitted()
             return ceilMillis(remaining)
         }
-        /** Called at the existing serialized writer admission, never at mutex acquisition. */
-
+        /** Called at the existing serialized writer admission, never at mutex acquisition. Keep the manager's
+         * pure current check outside our lock (manager lifetime lock comes first). */
         fun markDispatched() {
             check(record.isCurrent()) { "TOML demand lost its current capture at serialized admission" }
             synchronized(lock) {
@@ -176,8 +176,7 @@ internal class LspTomlRequests(
             throw cancel
         } catch (failure: Exception) {
             if (record.propagateFailure && failure !is NotAdmitted) record.waiter.completeExceptionally(failure)
-            // Completed native errors are unavailable; guarded transaction validation can still report a
-            // rejection.
+            // Completed native errors are unavailable; guarded transaction validation can still report a rejection.
         } finally {
             finish(record, result)
         }
@@ -213,11 +212,11 @@ internal class LspTomlRequests(
         next?.let(::start)
     }
 
-    /** Expired live demand owns the same failure boundary even before its RPC is dispatched. */
-
+    /** Expired live demand owns the same failure boundary even before its RPC is dispatched. Never invoke the
+     * manager callback while holding this coordinator lock. */
     private fun expireBeforeDispatch(record: Record): Boolean {
         if (record.deadlineNanos - nanoTime() > 0L) return false
-
+        // Expired undispatched work is an inert drop; no native write needs cleanup.
         return true
     }
 
@@ -229,8 +228,8 @@ internal class LspTomlRequests(
             deadlinePublicationPending = true
             records.toList().also { records.clear(); active.clear(); queued.clear() }
         }
-        // The callback may acquire its lifetime lock and close this coordinator, so never invoke it
-        // under our lock.
+        // Fence the manager's held-result and wire admission before releasing any caller. The callback may acquire
+        // its lifetime lock and close this coordinator, so never invoke it under our lock.
         try { onDeadline(methodKey) }
         finally {
             pending.forEach { it.waiter.complete(null) }
@@ -245,8 +244,8 @@ internal class LspTomlRequests(
             records.toList().also { records.clear(); active.clear(); queued.clear() } to !deadlinePublicationPending
         }
         pending.forEach { it.waiter.complete(null) }
-        // A deadline callback may reenter close after fencing the manager. Its finally still owns
-        // pending unavailable publication before cancellation of their parent.
+        // A deadline callback may reenter close after fencing the manager. Its finally
+        // still owns pending unavailable publication before cancellation of their parent.
         if (cancelOwner) ownerJob.cancel(CancellationException("TOML request owner closed"))
     }
 

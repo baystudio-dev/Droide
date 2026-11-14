@@ -10,12 +10,21 @@ internal object TerminalCommandGuide {
             listOf("pwd", "ls -la", "cat README.md", "cd .."))
         val tools = TerminalGuideSection("Check installed tools", "Check this terminal's PATH before using a tool. A missing command does not mean Ubuntu needs to be downloaded again. Agent environment_probe checks the selected tab without installing anything.",
             listOf("for tool in git curl wget node npm python3; do command -v \"\$tool\" || printf '%s missing\\n' \"\$tool\"; done"))
+        val sharedFiles = TerminalGuideSection("Access shared files",
+            "1. Open Settings → Files & Workspace → User.\n2. Turn on Access shared files. Tap Android file access and allow Droide to access files in Android settings.\n3. Return to Droide, open a new Ubuntu terminal or reconnect your CLI, then check /sdcard/Download. Existing sessions keep their mounts.\nThis option requires Android 11+ and a build with device-storage support. Otherwise use the Android file picker, Import and Export. Shared-file edits are saved directly; agent permissions still apply. Keep toolchains and builds in the project workspace.",
+            listOf("ls -la /sdcard/Download"))
+        val projectFiles = TerminalGuideSection("Show project in Android Files",
+            "1. Open the project you want to share.\n2. In Settings → Files & Workspace → User, turn on Show project in Android Files.\n3. Open Android's file picker and its navigation menu. Select Droide · your project name to read or copy saved files.\nSave editor changes first. This is a separate, read-only option; it does not require Access shared files. If your file manager does not show document providers, use the system picker or Explorer Export. Turn the switch off to stop exposing that project.",
+            emptyList())
         val legacy = TerminalGuide("Legacy terminal", "This project uses Ubuntu ARM64. Open the Ubuntu terminal for commands and dependency installation.", listOf(basics))
         return when (profile) {
             TerminalManager.Profile.LOCAL -> legacy
             TerminalManager.Profile.LOCAL_LINUX_ARM64 -> TerminalGuide("Linux · Ubuntu",
                 "Use Extensions or the Droide CLI to install workspace tools. Check their versions before building.",
-                listOf(basics, tools,
+                listOf(basics, sharedFiles, projectFiles, tools,
+                    TerminalGuideSection("SSH connections", "Replace user and server with your own values. Enter the command without Markdown backticks. A password prompt deliberately shows no typed characters. ConnectTimeout limits connection setup, not the connected session. Use -vv to locate a stalled connection; for a private/VPN address, make sure the VPN includes Droide. Verify the server fingerprint before accepting it. If the log stalls after TCP connects, try -o IPQoS=none.",
+                        listOf("droide pkg install cli.ssh", "ssh -o ConnectTimeout=15 user@server",
+                            "ssh -vv -o ConnectTimeout=15 -o ConnectionAttempts=1 user@server")),
                     TerminalGuideSection("Managed tools", "These commands use the same package authority as Extensions. Install only missing tools; healthy packages and the shared Ubuntu guest are reused. Installing requires network access when the requested package is not cached.",
                         listOf("droide pkg list", "droide pkg search git", "droide pkg install cli.git", "droide pkg install cli.curl", "droide pkg install cli.wget", "git --version")),
                     TerminalGuideSection("Install and update tools", "Use the same package installer as Extensions. Latest or an exact version can be selected; user-installed tools in this Ubuntu guest remain usable. Existing healthy dependencies are reused.",

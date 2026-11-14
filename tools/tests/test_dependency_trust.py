@@ -33,6 +33,22 @@ class DependencyTrustTest(unittest.TestCase):
         self.metadata.unlink()
         with self.assertRaises(ValueError): trust.inspect(self.root)
 
+    def testFdroidProfileUsesItsOwnLock(self):
+        regular = self.root / 'app/gradle.lockfile'
+        (self.root / 'app/gradle-fdroid.lockfile').write_bytes(regular.read_bytes())
+        regular.write_text('invalid regular lock\n')
+        self.assertEqual(1, trust.inspect(self.root, lock_name='gradle-fdroid.lockfile')['lockedModules'])
+        with self.assertRaises(ValueError): trust.inspect(self.root)
+
+    def testFdroidProfileCannotBorrowValidRegularLock(self):
+        (self.root / 'app/gradle-fdroid.lockfile').write_text('sample:library:2.0=releaseRuntimeClasspath\n')
+        with self.assertRaisesRegex(ValueError, 'missing from checksum'):
+            trust.inspect(self.root, lock_name='gradle-fdroid.lockfile')
+
+    def testLockProfileCannotPointOutsideTheApplication(self):
+        with self.assertRaisesRegex(ValueError, 'unsupported dependency lock profile'):
+            trust.inspect(self.root, lock_name='../unreviewed.lock')
+
     def testMissingLockStateIsRejected(self):
         (self.root / 'app/gradle.lockfile').unlink()
         with self.assertRaises(ValueError): trust.inspect(self.root)

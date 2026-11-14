@@ -86,8 +86,7 @@ class WorkspaceSafProjectReuseTest {
             assertEquals("unsaved user work", document.content)
             assertEquals("saved source", source.readText())
 
-            // A previous owner's retained recovery is unrelated to reselecting the current project. retried
-            // it before noticing the same ID, which could fail an otherwise harmless drawer selection.
+            // Reselecting the current project must not retry recovery retained by a previous owner.
             val handoff = WorkspaceCoordinator::class.java.getDeclaredField("editorHandoff").let {
                 it.isAccessible = true
                 it.get(coordinator) as WorkspaceHandoffGate

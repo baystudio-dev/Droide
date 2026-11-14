@@ -3,8 +3,7 @@ package com.baystudio.droide.core
 import java.io.File
 import kotlinx.serialization.json.*
 
-/** Independent C#-only receipt/tree for the accepted original Node artifact. npm/npx/corepack
- * stay data. */
+/** Independent C#-only receipt/tree for the accepted original Node artifact. npm/npx/corepack stay data. */
 internal object LocalUbuntuCSharpHelperPolicy {
     const val FAMILY = "runtime.csharp-helper"
     const val VERSION = "22.23.3"

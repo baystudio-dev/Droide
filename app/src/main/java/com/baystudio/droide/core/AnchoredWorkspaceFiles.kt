@@ -104,14 +104,14 @@ internal class AnchoredWorkspaceFiles(private val root: File) : Closeable {
             }
         }
 
-        /** A dedicated metadata lock lease. */
-
+        /** A dedicated metadata lock lease. The pinned descriptor must outlive this lease. Never use for SQLite
+         * or payload files (POSIX locks are process/inode scoped). */
         interface MetadataLease : Closeable {
             fun requireHeld()
         }
 
-        /** Export-only descriptor-scoped ownership. Closing an unrelated alias of this inode cannot
-         * release this flock; do not substitute it for existing POSIX database leases. */
+        /** Export-only descriptor-scoped ownership. Closing an unrelated alias of this inode
+         * cannot release this flock; do not substitute it for existing POSIX database leases. */
         @Synchronized fun acquireExclusiveExportLease(): MetadataLease {
             check(descriptor >= 0 && !metadataLeaseActive) { "Export descriptor already leased or closed" }
             val error = NativeFilePublication.exportDescriptorLock(descriptor, true)
@@ -162,7 +162,6 @@ internal class AnchoredWorkspaceFiles(private val root: File) : Closeable {
         }
 
         /** Only for a dedicated private metadata lock inode, never a SQLite/user file. */
-
         @Synchronized fun <T> withExclusiveMetadataLock(action: (() -> Unit) -> T): T {
             check(descriptor >= 0 && !metadataLeaseActive) { "Metadata lock descriptor is closed or already leased" }
             val before = observe()
@@ -370,8 +369,8 @@ internal class AnchoredWorkspaceFiles(private val root: File) : Closeable {
         }
     }
 
-    /** Remove only caller-validated redundant private metadata. */
-
+    /** Remove only caller-validated redundant private metadata. This is not a retained/user-payload release API.
+     * The caller must serialize metadata writers and establish durable redundancy before entering this method. */
     fun deleteRedundantMetadata(name: String, expectedKey: Any): Boolean {
         require('/' !in name)
         relativeBytes(name)

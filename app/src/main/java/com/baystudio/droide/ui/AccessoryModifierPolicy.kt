@@ -21,8 +21,8 @@ internal data class AccessoryModifierSnapshot(
     }
 }
 
-/** The first completed tap arms immediately; a second completed tap within the platform window
- * locks it. */
+/** Synchronous modifier latch. The first completed tap arms immediately; a second completed tap within the
+ * platform window locks it. Only the Compose controller publishes [snapshot]; this model has no platform dependencies. */
 internal class AccessoryModifierPolicy {
     var snapshot = AccessoryModifierSnapshot()
         private set

@@ -36,10 +36,16 @@ class ExplorerMutationContinuationUiTest {
     private val visible = androidx.compose.runtime.mutableStateOf(true)
     private var release: CompletableDeferred<Unit>? = null
     @After fun cleanup() { release?.complete(Unit); root.deleteRecursively() }
-    private fun mount(allowed: () -> Boolean = { true }, prepare: suspend (List<String>) -> Unit) {
-        val files = FileRepository(root)
+    private fun mount(
+        allowed: () -> Boolean = { true },
+        mutation: (suspend (FileRepository.Mutation) -> Unit)? = null,
+        renamed: (String, String) -> Unit = { _, _ -> },
+        prepare: suspend (List<String>) -> Unit,
+    ) {
+        val files = FileRepository(root, onMutation = mutation)
         compose.setContent { mainWindowRoot = LocalView.current.rootView; DroideTheme { Box(Modifier.size(360.dp,640.dp)) {
-            if (visible.value) compose.TestFileExplorer(files, state, onOpen = {}, canMutatePath = { allowed() }, preparePathMutation = prepare)
+            if (visible.value) compose.TestFileExplorer(files, state, onOpen = {}, canMutatePath = { allowed() },
+                onRenamed = renamed, preparePathMutation = prepare)
         } } }
         await { state.children[""]?.isNotEmpty() == true }
     }
@@ -58,10 +64,11 @@ class ExplorerMutationContinuationUiTest {
 
     private fun await(condition: () -> Boolean) = compose.waitUntil(5_000) {
         compose.mainClock.advanceTimeByFrame()
-        // Import progress returns from real I/O through Android's Main handler, which is distinct from
-        // the Compose test clock even without a dialog.
+        // Import progress returns from real I/O through Android's Main handler,
+        // which is distinct from the Compose test clock even without a dialog.
         Shadows.shadowOf(Looper.getMainLooper()).idle()
-
+        // Repository completions can enable the field or insert an error after the button action has returned.
+        // Traverse that same native dialog before each normal semantics fetch, just as after focus/text changes.
         if (hasNativeDialogWindow()) traverseNativeDialogWindow()
         condition()
     }
@@ -82,8 +89,8 @@ class ExplorerMutationContinuationUiTest {
         return present
     }
 
-    // Same bounded SDK 35 window traversal used by BrowserHumanDialogTest.
-
+    // Same bounded SDK 35 window traversal used by BrowserHumanDialogTest. Perform real owner work; do not clear
+    // requests, disable animation or enlarge memory/time budgets. A recurring layout still fails this check.
     private fun traverseNativeDialogWindow() {
         assertTrue("Automatic Compose idling stays enabled", compose.mainClock.autoAdvance)
         var idleAfterTraversal = false
@@ -119,6 +126,7 @@ class ExplorerMutationContinuationUiTest {
         traverseNativeDialogWindow()
     }
 
+
     @Test fun renamePreparesOnceAndChecksEligibilityAfterResume() {
         root.resolve("a.kt").writeText("A")
         var allowed = false; val scopes = mutableListOf<List<String>>()
@@ -147,6 +155,26 @@ class ExplorerMutationContinuationUiTest {
         compose.runOnIdle { visible.value = false }
         await { cancelled }
         assertEquals("A", root.resolve("a.kt").readText()); assertFalse(root.resolve("b.kt").exists())
+    }
+
+    @Test fun committedRenameWithFailedSynchronizationRemapsEditorAndPreservesNewContent() {
+        root.resolve("a.kt").writeText("A")
+        val remapped = mutableListOf<Pair<String, String>>()
+        mount(mutation = { mutation ->
+            if (mutation is FileRepository.Mutation.Move) {
+                root.resolve(mutation.to).appendText(" edited after rename")
+                error("controlled synchronization failure")
+            }
+        }, renamed = { from, to -> remapped += from to to }) { }
+        state.selectedPath = "a.kt"
+        openAction("Rename"); replaceForm("b.kt"); confirm("Rename").performClick()
+        await { remapped.isNotEmpty() }
+        assertEquals(listOf("a.kt" to "b.kt"), remapped)
+        assertFalse(root.resolve("a.kt").exists())
+        assertEquals("A edited after rename", root.resolve("b.kt").readText())
+        assertEquals("b.kt", state.selectedPath)
+        assertTrue(state.moveNotice.orEmpty().contains("Rename completed at /b.kt"))
+        await { compose.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty() }
     }
 
     @Test fun cancelNeverPreparesOrMutates() {

@@ -18,6 +18,10 @@ import androidx.compose.ui.unit.dp
 import com.baystudio.droide.core.*
 import kotlinx.coroutines.launch
 
+
+
+
+
 @Composable
 fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged: () -> Unit = {}) {
     val scope = rememberWorkspaceCoroutineScope()
@@ -85,6 +89,15 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
         }
     }
 
+    fun runRead(block: suspend () -> String) {
+        if (busy) return
+        busy = true
+        scope.launchUiCatching(onError = { statusText = "git error: ${it.message}" }) {
+            try { statusText = block() }
+            finally { busy = false }
+        }
+    }
+
     fun showDiff(change: GitChange) {
         scope.launch {
             if (diffBusy) return@launch
@@ -99,7 +112,11 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
         }
     }
 
-    LaunchedEffect(git) { statusText = refreshState() }
+    LaunchedEffect(git) {
+        busy = true
+        try { statusText = refreshState() }
+        finally { busy = false }
+    }
 
     if (repositoryReady == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) { CircularProgressIndicator() }
@@ -131,13 +148,13 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                IconButton(onClick = { scope.launch { statusText = refreshState() } }, enabled = !busy) { Icon(Icons.Default.Refresh, "Refresh") }
+                IconButton(onClick = { runRead { refreshState() } }, enabled = !busy) { Icon(Icons.Default.Refresh, "Refresh") }
                 AssistChip(onClick = { runOperation { git.fetch(token = token.ifBlank { null }) } }, label = { Text("Fetch") }, enabled = !busy)
                 AssistChip(onClick = { runOperation { git.pull(token = token.ifBlank { null }) } }, label = { Text("Pull") }, enabled = !busy)
                 AssistChip(onClick = { runOperation { git.push(token = token.ifBlank { null }) } }, label = { Text("Push") }, enabled = !busy)
-                AssistChip(onClick = { scope.launch { statusText = git.log() } }, label = { Text("Log") }, enabled = !busy)
-                AssistChip(onClick = { scope.launch { statusText = git.diff() } }, label = { Text("Diff") }, enabled = !busy)
-                AssistChip(onClick = { scope.launch { statusText = git.branches() } }, label = { Text("Branches") }, enabled = !busy)
+                AssistChip(onClick = { runRead { git.log() } }, label = { Text("Log") }, enabled = !busy)
+                AssistChip(onClick = { runRead { git.diff() } }, label = { Text("Diff") }, enabled = !busy)
+                AssistChip(onClick = { runRead { git.branches() } }, label = { Text("Branches") }, enabled = !busy)
             }
         }
 

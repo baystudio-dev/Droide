@@ -10,7 +10,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/** Candidate sources only. NOT compiled or executed. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = android.app.Application::class, sdk = [35])
 class ExternalAgentModeConfirmationTest {
@@ -152,8 +151,8 @@ class ExternalAgentModeConfirmationTest {
             controller.cancel(backend)
             backend.turnCleanupStarted.await()
             val runId = checkNotNull(controller.activeRun).runId
-            // Model an already-accepted relay event while owned cleanup is held open. This exercises the
-            // real handler without adding a production test seam.
+            // Model an already-accepted relay event while owned cleanup is held open.
+            // This exercises the real handler without adding a production test seam.
             val apply = controller.javaClass.getDeclaredMethod("applyEvent", java.lang.Long.TYPE,
                 String::class.java, WorkspaceAgentEvent::class.java).apply { isAccessible = true }
             apply.invoke(controller, runId, spec.id,

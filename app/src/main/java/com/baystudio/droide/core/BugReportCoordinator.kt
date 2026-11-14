@@ -16,8 +16,8 @@ internal interface BugReportTransport {
     fun close()
 }
 
-/** One operation at a time, even when taps/rotation race. */
-
+/** One operation at a time, even when taps/rotation race. No automatic POST retry, queue or persistence. The UI
+ * owns the draft; a cancelled or ambiguous submission never clears it. */
 internal class BugReportCoordinator(
     private val transport: BugReportTransport = OfficialBugReportTransport(),
     initiallyUnknown: Boolean = false,
@@ -48,7 +48,7 @@ internal class BugReportCoordinator(
 
     suspend fun submit(draft: BugReportDraft, confirmUnknownRetry: Boolean = false): BugReportOutcome = coroutineScope {
         if (closed.get()) return@coroutineScope BugReportOutcome.Closed
-        val snapshot = draft.copy()
+        val snapshot = draft.copy() // all members are immutable values, no late UI reads
         val errors = BugReportPolicy.validate(snapshot)
         if (errors.isNotEmpty()) return@coroutineScope BugReportOutcome.Invalid(errors)
         val operation = Operation(requireNotNull(currentCoroutineContext()[Job]))

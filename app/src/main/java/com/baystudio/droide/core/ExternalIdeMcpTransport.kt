@@ -1,7 +1,7 @@
 package com.baystudio.droide.core
 
-/** Ubuntu's required python3 supplies a bounded stdio event loop. */
-
+/** Ubuntu's required python3 supplies a bounded stdio event loop. Each request owns one native CLI connection:
+ * terminating that process closes its socket and cancels the host operation through CliConnectionLifetime. */
 internal object ExternalIdeMcpTransport {
     internal val pythonScript = """
         import asyncio

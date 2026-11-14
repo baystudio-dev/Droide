@@ -17,6 +17,7 @@ class PrimaryRunHeaderTest {
     @get:Rule val compose = createComposeRule()
     private var runs = 0
     private var devices = 0
+    private var localAppRuns = 0
     private var path by mutableStateOf("untitled.cs")
     private var busy by mutableStateOf(false)
 
@@ -30,6 +31,7 @@ class PrimaryRunHeaderTest {
                         onProjects = {}, onRun = { runs++ }, onBuildDebug = {}, onTest = {},
                         onTestExplorer = {}, onLint = {}, onReleaseApk = {}, onReleaseBundle = {},
                         onBuildOutput = {}, onApkAnalyzer = {}, onCancel = {}, onDebugAndroid = {},
+                        onRunAndroidApp = { localAppRuns++ },
                         onInstallRun = {}, onLogcat = {}, onLocalLinux = {},
                         onAndroidDevelopment = { devices++ }, onQuickOpen = {}, onSearchFiles = {},
                         onWorkspaceSymbols = {}, onProblems = {}, onTerminal = {}, onGit = {},
@@ -50,11 +52,11 @@ class PrimaryRunHeaderTest {
         assertEquals(0, devices)
     }
 
-    @Test fun switchingFromAndroidSourceToPythonChangesTheRunAction() {
-        path = "app/src/main/MainActivity.kt"
+    @Test fun switchingFromBuildDefinitionToKotlinChangesTheRunAction() {
+        path = "app/build.gradle.kts"
         mount(compact = false)
         compose.onNodeWithText("Run App").assertExists()
-        compose.runOnIdle { path = "tools/check.py" }
+        compose.runOnIdle { path = "okjiss.kt" }
         compose.onNodeWithText("Run", substring = false).performClick()
         assertEquals(1, runs)
         assertEquals(0, devices)
@@ -68,11 +70,34 @@ class PrimaryRunHeaderTest {
         assertEquals(0, devices)
     }
 
-    @Test fun androidSourceRetainsTheAppRunAction() {
-        path = "app/src/main/MainActivity.kt"
+    @Test fun kotlinAndJavaOfferFileRunEvenWithAConnectedAndroidDevice() {
+        path = "okjiss.kt"
         mount(connected = true)
-        compose.onNodeWithContentDescription("Build, install and run Android app").performClick()
+        compose.onNodeWithContentDescription("Run current file").performClick()
+        compose.runOnIdle { path = "app/src/main/java/Hello.java" }
+        compose.onNodeWithContentDescription("Run current file").performClick()
+        assertEquals(2, runs)
+        assertEquals(0, devices)
+        assertEquals(0, localAppRuns)
+    }
+
+    @Test fun androidRunWithoutADeviceConnectionStaysEnabledAndDoesNotOpenDeviceSetup() {
+        path = "app/src/main/AndroidManifest.xml"
+        mount(connected = false)
+        compose.onNodeWithContentDescription("Build, install and run Android app").assertIsEnabled().performClick()
         assertEquals(1, runs)
+        assertEquals(0, devices)
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Run on connected device").assertIsNotEnabled()
+    }
+
+    @Test fun androidAppCanBeRunExplicitlyWhileEditingASourceFileWithoutAConnection() {
+        path = "okjiss.kt"
+        mount(connected = false)
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Run Android app on this device").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(1, localAppRuns)
+        assertEquals(0, runs)
         assertEquals(0, devices)
     }
 

@@ -2,8 +2,8 @@ package com.baystudio.droide.core
 
 import java.util.concurrent.CancellationException
 
-/** Captures only a synchronous call to the pinned emulator's paste producer. */
-
+/** Captures only a synchronous call to the pinned emulator's paste producer. Admission is atomic; a later
+ * transport failure is still ambiguous and never replayed. */
 internal class TerminalPasteTransaction(
     private val send: (ByteArray, Int, Int) -> Boolean,
     private val onRejected: (String) -> Unit,
@@ -48,8 +48,8 @@ internal class TerminalPasteTransaction(
         admit: (ByteArray, Int, Int) -> Boolean = send, produce: (String) -> Unit): Boolean {
         var rejection: String? = null
         val accepted = synchronized(lock) {
-            // A nested producer must invalidate the outer operation too. No observer callbacks run while a
-            // capture exists, and another thread is serialized.
+            // A nested producer must invalidate the outer operation too. No observer
+            // callbacks run while a capture exists, and another thread is serialized.
             capture?.let {
                 it.error = "Reentrant paste was rejected; nothing from this paste was sent"
                 return@synchronized false
@@ -77,8 +77,8 @@ internal class TerminalPasteTransaction(
             } finally {
                 capture = null
             }
-            // Pinned paste emits either one body or begin/body/end.
-
+            // Pinned paste emits either one body or begin/body/end. This is a shape check, not proof of producer
+            // identity: callers must use the synchronous pinned paste producer only.
             if (current.error == null && !((current.writes == 1 && !current.firstWasStart) ||
                     (current.writes == 3 && current.firstWasStart && current.lastWasEnd))) {
                 current.error = "Unexpected paste output; the whole paste was rejected"

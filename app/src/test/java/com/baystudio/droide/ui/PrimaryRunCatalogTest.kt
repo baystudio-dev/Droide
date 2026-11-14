@@ -14,8 +14,8 @@ internal fun expectedCatalogTarget(path: String, android: Boolean): PrimaryRunTa
     val name = path.substringAfterLast('/').lowercase(java.util.Locale.ROOT)
     val extension = name.substringAfterLast('.', "")
     if (extension in setOf("html", "htm", "md", "markdown", "mdown", "mkd")) return PrimaryRunTarget.PREVIEW
-    if (android && (path.isBlank() || extension in setOf("kt", "java", "xml") ||
-        name in setOf("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties")))
+    if (android && (path.isBlank() ||
+        name in setOf("androidmanifest.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties")))
         return PrimaryRunTarget.ANDROID_APP
     return PrimaryRunTarget.FILE
 }

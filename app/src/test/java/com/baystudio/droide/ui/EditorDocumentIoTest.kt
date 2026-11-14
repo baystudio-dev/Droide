@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import org.junit.Assert.*
 import org.junit.Test
 
+ 
 class EditorDocumentIoTest {
     @Test(timeout = 20_000) fun cancellationReturningFromSyncReceiptVerificationStillAcknowledgesCommittedSnapshot() = runBlocking {
         val root = Files.createTempDirectory("droide-cancelled-receipt-").toFile()
@@ -36,7 +37,7 @@ class EditorDocumentIoTest {
             })
             val doc = EditorDocument("main.kt"); doc.ensureLoaded(files); doc.capture("B")
             val job = scope.launch { doc.save(files) }
-
+            // Hold Sync inside the write's original IO until its calling runnable returns.
             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
             while (syncEntered.count != 0L) {
                 check(System.nanoTime() < deadline && !job.isCompleted) { "Synchronization callback was not reached" }

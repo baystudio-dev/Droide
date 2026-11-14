@@ -7,8 +7,8 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import kotlin.math.roundToInt
 
-/** Read animated insets during measurement, not in composition. */
-
+/** The navigation follows the same native IME trajectory as the accessory deck, in reverse. No visibility grace
+ * or second height animation follows keyboard dismissal. */
 @Composable
 internal fun CompactNavigationImeReveal(
     typingTarget: Boolean,
@@ -25,6 +25,7 @@ internal fun CompactNavigationImeReveal(
     )
 }
 
+/** Natural height includes large-font labels and the existing navigation insets. */
 @Composable
 internal fun CompactNavigationRevealLayout(
     fraction: () -> Float,

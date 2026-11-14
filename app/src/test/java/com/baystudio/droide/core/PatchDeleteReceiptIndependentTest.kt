@@ -15,7 +15,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Independent consumer tests: only exact repository receipts can advance patch history. */
+/** Only exact repository receipts can advance patch history. */
 class PatchDeleteReceiptIndependentTest {
     private fun workspace(block: suspend (File) -> Unit) = runBlocking {
         val root = Files.createTempDirectory("droide-patch-delete-independent-").toFile()

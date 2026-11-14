@@ -1,7 +1,7 @@
 package com.baystudio.droide.core
 
-/** Derived from the reviewed CPython source, never JVM Unicode categories. */
-
+/** Sealed CPython 3.12.3 / Unicode 15.0.0 SRE_UNI_IS_WORD data. Derived from the reviewed CPython source, never
+ * JVM Unicode categories. License: assets/legal/licenses/CPython-3.12.3-LICENSE.txt. */
 internal object LspCMakeWordTable {
     const val POLICY_ID = "cpython312-unicode150-word-v1"
     const val INTERVAL_COUNT = 748

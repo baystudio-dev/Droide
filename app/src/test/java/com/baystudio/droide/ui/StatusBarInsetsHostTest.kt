@@ -55,8 +55,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** authored, source-only regression candidates; not compiled or executed in this review. */
-
+/** Measures the production inset host and descendant Scaffold with injected Android inset samples.
+ * Device IME/inset dispatch and SDKs outside this fixture require separate validation. */
 @OptIn(ExperimentalLayoutApi::class, ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 30, 34, 35], application = Application::class,
@@ -106,7 +106,7 @@ class StatusBarInsetsHostTest {
     private val disposedOwners = mutableListOf<String>()
 
     private fun Modifier.recordBounds(record: (Rect) -> Unit): Modifier = onGloballyPositioned {
-
+        // Unclipped measured coordinates expose a real relayout rather than a visual translation.
         record(Rect(it.positionInRoot(), Size(it.size.width.toFloat(), it.size.height.toFloat())))
     }
 
@@ -170,7 +170,7 @@ class StatusBarInsetsHostTest {
     }
 
     private fun startFallbackClock() {
-
+        // Commit the layout-produced plan, then supply the animation's initial frame.
         compose.mainClock.advanceTimeByFrame()
         compose.mainClock.advanceTimeByFrame()
         compose.waitForIdle()
@@ -364,8 +364,8 @@ class StatusBarInsetsHostTest {
         assertTrue("Fixture must interrupt a real fallback", totalTop() > 0f && totalTop() < 100f)
 
         compose.runOnIdle {
-            // Inject the metrics boundary a rotation/density update would deliver. This is deliberately not
-            // an Activity recreation or native rotation integration claim.
+            // Inject the metrics boundary a rotation/density update would deliver. This is
+            // deliberately not an Activity recreation or native rotation integration claim.
             metricsKey = "landscape@2"
             shownStatus.top = 80
             status.top = 80
@@ -379,8 +379,8 @@ class StatusBarInsetsHostTest {
         assertGeometry(80f, bottom = 240)
         assertEquals(240f, rootBounds.bottom - paneBounds.bottom, 1f)
 
-        // Old-generation frames must neither revive the interrupted hide nor prevent a subsequent
-        // legitimate endpoint transition using the new shown height.
+        // Old-generation frames must neither revive the interrupted hide nor prevent a
+        // subsequent legitimate endpoint transition using the new shown height.
         sample(0)
         assertGeometry(80f, bottom = 240)
         startFallbackClock()
@@ -436,7 +436,7 @@ class StatusBarInsetsHostTest {
     @Test fun temporaryStartupBannerAndChildScaffoldShareOneMovingTopReservation() {
         mount {
             Column(Modifier.fillMaxSize()) {
-
+                // Models the existing Activity banner ahead of IdeScreen's Scaffold.
                 Text("Temporary built-in startup.", Modifier.fillMaxWidth().height(40.dp).testTag("startup-banner"))
                 Box(Modifier.weight(1f)) { RawInsetScaffold() }
             }

@@ -6,6 +6,7 @@ import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
+/** Short, process-local admission reuse. Callers serialize through the Ubuntu mutation gate. */
 internal class UbuntuGuestReadinessCache(private val nanoTime: () -> Long = System::nanoTime) {
     private var seal: String? = null
     private var admittedAt = 0L
@@ -39,14 +40,13 @@ internal class UbuntuGuestReadinessCache(private val nanoTime: () -> Long = Syst
                 val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, noFollow)
                 require(!attrs.isSymbolicLink && if (file in directories) attrs.isDirectory else attrs.isRegularFile)
                 add(file.path)
-                // Admission depends on the directory's identity/mode, not on its child count.
-
+                // Bind directory admission to stable identity and mode, not child metadata changed by installation.
                 add(if (file in directories && attrs.fileKey() != null) "${attrs.fileKey()}"
                     else "${attrs.fileKey()}:${attrs.creationTime()}:${attrs.lastModifiedTime()}:${attrs.size()}")
                 add(Files.getPosixFilePermissions(file.toPath(), noFollow).toString())
             }
-            // A retained backup is not an active transaction while the current root exists.
-
+            // A retained backup is not an active transaction while the current root exists. The bootstrap
+            // reconciler never restores it over that root.
             retainedPrevious?.let { previous ->
                 add(previous.path)
                 if (!Files.exists(previous.toPath(), noFollow)) add("absent")

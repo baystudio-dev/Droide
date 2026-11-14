@@ -63,7 +63,7 @@ class DroideHandbookGrowthTest {
     val choices=definition.getValue("inputSchema").jsonObject.getValue("properties").jsonObject
      .getValue("section").jsonObject.getValue("enum").jsonArray.map { it.jsonPrimitive.content }.toSet()
     assertEquals(DroideHandbookPolicy.sections.keys,choices)
-    for(section in listOf("identity","architecture","release","integrations")) {
+    for(section in listOf("identity","architecture","release","integrations","storage","ssh","android_device")) {
      val result=provider.call("droide_help",buildJsonObject { put("section",section) })
      assertTrue(result.contains("## ${DroideHandbookPolicy.sections.getValue(section)}. $section"))
      assertFalse(result.contains("## 2. navigation"))

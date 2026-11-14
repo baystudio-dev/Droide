@@ -33,7 +33,6 @@ internal object ProjectWorkspaceMaintenance {
     }
 
     // A caller-supplied path, reserved prefix, or absent catalog entry is not deletion authority.
-
     @Suppress("UNUSED_PARAMETER") // Preserve the startup API without inspecting an untrusted path.
     suspend fun collect(projectsRoot: File, detached: List<File>): List<String> = withContext(Dispatchers.IO) {
         currentCoroutineContext().ensureActive()

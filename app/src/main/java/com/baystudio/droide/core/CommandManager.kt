@@ -4,6 +4,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+
 data class DroideCommand(val name: String, val description: String, val template: String)
 
 class CommandManager(private val workDir: File) {
@@ -34,7 +35,8 @@ class CommandManager(private val workDir: File) {
         out += DroideCommand("android-build-release-bundle", "Build the Android release App Bundle using project signing configuration", "/android-build-release-bundle")
         out += DroideCommand("android-test", "Run Android project Gradle tests on this device", "/android-test")
         out += DroideCommand("android-lint", "Run Android project lint on this device", "/android-lint")
-        out += DroideCommand("android-install-run", "Build if needed, install the APK and launch it", "/android-install-run")
+        out += DroideCommand("android-run-local", "Build, install and run Android app on this device", "/android-run-local")
+        out += DroideCommand("android-install-run", "Build, install and run on the connected Android device", "/android-install-run")
         out += DroideCommand("android-logcat", "Show PID-filtered logcat for the current Android app", "/android-logcat")
         out += DroideCommand("android-build-output", "Show output from the latest Android build/test/lint task", "/android-build-output")
         out += DroideCommand("build-cancel", "Cancel the active Build/Run/Test operation", "/build-cancel")

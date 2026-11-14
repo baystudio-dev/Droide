@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Shell epochs and command generations must increase monotonically; output and elapsed time
- * never start or renew an attempt. */
+/** Attempt CPU protection once per command generation; callbacks run outside the lock. Protection failure is
+ * advisory, and only an owner-validated explicit Stop or Exit may stop the command. */
 class HumanTerminalCpuProtection(
     private val acquire: (
         onAcquired: () -> Unit,
@@ -62,11 +62,11 @@ class HumanTerminalCpuProtection(
             if (!observedActive) {
                 Observation(null, release, updateStatusLocked(Phase.IDLE, owner))
             } else if (latestAttempt?.owner == owner) {
-
+                // Remember failures, pending requests and retired attempts through duplicate phases.
                 Observation(null, release, desiredStatus)
             } else {
                 val attempt = Attempt(owner)
-                latestAttempt = attempt
+                latestAttempt = attempt // Admission is recorded before invoking the gateway.
                 current = attempt
                 Observation(attempt, release, updateStatusLocked(Phase.PENDING, owner))
             }
@@ -94,7 +94,7 @@ class HumanTerminalCpuProtection(
                     true
                 } else false
             }
-
+            // An acquire may return after close, completion, failure or a newer command.
             if (!retained) safely(release)
         }
     }

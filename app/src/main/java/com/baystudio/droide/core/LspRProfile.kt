@@ -11,8 +11,8 @@ internal object LspRProfile {
     const val IDENTITY = "r-user-installed-vanilla-bounded-index-v1"
     val extensions = setOf("r", "R")
 
-    // Fixed program only: never interpolate a filename, project setting, or server response.
-
+    // Fixed program only: never interpolate a filename, project setting, or server response. Upstream options()
+    // override LSP configuration.
     const val PROGRAM = "options(languageserver.index_mode='off', " +
         "languageserver.max_completions=100L, languageserver.parse_delay=0.25, " +
         "languageserver.diagnostics_delay=1, languageserver.parse_cache_max_mb=32L, " +
@@ -29,6 +29,7 @@ internal object LspRProfile {
         candidate.id == ID || "r" in candidate.languageIds ||
             candidate.extensions.any { it in extensions } || path?.let(::supportsPath) == true
 
+    /** The opened workspace is the R session boundary; no recursive scan or tool probe. */
     fun projectRoot(workspace: File, document: File): File {
         val root = workspace.canonicalFile
         require(PathSecurity.contains(root, document.canonicalFile)) { "R document escaped the workspace" }

@@ -1,5 +1,6 @@
 package com.baystudio.droide.core
 
+/** Aggregate accounting retained by one compaction transaction, shared across every branch. */
 internal class CompactionWorkBudget {
     private var retainedChars = 0L
 

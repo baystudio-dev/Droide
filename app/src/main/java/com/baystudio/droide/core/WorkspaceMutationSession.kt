@@ -1,5 +1,6 @@
 package com.baystudio.droide.core
 
+/** Optional internal repository seam. C1 deliberately supplies no SAF implementation. */
 internal fun interface WorkspaceMutationParticipant {
     suspend fun begin(guard: WorkspaceMutationGuard, mutation: FileRepository.Mutation): WorkspaceMutationSession
 }
@@ -43,10 +44,11 @@ internal abstract class WorkspaceMutationSession(
     /** Pure, nonthrowing disposition once durable local evidence forbids repository rollback. */
     open val retainLocalOnSyncFailure: Boolean get() = false
 
-    /** Optional Delete-only destination, selected before the existing local move. */
-
+    /** Optional Delete-only destination, selected before the existing local move. Null keeps sibling staging.
+     * Returning a path does not authorize later cleanup. */
     open suspend fun prepareDeleteStage(): String? = null
 
+    /** Call before the first provider/manifest invocation, including one that may throw. */
     fun markExternalEffectAttempted() {
         guard.requireRoot(guard.canonicalRoot)
         externalEffectAttempted = true
@@ -59,8 +61,8 @@ internal abstract class WorkspaceMutationSession(
     /** Small receipt only; returned=false cannot prove that the local invocation had no effect. */
     open fun localReturned(receipt: WorkspaceLocalReceipt) {}
     open suspend fun synchronize() {}
-    /** True takes durable custody of that stage; the repository must not recursively clean it. */
-
+    /** Take durable custody only of this invocation's verified DELETE_STAGE receipt. An owned but mismatched
+     * stage must throw and remain retained, never fall through to recursive cleanup. */
     open fun retainsDeleteStage(receipt: WorkspaceLocalReceipt): Boolean = false
     /** Exactly once after begin returns a valid session, before releasing ownership/IO dispatch. */
     open fun finish(outcome: WorkspaceMutationOutcome) {}

@@ -4,8 +4,6 @@ import hashlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-THIRD = ROOT / "third_party"
-MANIFEST = THIRD / "ARTIFACTS_SHA256.txt"
 
 
 def sha256(path: Path) -> str:
@@ -16,22 +14,25 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def tracked_files() -> list[Path]:
+def tracked_files(root: Path = ROOT) -> list[Path]:
+    third = root / "third_party"
+    manifest = third / "ARTIFACTS_SHA256.txt"
     result: list[Path] = []
-    for p in THIRD.rglob("*"):
-        if not p.is_file() or p == MANIFEST:
+    for p in third.rglob("*"):
+        if not p.is_file() or p == manifest:
             continue
         if "__pycache__" in p.parts or p.suffix == ".pyc":
             continue
         result.append(p)
-    return sorted(result, key=lambda p: p.relative_to(ROOT).as_posix())
+    return sorted(result, key=lambda p: p.relative_to(root).as_posix())
 
 
-def parse_manifest() -> dict[str, str]:
-    if not MANIFEST.is_file():
+def parse_manifest(root: Path = ROOT) -> dict[str, str]:
+    manifest = root / "third_party/ARTIFACTS_SHA256.txt"
+    if not manifest.is_file():
         raise SystemExit("THIRD_PARTY_INTEGRITY_FAILED: missing third_party/ARTIFACTS_SHA256.txt")
     out: dict[str, str] = {}
-    for n, line in enumerate(MANIFEST.read_text(encoding="utf-8").splitlines(), 1):
+    for n, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         try:

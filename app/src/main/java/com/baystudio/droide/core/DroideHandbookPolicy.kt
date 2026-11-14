@@ -5,9 +5,9 @@ import java.io.Reader
 /** Fixed APK reference selections. Never resolves a model-supplied path or URL. */
 internal object DroideHandbookPolicy {
     const val ASSET = "agent-handbook/about droide.md"
-    const val SOURCE_REFERENCE = "Bundled Droide release guide (source reviewed 2026-11-09)"
-    // The scan budget must accommodate all allowed bounded sections, plus one section-sized preamble
-    // allowance. Response and group budgets remain separate.
+    const val SOURCE_REFERENCE = "Bundled Droide release guide (source reviewed 2026-11-14)"
+    // The scan budget must accommodate all allowed bounded sections, plus one
+    // section-sized preamble allowance. Response and group budgets remain separate.
     val MAX_DOCUMENT_CHARS: Int get() = (sections.size + 1) * MAX_SECTION_CHARS
     const val MAX_SECTION_CHARS = 5_000
     const val MAX_RESULT_CHARS = 6_500
@@ -28,6 +28,7 @@ internal object DroideHandbookPolicy {
         "web_git" to 8, "screenshots" to 9, "troubleshooting" to 10, "sources" to 11,
         "architecture" to 12, "diagnostics" to 13, "troubleshooting_agent" to 14,
         "troubleshooting_runtime" to 15, "lifecycle" to 16, "release" to 17, "integrations" to 18, "skills" to 19, "media_authoring" to 20,
+        "storage" to 21, "ssh" to 22, "android_device" to 23,
     )
 
     data class Screenshot(val asset: String, val sha256: String, val caption: String, val sections: Set<String>)
@@ -78,6 +79,7 @@ internal object DroideHandbookPolicy {
     }
 }
 
+/** Shared by one completed provider tool-call group, including concurrent calls. */
 internal class DroideHandbookBudget {
     private var chars = 0
     @Synchronized fun reserve(count: Int) {

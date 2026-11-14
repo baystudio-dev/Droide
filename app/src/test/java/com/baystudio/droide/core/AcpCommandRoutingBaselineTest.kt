@@ -5,7 +5,7 @@ import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Existing-API source baseline; deliberately proves wrapping, not repaired Host behavior. */
+/** Checks ordinary media-encoder scoping; advertised slash-command routing has its own suite. */
 class AcpCommandRoutingBaselineTest {
     @Test fun existingMediaEncoderPlacesGuidanceBeforeSlashAndKeepsOrdinaryPromptScope() {
         val raw = "/compact keep exact arguments"

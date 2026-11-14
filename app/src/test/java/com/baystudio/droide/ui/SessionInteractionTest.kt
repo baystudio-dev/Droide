@@ -34,8 +34,8 @@ class SessionInteractionTest {
     @After fun release() { directory.deleteRecursively() }
 
     private fun showDrawer(onPick: (DroideSession) -> Unit = {}) {
-        // Keep the Android host at the device viewport while disk results change the drawer's content
-        // size, as in IdeScreen's bounded screen host.
+        // Keep the Android host at the device viewport while disk results change
+        // the drawer's content size, as in IdeScreen's bounded screen host.
         compose.setContent {
             DroideTheme {
                 Box(Modifier.fillMaxSize()) {
@@ -62,7 +62,7 @@ class SessionInteractionTest {
     @Test fun emptyDrawerKeepsAVisibleViewportWhileSessionsLoadAsynchronously() {
         compose.setContent { DroideTheme { SessionDrawer(manager, onPick = {}) } }
         compose.waitForIdle()
-        val viewport = compose.onNode(hasScrollAction()).getUnclippedBoundsInRoot()
+        val viewport = compose.onNode(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange)).getUnclippedBoundsInRoot()
         assertTrue("The list must retain width before disk results arrive", viewport.right.value > viewport.left.value)
         assertTrue("The list must retain height before disk results arrive", viewport.bottom.value > viewport.top.value)
         compose.onNodeWithText("No saved sessions").assertIsDisplayed()

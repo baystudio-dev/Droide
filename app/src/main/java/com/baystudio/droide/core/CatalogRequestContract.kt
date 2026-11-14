@@ -52,8 +52,8 @@ internal object CatalogRequestContract {
         RETIRED_OUTCOME_UNAVAILABLE, NEVER_ADMITTED, AUTHORITY_MISMATCH,
     }
 
-    /** A bounded candidate persisted-state shape, NOT a second runtime ledger. */
-
+    /** A bounded candidate persisted-state shape, NOT a second runtime ledger. Missing issued rows above the
+     * floor are corruption. Legacy UUIDs cannot enter this window. */
     class Window(val authority: Authority, val nextSequence: Long, val retiredThrough: Long,
                  records: List<Record>) {
         val records: List<Record> = Collections.unmodifiableList(records.toList())
@@ -94,8 +94,8 @@ internal object CatalogRequestContract {
         }
     }
 
-    /** Worst-case logical metadata reservation, not physical free space or custody credit. */
-
+    /** Worst-case logical metadata reservation, not physical free space or custody credit. Caller must prove
+     * each bound against actual serialization before using it for admission. */
     data class MetadataReservation(val descriptorBytes: Long, val deliverySlotBytes: Long,
                                    val pendingBytes: Long, val completedBytes: Long, val acknowledgementBytes: Long) {
         val bytes: Long

@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+/** Exercises the real service through local provider sockets, without process execution. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 35], manifest = Config.NONE)
 class ArchivedAgentResponsePublicationTest {

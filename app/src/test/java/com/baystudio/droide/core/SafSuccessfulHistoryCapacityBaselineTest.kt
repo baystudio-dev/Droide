@@ -11,8 +11,8 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Existing APIs only. */
-
+/** Checks four modeled writes against a three-operation history cap and cold reopen.
+ * Fixture-owned host files do not emulate Android document-provider behavior. */
 class SafSuccessfulHistoryCapacityBaselineTest {
     private val roots = arrayListOf<File>()
 
@@ -90,7 +90,7 @@ class SafSuccessfulHistoryCapacityBaselineTest {
                         SafEffectKind.WRITE_FILE, "value.bin", document, parent, null, previous, desired,
                     ), poll)
                     journal.attempting(action, poll)
-                    value.writeBytes(next)
+                    value.writeBytes(next) // Deterministic host-file model of one returned provider write.
                     modeledWrites++
                     journal.returned(action, SafEffectReturn.COMPLETED, SafProviderReturn(SafProviderReturnShape.VOID), poll)
                     journal.verified(action, document, poll)

@@ -40,8 +40,8 @@ internal data class InstallerProgressPresentationState(
     val expanded: InstallerProgressEntry? get() = entries.firstOrNull { it.id == expandedId }
 }
 
-/** Presentation for UI-requested installs; the supplied manager scope remains the job owner. */
-
+/** Presentation for UI-requested installs; the supplied manager scope remains the job owner. Minimize/reopen
+ * never touches jobs. Only explicit Cancel targets the exact captured job. */
 internal class InstallerProgressPresentation {
     private val lock = Any()
     private val mutableState = MutableStateFlow(InstallerProgressPresentationState())
