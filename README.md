@@ -1,3 +1,5 @@
+<img src="fastlane/metadata/android/en-US/images/icon.png" alt="Droide logo" width="128" height="128">
+
 # Droide
 
 Droide is an Android code editor and development workspace by **BayStudio**.
@@ -22,6 +24,7 @@ F-Droid availability remains subject to its independent build and review process
 ![Editor](fastlane/metadata/android/en-US/images/phoneScreenshots/01-editor.jpg)
 ![Landscape workspace](fastlane/metadata/android/en-US/images/phoneScreenshots/02-landscape.jpg)
 ![Terminal](fastlane/metadata/android/en-US/images/phoneScreenshots/04-terminal.jpg)
+![Shared Android storage in the terminal](fastlane/metadata/android/en-US/images/phoneScreenshots/06-shared-files.jpg)
 
 ## Install and build
 
