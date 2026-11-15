@@ -122,15 +122,18 @@ reuse, SSH/VPN, long-running PTY, TUI/Unicode, Git/ADB, Run/Build/LSP, agent too
 Newly compiled native providers require device validation even when ABI and hash checks pass.
 Keep the current release available until this candidate passes those checks.
 
-F-Droid acceptance and update signing are separate decisions. APKs with different signing keys
-cannot update one another. Validate reproducible-build/upstream-signature support before promising
-cross-channel updates; never provide a private keystore or password to the build repository.
+The proposed F-Droid lane exclusively publishes the upstream production-signed APK after
+independent source-build verification. A mismatch prevents publication. Inclusion and buildserver
+validation remain pending. See [signing and reproduction](signing.md) for the required checks;
+never provide a private keystore or password to the build repository.
 
 ### Packaging metadata
 
-`tools/fdroid/com.baystudio.droide.yml` retains the 1.01 recipe and adds 1.02 (46), targeting `v1.02-fdroid`. The new entry builds shared-file support explicitly. Publish that tag only from the verified final source; a local recipe does not establish publication or F-Droid acceptance. Keep `v1.01-fdroid` and its build evidence unchanged.
+`tools/fdroid/com.baystudio.droide.yml` enables 1.02 (46), targeting the immutable `v1.02-fdroid` source tag. The historical 1.01 entry is disabled for initial inclusion; its tags, release assets and previous evidence remain unchanged. The enabled entry builds shared-file support explicitly. The current recipe is maintained separately from the frozen application tag.
 
-The recipe builds after source scanning, uses the pinned buildserver Gradle, and declares optional proprietary services, add-ons and third-party marks. It does not use `scanignore`, `scandelete`, upstream APKs or private signing credentials. Validation in F-Droid's buildserver remains separate from local builds or CI.
+The recipe builds after source scanning, uses the pinned buildserver Gradle, and declares optional proprietary services, add-ons and third-party marks. It uses neither `scanignore` nor `scandelete`. `Binaries` supplies the versioned upstream APK for verification, and `AllowedAPKSigningKeys` pins the production certificate. The upstream APK does not replace compilation or source review.
+
+Its postbuild step uses a commit-pinned `reproducible-apk-tools` source library to reproduce the ZIP alignment added by Android Build Tools when signing 1.02. It changes packaging padding, preserves application entry payloads and 16 KiB alignment, and supplies no private signing material. See the signing guide for an independent check against the public APK. Local/CI results do not establish acceptance or a successful F-Droid buildserver run.
 
 Auto-update checks select `v<version>-fdroid` tags. Keep corresponding source, build recipe and checksums with each update. Record device results against the exact APK SHA-256. A test report for an earlier APK cannot certify a source change that has not been built and installed.
 
@@ -138,6 +141,7 @@ Auto-update checks select `v<version>-fdroid` tags. Keep corresponding source, b
 
 - [F-Droid inclusion policy](https://f-droid.org/en/docs/Inclusion_Policy/)
 - [Build metadata](https://f-droid.org/en/docs/Build_Metadata_Reference/)
+- [Upstream-signed reproducible builds](https://f-droid.org/en/docs/Reproducible_Builds/)
 - [Anti-features](https://f-droid.org/en/docs/Anti-Features/)
 - [R8 patch range](https://r8.googlesource.com/r8/+log/refs/tags/9.1.29..refs/tags/9.1.31)
 - [Termux PRoot source](https://github.com/termux/proot/tree/4dba3afbf3a63af89b4d9c1a59bf2bda10f4d10f)

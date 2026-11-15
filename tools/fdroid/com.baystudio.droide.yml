@@ -27,10 +27,12 @@ Description: |-
 
 RepoType: git
 Repo: https://github.com/baystudio-dev/Droide-v1.-00.git
+Binaries: https://github.com/baystudio-dev/Droide-v1.-00/releases/download/v%v/Droide-%v-release.apk
 
 Builds:
   - versionName: '1.01'
     versionCode: 45
+    disable: Superseded by 1.02 for initial upstream-signed inclusion
     commit: v1.01-fdroid
     sudo:
       - apt-get update
@@ -51,6 +53,8 @@ Builds:
       - apt-get update
       - apt-get install -y openjdk-17-jdk-headless make patch
     output: app/build-source-release-fdroid-candidate/outputs/apk/release/app-release-unsigned.apk
+    srclibs:
+      - reproducible-apk-tools@ca728486d42a79f1c9ec0c6ec755c39f251911a8
     prebuild: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'cmake;3.22.1'
     build:
       - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -58,6 +62,12 @@ Builds:
         "$JAVA_HOME" --gradle "$(command -v gradle)" --dependencies "$PWD/.fdroid-source-products"
         --device-storage
     ndk: 28.2.13676358
+    postbuild:
+      - python3 "$$reproducible-apk-tools$$/zipalign.py" --page-size 16 --pad-like-apksigner
+        --replace "$$OUT$$" "$$OUT$$.aligned"
+      - mv "$$OUT$$.aligned" "$$OUT$$"
+
+AllowedAPKSigningKeys: 0cc1c5885fea5c5779eb4b3ddcce2a8518b7c207cab7dd7606e94c4d27ccb7ac
 
 AutoUpdateMode: Version v%v-fdroid
 UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+-fdroid$

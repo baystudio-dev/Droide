@@ -29,6 +29,7 @@ jobs:
           python3 -B -m unittest discover -s tools/tests -p 'test_fdroid_source_export.py' -v
           python3 -B -m unittest discover -s tools/tests -p 'test_fdroid_input_integrity.py' -v
           python3 -B -m unittest discover -s tools/tests -p 'test_dependency_trust.py' -v
+          python3 -B -m unittest discover -s tools/tests -p 'test_upstream_apk_verification.py' -v
 
       - name: Set up Java 17
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6

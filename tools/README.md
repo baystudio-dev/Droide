@@ -7,6 +7,7 @@
 | `export_fdroid_source.py` | Export a separate source distribution without modifying the working tree |
 | `build_fdroid_candidate.py` | Build source components and the F-Droid debug/release APK |
 | `verify_fdroid_inputs.py` | Check complete-source and distribution inputs |
+| `verify_upstream_apk.py` | Verify the recipe's production signer and reproduce the complete upstream APK from a rebuild |
 | `verify_repository_docs.py` | Check local targets in maintained guides and export templates |
 | `verify_dependency_policy.py`, `verify_dependency_trust.py` | Dependency mapping, locks and checksum admission |
 | `verify_terminal_workstation.py` | Focused terminal lifecycle tests on the Gradle production classpath |
