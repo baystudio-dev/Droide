@@ -14,7 +14,7 @@ The GitHub release tag `v1.03` and packaging tag `v1.03-fdroid` identify the sam
 
 For the preceding release, `v1.02` and `v1.02-fdroid` identify commit `ad75df7763aa6458b0c102818b891e0898af3a58`.
 
-The [current recipe](../../tools/fdroid/com.baystudio.droide.yml) is maintained independently of those immutable tags. Use that recipe for the packaging submission; do not move an existing release tag to update metadata. Its `Binaries` URL identifies each version's signed release, while `AllowedAPKSigningKeys` restricts the accepted certificate. The disabled 1.01 recipe remains historical context and is not an initial inclusion target.
+The [current recipe](../../tools/fdroid/com.baystudio.droide.yml) is maintained independently of those immutable tags. Use that recipe for the packaging submission; do not move an existing release tag to update metadata. Its `Binaries` URL identifies each version's signed release, while `AllowedAPKSigningKeys` restricts the accepted certificate. The recipe covers the latest release. Previous releases and their inputs remain available at their original tags.
 
 Local and independent GitHub CI builds of the 1.02 commit produced the same raw unsigned APK. That alone does not prove upstream-signature compatibility. Android Build Tools 36 changed ZIP alignment padding during signing, so the recipe normalizes the rebuilt APK before F-Droid copies and verifies the existing signature. No application entry is replaced with data from the upstream APK.
 

@@ -12,67 +12,29 @@ Categories:
   - Development
 License: LGPL-3.0-only
 AuthorName: BayStudio
+AuthorWebSite: https://github.com/baystudio-dev
 WebSite: https://droide.rekacipta.biz.id
 SourceCode: https://github.com/baystudio-dev/Droide
 IssueTracker: https://github.com/baystudio-dev/Droide/issues
 Changelog: https://github.com/baystudio-dev/Droide/releases
 
 AutoName: Droide
-Summary: Code editor, Linux terminal and development workspace
-Description: |-
-  Edit projects, use Git and an interactive Linux terminal, run development tools,
-  and configure optional AI agents on Android. The Ubuntu environment is installed
-  on demand after consent and reused. Editing is available without installation.
-  Ubuntu requires ARM64. Optional tools and providers retain their own terms.
 
 RepoType: git
 Repo: https://github.com/baystudio-dev/Droide.git
 Binaries: https://github.com/baystudio-dev/Droide/releases/download/v%v/Droide-%v-release.apk
 
 Builds:
-  - versionName: '1.01'
-    versionCode: 45
-    disable: Superseded by 1.02 for initial upstream-signed inclusion
-    commit: v1.01-fdroid
-    sudo:
-      - apt-get update
-      - apt-get install -y openjdk-17-jdk-headless make patch
-    output: app/build-source-release-fdroid-candidate/outputs/apk/release/app-release-unsigned.apk
-    prebuild: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'cmake;3.22.1'
-    build:
-      - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-      - python3 -B tools/build_fdroid_candidate.py --sdk "$ANDROID_HOME" --java-home
-        "$JAVA_HOME" --gradle "$(command -v gradle)" --dependencies "$PWD/.fdroid-source-products"
-        --device-storage
-    ndk: 28.2.13676358
-
-  - versionName: '1.02'
-    versionCode: 46
-    commit: v1.02-fdroid
-    sudo:
-      - apt-get update
-      - apt-get install -y openjdk-17-jdk-headless make patch
-    output: app/build-source-release-fdroid-candidate/outputs/apk/release/app-release-unsigned.apk
-    srclibs:
-      - reproducible-apk-tools@ca728486d42a79f1c9ec0c6ec755c39f251911a8
-    prebuild: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'cmake;3.22.1'
-    build:
-      - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-      - python3 -B tools/build_fdroid_candidate.py --sdk "$ANDROID_HOME" --java-home
-        "$JAVA_HOME" --gradle "$(command -v gradle)" --dependencies "$PWD/.fdroid-source-products"
-        --device-storage
-    ndk: 28.2.13676358
-    postbuild:
-      - python3 "$$reproducible-apk-tools$$/zipalign.py" --page-size 16 --pad-like-apksigner
-        --replace "$$OUT$$" "$$OUT$$.aligned"
-      - mv "$$OUT$$.aligned" "$$OUT$$"
-
   - versionName: '1.03'
     versionCode: 47
     commit: v1.03-fdroid
     sudo:
+      - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
       - apt-get update
-      - apt-get install -y openjdk-17-jdk-headless make patch
+      - apt-get install -y -t bookworm openjdk-17-jdk-headless
+      - apt-get install -y make patch
+    init: sed -i 's/android\.signingConfigs\.getByName/(android.signingConfigs).getByName/g'
+      app/build.gradle.kts
     output: app/build-source-release-fdroid-candidate/outputs/apk/release/app-release-unsigned.apk
     srclibs:
       - reproducible-apk-tools@ca728486d42a79f1c9ec0c6ec755c39f251911a8
@@ -90,7 +52,20 @@ Builds:
 
 AllowedAPKSigningKeys: 0cc1c5885fea5c5779eb4b3ddcce2a8518b7c207cab7dd7606e94c4d27ccb7ac
 
-AutoUpdateMode: Version v%v-fdroid
+MaintainerNotes: |-
+  The source is the immutable upstream v1.03-fdroid tag. The init substitution is
+  semantically equivalent Kotlin: it preserves default-debug-config reads in
+  inactive task definitions when remove_signing_keys runs. The normal sanitizer
+  still removes the release signing configuration and signing assignments.
+
+  JDK 17 is required by the terminal source builder and is installed from Debian
+  Bookworm on Trixie buildservers. The existing reproducible-apk-tools srclib
+  normalizes Build Tools 36 ZIP alignment before upstream signature verification.
+
+  Ubuntu and optional executable tool downloads require user consent. The recipe
+  retains shared-file support, which also requires Android permission and opt-in.
+
+AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+-fdroid$
 CurrentVersion: '1.03'
 CurrentVersionCode: 47

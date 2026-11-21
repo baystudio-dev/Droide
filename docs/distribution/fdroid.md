@@ -129,7 +129,7 @@ never provide a private keystore or password to the build repository.
 
 ### Packaging metadata
 
-`tools/fdroid/com.baystudio.droide.yml` targets 1.03 (47) at `v1.03-fdroid` and retains the 1.02 (46) recipe at its original tag. The historical 1.01 entry is disabled for initial inclusion; its tags, release assets and previous evidence remain unchanged. The enabled entry builds shared-file support explicitly. The current recipe is maintained separately from the frozen application tag.
+`tools/fdroid/com.baystudio.droide.yml` builds the current upstream release, 1.03 (47), from `v1.03-fdroid`. An fdroiddata submission pins the commit behind this tag. Fastlane supplies the localized description, screenshots and changelog. The recipe installs JDK 17 from Debian Bookworm on Trixie builders. Its init step preserves three reads of the default debug keystore in inactive task definitions when F-Droid removes signing configuration. Release builds remain unsigned until the upstream signature has been verified.
 
 The recipe builds after source scanning, uses the pinned buildserver Gradle, and declares optional proprietary services, add-ons and third-party marks. It uses neither `scanignore` nor `scandelete`. `Binaries` supplies the versioned upstream APK for verification, and `AllowedAPKSigningKeys` pins the production certificate. The upstream APK does not replace compilation or source review.
 
