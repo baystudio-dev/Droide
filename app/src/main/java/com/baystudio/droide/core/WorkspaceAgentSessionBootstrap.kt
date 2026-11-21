@@ -1,5 +1,7 @@
 package com.baystudio.droide.core
 
+import com.baystudio.droide.BuildConfig
+
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
@@ -57,10 +59,17 @@ internal object WorkspaceAgentSessionBootstrap {
         val executable = processHost.resolveExecutable(spec.command)
             ?: error("${spec.displayName} is not installed or not executable in the active Linux environment")
         onEvent(WorkspaceAgentEvent.Status("Starting ${spec.displayName} ACP session…"))
-        val mapper = requireNotNull(processHost.pathMapper()) { "Linux workspace mapper is unavailable" }
+        var mapper = requireNotNull(processHost.pathMapper()) { "Linux workspace mapper is unavailable" }
         try {
             val ownedHost = lifetime.processes.bind(processHost)
-            val process = ownedHost.start(listOf(executable) + spec.args)
+            val argv = listOf(executable) + spec.args
+            val process = try {
+                ownedHost.start(argv)
+            } catch (failure: WorkspaceProcessRecoveryRequiredException) {
+                if (!failure.earlierRuntime || processHost !is LocalAgentWorkspaceProcessHost) throw failure
+                mapper = processHost.recoverBeforeTransportStart(mapper.remoteRoot)
+                ownedHost.start(argv)
+            }
             val rpc = AcpNdjsonConnection(process, files, mapper, ownedHost, approvals, permissions, lifetime.scope, workspaceIo)
             lifetime.rpc = rpc
             onEvent(WorkspaceAgentEvent.Status("Connecting to ${spec.displayName}…"))
@@ -72,7 +81,7 @@ internal object WorkspaceAgentSessionBootstrap {
                         put("fs", buildJsonObject { put("readTextFile", true); put("writeTextFile", true) })
                         put("terminal", true)
                     })
-                    put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", "1.00") })
+                    put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", BuildConfig.VERSION_NAME) })
                 },
                 timeoutMs = AgentTimeoutPolicy.ACP_STARTUP_MS,
             )

@@ -120,7 +120,8 @@ class AndroidDevelopmentPairingRecoveryBaselineTest {
         assertNoAndroidProject()
         compose.setContent { DroideTheme { Box(Modifier.size(900.dp, 640.dp)) {
             SettingsScreen(themes, formatter, false, false, true, CodingKeyboardMode.COMPACT,
-                CodeStyleDefaults(), development, bridge, github, "Recovery fixture", PermissionPolicyDocument.EMPTY,
+                CodeStyleDefaults(), development, bridge, github, "Recovery fixture", initialPermissionPolicy = PermissionPolicyDocument.EMPTY,
+                showEditorStatusBar = false, onShowEditorStatusBar = {},
                 onWordwrap = {}, onHardwareShortcuts = {}, onAccessoryKeysComfortable = {},
                 onCodingKeyboardMode = {}, onDetectIndentation = {}, onIndentStyle = {}, onTabWidth = {},
                 onIndentSize = {}, onContinuationIndent = {}, onTheme = {}, onPermissionRuleChange = { _, _ -> PermissionPolicyDocument.EMPTY },

@@ -29,11 +29,14 @@ internal data class EnvironmentSetupState(
     val enteredWorkspace: Boolean = false,
     val busy: Boolean = false,
     val error: String? = null,
+    val recoveryRequired: Boolean = false,
 ) {
     val phase get() = progress.phase
 }
 
-internal data class EnvironmentSetupInspection(val existingEnvironment: Boolean, val deferred: Boolean = false)
+internal data class EnvironmentSetupInspection(
+    val existingEnvironment: Boolean, val deferred: Boolean = false, val recoveryRequired: Boolean = false,
+)
 
 /** The process owns one install; observing this controller never starts or restarts it. */
 internal class EnvironmentSetupController(
@@ -63,10 +66,7 @@ internal class EnvironmentSetupController(
         synchronized(lock) {
             if (closed || !admit()) return
             if (operation?.isCompleted == false) {
-                if (show) {
-                    showRequested = true
-                    mutableState.value = mutableState.value.copy(presented = true)
-                }
+                if (show) showRequested = true
                 return
             }
             showRequested = show
@@ -78,10 +78,10 @@ internal class EnvironmentSetupController(
                         if (installationUnconfirmed) old.copy(presented = old.presented || showRequested)
                         else if (found.existingEnvironment) old.copy(
                             progress = EnvironmentSetupProgress(EnvironmentSetupPhase.READY),
-                            presented = false, enteredWorkspace = true, error = null,
+                            presented = false, enteredWorkspace = true, error = null, recoveryRequired = false,
                         ) else old.copy(
                             progress = EnvironmentSetupProgress(EnvironmentSetupPhase.AVAILABLE),
-                            presented = showRequested || !found.deferred,
+                            presented = showRequested || !found.deferred, recoveryRequired = found.recoveryRequired,
                             enteredWorkspace = old.enteredWorkspace || (found.deferred && !showRequested), error = null,
                         )
                     }
@@ -121,7 +121,7 @@ internal class EnvironmentSetupController(
                     publish(id) {
                         installationUnconfirmed = false
                         it.copy(progress = EnvironmentSetupProgress(EnvironmentSetupPhase.READY),
-                            presented = false, enteredWorkspace = true, busy = false, error = null)
+                            presented = false, enteredWorkspace = true, busy = false, error = null, recoveryRequired = false)
                     }
                 } catch (cancelled: CancellationException) {
                     publish(id) { it.copy(progress = EnvironmentSetupProgress(EnvironmentSetupPhase.AVAILABLE),

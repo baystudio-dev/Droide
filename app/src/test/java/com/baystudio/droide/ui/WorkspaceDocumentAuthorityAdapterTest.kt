@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -25,6 +26,61 @@ class WorkspaceDocumentAuthorityAdapterTest {
 
     @After fun tearDown() {
         PathSecurity.deleteTreeNoFollow(root)
+    }
+
+    @Test fun unchangedEditableFilesKeepTheirRevisionAndDirtyBuffersAcrossTheToolSizeLimit() = runBlocking {
+        for (size in listOf(2_000_000, 2_000_001, 3_000_000)) {
+            val target = root.resolve("sample-$size.txt")
+            val original = "a".repeat(size)
+            target.writeText(original)
+            val state = EditorWorkspaceState()
+            val document = state.document(target.name)
+            document.ensureLoaded(files)
+            val authority = EditorWorkspaceDocumentAuthority(state, Dispatchers.Unconfined, files)
+            val revision = document.revision
+            val sync = FileRepository.Mutation.Sync(target.name)
+            repeat(3) { assertFalse(authority.persistedMutation(sync).changed) }
+            assertEquals(revision, document.revision)
+            val external = "z" + original.drop(1)
+            target.writeText(external)
+            assertEquals(listOf(target.name), authority.persistedMutation(sync).refreshed)
+            assertEquals(external, document.content)
+            val draft = "b" + original.drop(1)
+            document.capture(draft)
+            assertTrue(authority.persistedMutation(sync).conflicts.isEmpty())
+            target.writeText("c" + original.drop(1))
+            assertEquals(listOf(target.name), authority.reconcilePersistedWorkspace().conflicts)
+            assertEquals(draft, document.content)
+            assertTrue(document.dirty)
+        }
+    }
+
+    @Test fun temporaryPermissionLossPreservesBothCleanAndDirtyTabsUntilAbsenceIsProven() = runBlocking {
+        val folder = root.resolve("folder").apply { mkdir() }
+        val permissions = Files.getPosixFilePermissions(folder.toPath())
+        val target = folder.resolve("note.txt").apply { writeText("hello") }
+        val path = "folder/note.txt"
+        val state = EditorWorkspaceState()
+        val document = state.document(path)
+        document.ensureLoaded(files)
+        val authority = EditorWorkspaceDocumentAuthority(state, Dispatchers.Unconfined, files)
+        val sync = FileRepository.Mutation.Sync(path)
+        for (dirty in listOf(false, true)) {
+            if (dirty) document.capture("draft")
+            try {
+                Files.setPosixFilePermissions(folder.toPath(), emptySet())
+                org.junit.Assume.assumeFalse("Needs an unprivileged POSIX user", Files.isReadable(target.toPath()))
+                val failure = runCatching { authority.persistedMutation(sync) }.exceptionOrNull()
+                assertTrue(failure.toString(), failure is java.io.IOException)
+                assertSame(document, state.peek(path))
+                assertEquals(dirty, document.dirty)
+            } finally { Files.setPosixFilePermissions(folder.toPath(), permissions) }
+            assertFalse(authority.persistedMutation(sync).changed)
+            assertEquals("hello", target.readText())
+        }
+        document.reload(files, discardUnsaved = true)
+        Files.delete(target.toPath())
+        assertEquals(listOf(path), authority.persistedMutation(sync).removed)
     }
 
     @Test fun snapshotsReflectLiveUnsavedEditorBufferWithoutSavingDisk() = runBlocking {

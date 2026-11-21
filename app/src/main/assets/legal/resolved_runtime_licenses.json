@@ -529,6 +529,12 @@
       "spdx": "Apache-2.0"
     },
     {
+      "coordinate": "androidx.webkit:webkit:1.11.0",
+      "licenseTextAsset": "legal/licenses/AndroidX-Upstream-LICENSE.txt",
+      "source": "https://developer.android.com/jetpack/androidx",
+      "spdx": "Apache-2.0"
+    },
+    {
       "coordinate": "com.baystudio.compat:jgit-android-compat:6.10.1.202505221210-r-droide-reconstruction1",
       "licenseTextAsset": "legal/licenses/JGit-Android-Compatibility-NOTICE.txt",
       "source": "third_party/jgit/README.md",

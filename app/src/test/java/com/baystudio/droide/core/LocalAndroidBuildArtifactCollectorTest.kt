@@ -36,4 +36,14 @@ class LocalAndroidBuildArtifactCollectorTest {
         } finally { PathSecurity.deleteTreeNoFollow(root) }
     }
 
+    @Test fun overlappingRootsAndLinkedDirectoriesDoNotDuplicateOrAdmitOtherArtifacts() {
+        val root = Files.createTempDirectory("droide-declared-artifacts").toFile()
+        try {
+            val apk = root.resolve("app/build/outputs/apk/debug/app.apk").apply { parentFile.mkdirs(); writeText("ok") }
+            val release = root.resolve("app/build/outputs/apk/release/old.apk").apply { parentFile.mkdirs(); writeText("old") }
+            Files.createSymbolicLink(apk.parentFile.resolve("other").toPath(), release.parentFile.toPath())
+            assertEquals(listOf(apk), LocalAndroidBuildArtifactCollector.collect(root, ":app:assembleDebug",
+                listOf(apk.parentFile, apk, release.parentFile, apk.parentFile)))
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
 }

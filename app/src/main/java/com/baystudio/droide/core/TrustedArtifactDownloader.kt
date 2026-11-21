@@ -99,6 +99,10 @@ data class TrustedArtifactSpec(
     }
 }
 
+internal class ArtifactIntegrityException(message: String) : IllegalStateException(message)
+
+private fun URI.httpsPort(): Int = if (port == -1) 443 else port
+
 
 data class TrustedSha512ArtifactSpec(
     override val id: String,
@@ -141,29 +145,52 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
         block: suspend (File) -> T,
     ): T = withLease(spec) { block(downloadDescriptor(spec, onProgress)) }
 
+    internal suspend fun <T> withArtifact(
+        spec: TrustedArtifactSpec,
+        integrityRetryUrl: String,
+        onProgress: (TrustedArtifactDownloadProgress) -> Unit = {},
+        block: suspend (File) -> T,
+    ): T = withLease(spec) { block(downloadDescriptor(spec, onProgress, integrityRetryUrl)) }
+
     suspend fun <T> withArtifact(
         spec: TrustedSha512ArtifactSpec,
         onProgress: (TrustedArtifactDownloadProgress) -> Unit = {},
         block: suspend (File) -> T,
     ): T = withLease(spec) { block(downloadDescriptor(spec, onProgress)) }
 
-    internal suspend fun <T> withLease(spec: TrustedArtifactDescriptor, block: suspend () -> T): T {
-        spec.validateStructure()
-        return TrustedArtifactCache.withLease(File(cacheRoot, cacheName(spec)), block)
+    internal suspend fun <T> withLease(spec: TrustedArtifactDescriptor, block: suspend () -> T): T =
+        withLeases(listOf(spec), block)
+
+    internal suspend fun <T> withLeases(specs: List<TrustedArtifactDescriptor>, block: suspend () -> T): T {
+        val files = specs.map { spec ->
+            spec.validateStructure()
+            File(cacheRoot, cacheName(spec))
+        }
+        return TrustedArtifactCache.withLeases(files, block)
     }
 
     private suspend fun downloadDescriptor(
         spec: TrustedArtifactDescriptor,
         onProgress: (TrustedArtifactDownloadProgress) -> Unit,
+        integrityRetryUrl: String? = null,
     ): File = withContext(Dispatchers.IO) {
         validate(spec)
+        integrityRetryUrl?.let { recovery ->
+            val uri = URI(spec.url)
+            val alternate = NetworkSecurity.validatePublicHttpsUrl(recovery)
+            require(alternate.host.equals(uri.host, ignoreCase = true) &&
+                alternate.httpsPort() == uri.httpsPort()) {
+                "Artifact recovery URL must use the same HTTPS origin"
+            }
+        }
         onProgress(TrustedArtifactDownloadProgress(0L, spec.expectedBytes,
             detail = "Queued; waiting for the artifact transfer slot…", phase = TrustedArtifactDownloadPhase.QUEUED))
-        downloadMutex.withLock { downloadUnlocked(spec, onProgress) }
+        downloadMutex.withLock { downloadUnlocked(spec, integrityRetryUrl, onProgress) }
     }
 
     private suspend fun downloadUnlocked(
         spec: TrustedArtifactDescriptor,
+        integrityRetryUrl: String?,
         onProgress: (TrustedArtifactDownloadProgress) -> Unit,
     ): File {
         onProgress(TrustedArtifactDownloadProgress(0L, spec.expectedBytes,
@@ -186,60 +213,61 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
         }
         if (finalFile.exists()) finalFile.delete()
 
-        var resume = loadResumeMetadata(spec, partial, metadataFile)
+        var resume = loadResumeMetadata(spec, partial, metadataFile, integrityRetryUrl)
+        var sourceUrl = resume?.url ?: spec.url
+        var cleanRestart = false
         requireLocalHeadroom(spec, partial.length())
         if (resume != null && isPotentiallyComplete(partial, spec, resume)) {
             if (publishIfTrusted(partial, metadataFile, finalFile, spec, onProgress)) return finalFile
             clearPartial(partial, metadataFile)
             resume = null
+            sourceUrl = integrityRetryUrl ?: spec.url
+            cleanRestart = true
         }
 
-        var fullRestartUsed = false
         while (true) {
             coroutineContext.ensureActive()
-            val resumeOffset = resume?.let { partial.length().takeIf { length -> length > 0L } } ?: 0L
-            val resumedAttempt = resumeOffset > 0L
             try {
-                val result = fetchOneRepresentation(spec, partial, metadataFile, resume, onProgress)
-                if (result.restartFromZero) {
-                    check(!fullRestartUsed) { "Artifact server rejected resume more than once" }
+                val result = fetchOneRepresentation(spec, sourceUrl, partial, metadataFile, resume,
+                    revalidate = cleanRestart || sourceUrl != spec.url, onProgress = onProgress)
+                if (!result.restartFromZero) {
+                    if (publishIfTrusted(partial, metadataFile, finalFile, spec, onProgress)) return finalFile
+                    throw ArtifactIntegrityException("Artifact ${spec.digestAlgorithm} mismatch")
+                }
+                check(!cleanRestart) { "Artifact server rejected resume more than once" }
+            } catch (failure: ArtifactIntegrityException) {
+                if (cleanRestart || (resume == null && integrityRetryUrl == null)) {
                     clearPartial(partial, metadataFile)
-                    resume = null
-                    fullRestartUsed = true
-                    continue
+                    throw failure
                 }
-
-                if (publishIfTrusted(partial, metadataFile, finalFile, spec, onProgress)) return finalFile
-                clearPartial(partial, metadataFile)
-                if (resumedAttempt && !fullRestartUsed) {
-
-                    resume = null
-                    fullRestartUsed = true
-                    continue
-                }
-                error("Artifact ${spec.digestAlgorithm} mismatch")
             } catch (t: Throwable) {
                 if (t is CancellationException || t is IOException) {
-                    retainOnlyValidPartial(spec, partial, metadataFile)
+                    retainOnlyValidPartial(spec, partial, metadataFile, integrityRetryUrl)
                 } else {
                     clearPartial(partial, metadataFile)
                 }
                 throw t
             }
+            clearPartial(partial, metadataFile)
+            resume = null
+            sourceUrl = integrityRetryUrl ?: spec.url
+            cleanRestart = true
         }
     }
 
     private suspend fun fetchOneRepresentation(
         spec: TrustedArtifactDescriptor,
+        sourceUrl: String,
         partial: File,
         metadataFile: File,
         prior: PartialMetadata?,
+        revalidate: Boolean,
         onProgress: (TrustedArtifactDownloadProgress) -> Unit,
     ): FetchResult {
         val resumeOffset = prior?.let { partial.length().takeIf { length -> length > 0L } } ?: 0L
         onProgress(TrustedArtifactDownloadProgress(resumeOffset, prior?.totalBytes ?: spec.expectedBytes,
             detail = "Resolving and validating the download target…", phase = TrustedArtifactDownloadPhase.RESOLVING))
-        var target = NetworkSecurity.validatePublicHttpsTarget(spec.url)
+        var target = NetworkSecurity.validatePublicHttpsTarget(sourceUrl)
 
         repeat(MAX_REDIRECTS + 1) { hop ->
             coroutineContext.ensureActive()
@@ -248,6 +276,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
                 .header("User-Agent", "Droide/1.00")
                 .header("Accept", "application/octet-stream")
                 .header("Accept-Encoding", "identity")
+            if (revalidate) builder.header("Cache-Control", "no-cache, no-transform")
             if (resumeOffset > 0L) {
                 builder.header("Range", "bytes=$resumeOffset-")
                 prior?.strongEtag?.let { builder.header("If-Range", it) }
@@ -287,7 +316,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
                     // Never append a full response.
                     return@consumeCancellableResponse streamResponse(
                         response = response,
-                        spec = spec,
+                        spec = spec, sourceUrl = sourceUrl,
                         partial = partial,
                         metadataFile = metadataFile,
                         append = false,
@@ -319,7 +348,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
                     }
                     return@consumeCancellableResponse streamResponse(
                         response = response,
-                        spec = spec,
+                        spec = spec, sourceUrl = sourceUrl,
                         partial = partial,
                         metadataFile = metadataFile,
                         append = true,
@@ -332,7 +361,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
 
                 return@consumeCancellableResponse streamResponse(
                     response = response,
-                    spec = spec,
+                    spec = spec, sourceUrl = sourceUrl,
                     partial = partial,
                     metadataFile = metadataFile,
                     append = false,
@@ -350,6 +379,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
     private suspend fun streamResponse(
         response: Response,
         spec: TrustedArtifactDescriptor,
+        sourceUrl: String,
         partial: File,
         metadataFile: File,
         append: Boolean,
@@ -360,27 +390,25 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
     ): FetchResult {
         val body = response.body ?: error("Artifact response body is empty")
         val declared = body.contentLength()
+        val pinnedSize = spec.expectedBytes
         if (!append) {
-            require(declared <= spec.maxBytes || declared < 0L) { "Artifact exceeds declared size limit" }
-            if (declared >= 0L && spec.expectedBytes != null) {
-                require(declared == spec.expectedBytes) { "Artifact Content-Length does not match pinned size" }
+            if (declared >= 0L && pinnedSize != null && declared != pinnedSize) {
+                throw ArtifactIntegrityException("Artifact Content-Length does not match pinned size")
             }
+            require(declared <= spec.maxBytes || declared < 0L) { "Artifact exceeds declared size limit" }
         }
 
         val totalHint = expectedTotal ?: spec.expectedBytes
         totalHint?.let { require(it in 1L..spec.maxBytes) { "Invalid artifact total size" } }
         val strongEtag = strongEtag(response.header("ETag")) ?: prior?.strongEtag
-        writeResumeMetadata(
-            metadataFile,
-            PartialMetadata(
-                digestAlgorithm = spec.digestAlgorithm,
-                digestHex = spec.digestHex.lowercase(),
-                url = spec.url,
-                expectedBytes = spec.expectedBytes,
-                maxBytes = spec.maxBytes,
-                strongEtag = strongEtag,
-                totalBytes = totalHint,
-            ),
+        val metadata = PartialMetadata(
+            digestAlgorithm = spec.digestAlgorithm,
+            digestHex = spec.digestHex.lowercase(),
+            url = sourceUrl,
+            expectedBytes = spec.expectedBytes,
+            maxBytes = spec.maxBytes,
+            strongEtag = strongEtag,
+            totalBytes = totalHint,
         )
 
         var total = initialBytes
@@ -391,10 +419,12 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
             lastReportNs = System.nanoTime()
             onProgress(TrustedArtifactDownloadProgress(total, totalHint, phase = TrustedArtifactDownloadPhase.DOWNLOADING))
         }
-        onProgress(TrustedArtifactDownloadProgress(total, totalHint,
-            detail = "Waiting for archive body bytes…", phase = TrustedArtifactDownloadPhase.AWAITING_BODY))
         try {
             FileOutputStream(partial, append).buffered(128 * 1024).use { out ->
+                // A full response must truncate the old bytes before its validator can become resumable.
+                writeResumeMetadata(metadataFile, metadata)
+                onProgress(TrustedArtifactDownloadProgress(total, totalHint,
+                    detail = "Waiting for archive body bytes…", phase = TrustedArtifactDownloadPhase.AWAITING_BODY))
                 body.byteStream().buffered(128 * 1024).use { input ->
                     val buffer = ByteArray(128 * 1024)
                     while (true) {
@@ -403,6 +433,9 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
                         if (read < 0) break
                         if (read == 0) continue
                         val nextTotal = Math.addExact(total, read.toLong())
+                        if (pinnedSize != null && nextTotal > pinnedSize) {
+                            throw ArtifactIntegrityException("Artifact exceeds its pinned size")
+                        }
                         require(nextTotal <= spec.maxBytes) { "Artifact exceeds ${spec.maxBytes} bytes" }
                         totalHint?.let { require(nextTotal <= it) { "Artifact exceeds expected representation size" } }
                         out.write(buffer, 0, read)
@@ -545,7 +578,9 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
         return true
     }
 
-    private fun loadResumeMetadata(spec: TrustedArtifactDescriptor, partial: File, metadataFile: File): PartialMetadata? {
+    private fun loadResumeMetadata(
+        spec: TrustedArtifactDescriptor, partial: File, metadataFile: File, integrityRetryUrl: String?,
+    ): PartialMetadata? {
         if (!partial.isFile || partial.length() <= 0L) {
             clearPartial(partial, metadataFile)
             return null
@@ -568,7 +603,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
             )
             check(metadata.digestAlgorithm == spec.digestAlgorithm)
             check(metadata.digestHex.equals(spec.digestHex, ignoreCase = true))
-            check(metadata.url == spec.url)
+            check(metadata.url == spec.url || metadata.url == integrityRetryUrl)
             check(metadata.expectedBytes == spec.expectedBytes)
             check(metadata.maxBytes == spec.maxBytes)
             metadata.totalBytes?.let { check(it in partial.length()..spec.maxBytes) }
@@ -579,13 +614,15 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
         }
     }
 
-    private fun retainOnlyValidPartial(spec: TrustedArtifactDescriptor, partial: File, metadataFile: File) {
+    private fun retainOnlyValidPartial(
+        spec: TrustedArtifactDescriptor, partial: File, metadataFile: File, integrityRetryUrl: String?,
+    ) {
         if (!partial.isFile || partial.length() <= 0L || partial.length() > spec.maxBytes || !metadataFile.isFile) {
             clearPartial(partial, metadataFile)
             return
         }
         // Re-read identity so a torn/corrupt sidecar never makes a future transfer append blindly.
-        loadResumeMetadata(spec, partial, metadataFile)
+        loadResumeMetadata(spec, partial, metadataFile, integrityRetryUrl)
     }
 
     private fun writeResumeMetadata(file: File, metadata: PartialMetadata) {

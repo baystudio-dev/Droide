@@ -43,8 +43,14 @@ object LocalExecutionSubstrate {
             TerminalPromptPresentation.androidEnvironment(File(filesDir, "terminal-home/presentation"))
         } else mapOf("PS1" to TerminalPromptPresentation.COMPACT_PROMPT)
 
+    @Synchronized
+    internal fun initializeIfNeeded(context: Context) {
+        if (!::filesDir.isInitialized) init(context) else requireContextRoot(context.applicationContext.filesDir.canonicalPath)
+    }
+
     fun init(context: Context) = init(context, {})
 
+    @Synchronized
     internal fun init(context: Context, checkCancelled: () -> Unit) {
         checkCancelled()
         val requested = context.applicationContext.filesDir.canonicalFile

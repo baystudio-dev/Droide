@@ -25,6 +25,7 @@ import com.baystudio.droide.core.DroideThemeSnapshot
 import com.baystudio.droide.core.FormatterManager
 import com.baystudio.droide.core.ITerminalSession
 import com.baystudio.droide.core.LanguageRegistry
+import com.baystudio.droide.core.LanguageServerRegistry
 import com.baystudio.droide.core.LspFormattingOptions
 import com.baystudio.droide.core.LspManager
 import com.baystudio.droide.core.LspDocumentSupportPhase
@@ -134,7 +135,9 @@ internal fun EditorPane(
     
 
     val effectiveWordWrap = wordwrap && !document.largeFileOptimized
-    val languageId = remember(path) { LanguageRegistry.forFile(path)?.id ?: "plaintext" }
+    val syntaxRevision by LanguageRegistry.syntaxRevision.collectAsState()
+    val language = remember(path, syntaxRevision) { LanguageRegistry.forFile(path) }
+    val languageId = language?.id ?: "plaintext"
     val codeStyleAuthority = remember(workspaceKey) { CodeStyleAuthority(files.root) }
     val codeStyle = remember(workspaceKey, path, languageId, document.loaded, codeStyleDefaults) {
         codeStyleAuthority.resolve(path, languageId, if (document.loaded) document.content else "", codeStyleDefaults)
@@ -192,7 +195,8 @@ internal fun EditorPane(
     LaunchedEffect(document, document.pendingRecoveryBuffer, workspaceKey, path, lsp) {
         document.ensureLoaded(files)
     }
-    EditorLspDocumentEffect(document, path, lsp)
+    val wireLanguage = remember(path, syntaxRevision) { LanguageServerRegistry.protocolLanguageId(path) }
+    EditorLspDocumentEffect(document, path, lsp, wireLanguage)
     LaunchedEffect(document.performanceMode) {
         if (document.largeFileOptimized) {
             signatureControllerRef[0]?.release()
@@ -888,7 +892,7 @@ internal fun EditorPane(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
-            val langName = LanguageRegistry.forFile(path)?.name ?: "Text"
+            val langName = language?.name ?: "Text"
             Surface(Modifier.weight(1f), color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(6.dp)) {
                 Row(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     if (document.dirty) { Icon(Icons.Default.Circle, "Unsaved changes", Modifier.size(7.dp), tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(5.dp)) }
@@ -1148,15 +1152,15 @@ internal fun EditorPane(
                                 // Fail-safe for unexpected event semantics or a stale durable buffer.
                                 if (!applied) document.captureNativeText(text.toString())
                                 if (document.canEdit && acceptsFeatureUpdates && document.fullIntelligence) {
-                                    signatureController?.onContentChanged(event.action, changed)
-                                    highlightController?.schedule(document.content)
+                                    signatureControllerRef[0]?.onContentChanged(event.action, changed)
+                                    highlightControllerRef[0]?.schedule(document.content)
                                 }
                             }
                         }
                         editorEvents.selection = subscribeEvent(SelectionChangeEvent::class.java) { event, _ ->
                             if (!applyingDocumentText) {
                                 document.captureSelection(event.left.index, event.right.index); revealSelectionForActiveIme()
-                                if (document.fullIntelligence) signatureController?.onSelectionChanged(event)
+                                if (document.fullIntelligence) signatureControllerRef[0]?.onSelectionChanged(event)
                             }
                         }
                         editorEvents.focus = subscribeEvent(EditorFocusChangeEvent::class.java) { event, _ ->
@@ -1252,13 +1256,16 @@ internal fun EditorPane(
                     view.setInterceptParentHorizontalScrollIfNeeded(false)
                     view.props.cacheRenderNodeForLongLines = !document.largeFileOptimized
                     if (view.editorLanguage !== completionLanguage) {
+                        view.languageId = languageId
                         view.setEditorLanguage(completionLanguage)
                     }
                     if (document.fullIntelligence && signatureControllerRef[0] == null) {
                         signatureControllerRef[0] = DroideSignatureHelpController(view, path, lsp, scope)
                     }
-                    if (document.fullIntelligence && highlightControllerRef[0] == null) {
-                        highlightControllerRef[0] = DroideEditorHighlightController(view, path, languageId, lsp, scope, codeStyle)
+                    if (document.fullIntelligence && highlightControllerRef[0]?.matches(languageId, lsp, syntaxRevision) != true) {
+                        highlightControllerRef[0]?.release()
+                        highlightControllerRef[0] = DroideEditorHighlightController(view, path, languageId, lsp, scope, codeStyle, syntaxRevision)
+                        if (lastAppliedRevision == document.revision) highlightControllerRef[0]?.schedule(document.content, immediate = true)
                     }
                     if (lastAppliedRevision != document.revision) {
                         applyingDocumentText = true

@@ -75,14 +75,15 @@ class ExitProcessStopFanoutTest {
         try {
             val exiting = sequence.request()
             withTimeout(1_000) { sequence.state.first { it.stage.contains("still finishing") } }
-            assertFalse(sequence.state.value.completed); assertNull(sequence.state.value.failure)
-            assertTrue(sequence.state.value.running)
-            assertEquals(1, stops.get())
-            assertSame(exiting, sequence.request())
-            assertFalse(sequence.state.value.completed); assertEquals(1, stops.get())
-            release.complete(Unit)
             withTimeout(1_000) { exiting.join() }
-            assertTrue(sequence.state.value.completed); assertEquals(1, stops.get())
+            assertFalse(sequence.state.value.completed)
+            assertTrue(peer.isAlive)
+            assertEquals(1, stops.get())
+            release.complete(Unit)
+            val completed = withTimeout(1_000) { sequence.state.first { it.completed } }
+            assertNull(completed.failure)
+            assertEquals(1, completed.completedStages)
+            assertEquals(1, stops.get())
         } finally { release.complete(Unit) }
     }
 

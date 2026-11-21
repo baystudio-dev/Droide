@@ -3,6 +3,14 @@ package com.baystudio.droide.core
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
+internal class UbuntuPackageCommandFailure(purpose: String, result: ExecResult) :
+    IllegalStateException("Could not $purpose (exit ${result.exitCode}${if (result.timedOut) ", timed out" else ""})\n${result.output.takeLast(4_000)}") {
+    val summary: String = listOfNotNull(
+        message?.lineSequence()?.first(),
+        result.output.lineSequence().lastOrNull { it.isNotBlank() }?.trim()?.take(160),
+    ).joinToString(" · ")
+}
+
 /** Reuses actual dpkg state, irrespective of which UI/Agent/terminal originally installed it. */
 internal class UbuntuAptDependencyInstaller(
     private val commands: UbuntuAptCommandRunner,
@@ -96,8 +104,17 @@ internal class UbuntuAptDependencyInstaller(
         if (audit.output.isBlank()) return
         progress("Finishing pending Ubuntu package configuration…\n")
         var configured = commands.run(listOf("dpkg", "--configure", "-a"), timeoutMs = 0L, progress = progress)
-        if (configured.timedOut) requireSuccess(configured, "finish Ubuntu package configuration")
-        if (configured.exitCode != 0) {
+        if (configured.timedOut || configured.exitCode != 0) {
+            if (configured.timedOut || configured.exitCode != 1 || REPORTED_SIGNAL.containsMatchIn(configured.output)) {
+                throw UbuntuPackageCommandFailure("finish Ubuntu package configuration", configured)
+            }
+            val check = commands.run(listOf("env", "LC_ALL=C", "apt-get", "-s", "check"), timeoutMs = 30_000)
+            if (check.exitCode == 0 && !check.timedOut) {
+                throw UbuntuPackageCommandFailure("finish Ubuntu package configuration", configured)
+            }
+            if (check.timedOut || check.exitCode != 100 || !check.output.contains("unmet dependencies", ignoreCase = true)) {
+                throw UbuntuPackageCommandFailure("check Ubuntu dependencies", check)
+            }
             ensureIndexes(progress)
             val archives = "/var/cache/droide-foundry/$layerId/archives"
             val plan = commands.run(listOf("sh", "-lc", FoundryUbuntuAptPolicy.repairPlanCommand(
@@ -117,9 +134,13 @@ internal class UbuntuAptDependencyInstaller(
     }
 
     private fun requireSuccess(result: ExecResult, purpose: String) {
-        check(result.exitCode == 0 && !result.timedOut) { "Could not $purpose: ${result.output.takeLast(4_000)}" }
+        if (result.exitCode != 0 || result.timedOut) throw UbuntuPackageCommandFailure(purpose, result)
     }
     private fun total(result: ExecResult, key: String): Long = result.output.lineSequence()
         .firstOrNull { it.startsWith("$key=") }?.substringAfter('=')?.trim()?.toLongOrNull()?.takeIf { it >= 0 }
         ?: error("Ubuntu package plan did not report $key")
+
+    private companion object {
+        val REPORTED_SIGNAL = Regex("(?im)received signal [0-9]+|killed by signal|^killed\\s*$")
+    }
 }

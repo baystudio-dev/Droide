@@ -48,11 +48,13 @@ internal class StatusBarInsetMotionController {
         requestedHidden: Boolean = false,
         fallbackFrame: StatusBarInsetFallbackFrame? = null,
         anticipateHiddenRequest: Boolean = false,
+        reserveShownSpace: Boolean = false,
     ): StatusBarInsetMotionSample {
         val shown = shownTopPx.coerceAtLeast(0)
         val current = currentTopPx.coerceIn(0, shown)
         val intermediate = current > 0 && current < shown
-        if ((anticipateHiddenRequest && requestedHidden) || requestDriven) {
+        val followRequest = if (requestedHidden) anticipateHiddenRequest else reserveShownSpace
+        if (followRequest || requestDriven) {
             return sampleRequest(current, shown, metricsKey, reducedMotion,
                 requestedHidden, fallbackFrame)
         }

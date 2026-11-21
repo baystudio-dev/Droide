@@ -17,7 +17,7 @@ data class BrowserApprovalContext(
 
     val site: String get() = runCatching {
         if (url.length !in 1..8_192) return@runCatching null
-        val uri = URI(url)
+        val uri = runCatching { URI(url) }.getOrElse { BrowserWebAddress.authority(url) }
         if (!uri.scheme.equals("http", ignoreCase = true) && !uri.scheme.equals("https", ignoreCase = true)) return@runCatching null
         if (uri.port !in -1..65535) return@runCatching null
         val host = uri.host ?: return@runCatching null

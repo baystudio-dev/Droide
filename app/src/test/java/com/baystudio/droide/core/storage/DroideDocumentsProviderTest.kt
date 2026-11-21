@@ -71,4 +71,29 @@ class DroideDocumentsProviderTest {
         store.setShared(root, "Fixture", false)
         assertThrows(FileNotFoundException::class.java) { provider.queryDocument(id, null) }
     }
+
+    @Test fun recursiveCopyGetsEveryVisibleChildOrAnExplicitFailure() {
+        val nested = File(root, "nested").apply { mkdir() }
+        File(nested, ".env").writeText("private")
+        val expected = mutableSetOf<String>()
+        store.setShared(root, "Fixture", true)
+        val parent = SharedDocumentIds.encode(store.entries().single().id, "nested")
+        val name = DocumentsContract.Document.COLUMN_DISPLAY_NAME
+        for (count in listOf(1999, 2000, 2001)) {
+            while (expected.size < count) {
+                val next = "file-${expected.size}.txt"
+                File(nested, next).writeText(next)
+                expected += next
+            }
+            provider.queryChildDocuments(parent, null, sortOrder = null).use { cursor ->
+                val nameIndex = cursor.getColumnIndexOrThrow(name)
+                val returned = mutableSetOf<String>()
+                while (cursor.moveToNext()) returned += cursor.getString(nameIndex)
+                assertEquals(expected, returned)
+            }
+        }
+        assertThrows(FileNotFoundException::class.java) {
+            provider.queryChildDocuments(parent, Array(96) { name }, sortOrder = null).close()
+        }
+    }
 }

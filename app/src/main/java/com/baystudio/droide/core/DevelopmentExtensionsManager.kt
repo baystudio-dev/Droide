@@ -273,14 +273,18 @@ class DevelopmentExtensionsManager internal constructor(
                 refreshAdmission.publish(request) {
                     if (localRecoveryProblem == null) workspaceToolchains.prune(records.map { it.familyId to it.version }.toSet())
                     val workspaceSelections = workspaceToolchains.selections()
+                    val localPlatformProblem = DevelopmentExtensionProjection.platformProblem(Build.SUPPORTED_ABIS.toList(), android.os.Process.is64Bit())
                     val items = DevelopmentExtensionCatalog.families.flatMap { baseFamily ->
+                        val localOffers = DevelopmentExtensionProjection.localVersions(baseFamily)
                         val family = baseFamily.copy(versions = projectedVersions(
-                            baseFamily, workstation, certifiedAndroidEntries, localAndroidComponents, managedPackageEntries, visibleRecords,
+                            baseFamily, workstation, certifiedAndroidEntries, localAndroidComponents, managedPackageEntries, visibleRecords, localOffers,
                         ))
-                        family.versions.map { version ->
+                        val states = family.versions.map { version ->
                             resolveState(
                                 family = family,
                                 version = version,
+                                localOffer = version in localOffers,
+                                localPlatformProblem = localPlatformProblem,
                                 workstation = workstation,
                                 androidProviderAvailable = when (family.id) {
                                     "sdk.android" -> version.version.toIntOrNull()?.let { api -> certifiedAndroidEntries.any { api in it.compileSdks } } == true
@@ -298,6 +302,8 @@ class DevelopmentExtensionsManager internal constructor(
                                 verifiedKeys = verifiedKeys,
                             )
                         }
+                        DevelopmentExtensionProjection.installChoices(family, states,
+                            localRecoveryProblem == null && localPlatformProblem == null)
                     }
                     val next = DevelopmentExtensionsSnapshot(
                         workspace = workspace,
@@ -331,6 +337,7 @@ class DevelopmentExtensionsManager internal constructor(
         localAndroidComponents: List<AndroidLocalComponentCatalogEntry>,
         managedPackageEntries: List<ManagedPackageCatalogEntry>,
         installedRecords: List<ManagedPackageRecord>,
+        localOffers: List<ExtensionVersion>,
     ): List<ExtensionVersion> {
         val dynamic = when (family.id) {
             "sdk.android" -> {
@@ -513,7 +520,7 @@ class DevelopmentExtensionsManager internal constructor(
             }
         }
         val local = buildList {
-            addAll(DevelopmentExtensionProjection.localVersions(family))
+            addAll(localOffers)
             installedRecords.filter { it.familyId == family.id && installer.localPackageAuthority.owns(it) }.forEach { record ->
                 add(ExtensionVersion(record.version, "installed-ubuntu", installKind = ExtensionInstallKind.REVIEWED_RECIPE,
                     provides = record.commands.keys, note = "Installed app-local command integration."))
@@ -529,7 +536,7 @@ class DevelopmentExtensionsManager internal constructor(
             if (version.installKind == ExtensionInstallKind.BUILT_IN) {
                 ExtensionVersionState(family, version, ExtensionState.BUILT_IN, if (family.category == ExtensionCategory.LANGUAGES) LanguageRuntimePresentation.syntaxStatus(family.id.removePrefix("language.")) else "Built-in")
             } else {
-                ExtensionVersionState(family, version, ExtensionState.UNAVAILABLE, version.note.ifBlank { "Not checked yet" })
+                ExtensionVersionState(family, version, ExtensionState.CHECKING, "Checking installation status…")
             }
         }
     })
@@ -537,6 +544,8 @@ class DevelopmentExtensionsManager internal constructor(
     private fun resolveState(
         family: ExtensionFamily,
         version: ExtensionVersion,
+        localOffer: Boolean,
+        localPlatformProblem: String?,
         workstation: AndroidDevelopmentManager.WorkstationInfo?,
         androidProviderAvailable: Boolean,
         managedPackages: Set<Pair<String, String>>,
@@ -551,7 +560,6 @@ class DevelopmentExtensionsManager internal constructor(
             return ExtensionVersionState(family, version, ExtensionState.BUILT_IN, if (family.category == ExtensionCategory.LANGUAGES) LanguageRuntimePresentation.syntaxStatus(family.id.removePrefix("language.")) else "Built-in")
         }
         val apt = UbuntuAptCatalog.find(family.id)?.takeIf { version.version == it.version }
-        val localNpm = UbuntuNpmCatalog.find(family.id)
         val localRuby = LocalUbuntuRubyCatalog.find(family.id, version.version)
         val localAndroidWorkstation = family.id == LocalAndroidWorkstationPolicy.FAMILY && version.version == LocalAndroidWorkstationPolicy.VERSION
         val localCSharp = LocalUbuntuCSharpPolicy.isFamily(family.id) && version.version == LocalUbuntuCSharpPolicy.version(family.id)
@@ -613,15 +621,14 @@ class DevelopmentExtensionsManager internal constructor(
         }
         DevelopmentExtensionProjection.detectedDeviceComponent(family, version, workstation)?.let { return it }
 
-        val appLocalProvider = version.installKind == ExtensionInstallKind.ANDROID_LOCAL_COMPONENT ||
-            (version.installKind == ExtensionInstallKind.REVIEWED_RECIPE && (apt != null || localRuby != null ||
-                localCSharp || localAndroidWorkstation || localNode || localNpm != null || localVendor != null || localAlias != null ||
-                localReviewedSource != null || localNpmRecipe != null))
+        val reviewedRecipe = version.installKind == ExtensionInstallKind.REVIEWED_RECIPE &&
+            (localOffer || localReviewedSource != null || localNpmRecipe != null)
+        val appLocalProvider = version.installKind == ExtensionInstallKind.ANDROID_LOCAL_COMPONENT || reviewedRecipe
         if (appLocalProvider) {
             if (localRecoveryProblem != null) {
                 return ExtensionVersionState(family, version, ExtensionState.UNAVAILABLE, localRecoveryProblem)
             }
-            DevelopmentExtensionProjection.platformProblem(Build.SUPPORTED_ABIS.toList(), android.os.Process.is64Bit())?.let { problem ->
+            localPlatformProblem?.let { problem ->
                 return ExtensionVersionState(family, version, ExtensionState.UNAVAILABLE, problem)
             }
         }
@@ -674,7 +681,7 @@ class DevelopmentExtensionsManager internal constructor(
         }
 
         if (version.installKind == ExtensionInstallKind.REVIEWED_RECIPE) {
-            if (localCSharp || apt != null || localRuby != null || localAndroidWorkstation || localNode || localNpm != null || localVendor != null || localAlias != null) return ExtensionVersionState(family, version, ExtensionState.AVAILABLE,
+            if (localOffer) return ExtensionVersionState(family, version, ExtensionState.AVAILABLE,
                 "Ready to install in local Ubuntu; dependencies and commands verified before activation")
             if (localNpmRecipe != null) {
                 return ExtensionVersionState(family, version, ExtensionState.AVAILABLE,

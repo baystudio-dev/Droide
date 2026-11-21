@@ -10,6 +10,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.baystudio.droide.R
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
@@ -26,6 +28,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 internal interface AgentRetainedRecoveryActions {
+    val earlierCopy: Int? get() = null
+    suspend fun archiveWorkingCopy(destination: String): Long = error("Select an earlier CLI copy")
+
     val supportsSqliteEvidence: Boolean get() = false
     suspend fun captureSqliteEvidence(): String = error("Rollback evidence capture unavailable")
     suspend fun buildSqliteCandidate(): String = error("Forensic candidate construction unavailable")
@@ -48,8 +53,10 @@ internal interface AgentRetainedRecoveryActions {
     suspend fun resolveConflict(review: MirrorConflictRecovery.Review): Unit = error("Conflict review unavailable")
 }
 
-internal fun WorkspaceAgentPluginHost.retainedRecoveryActions() = object : AgentRetainedRecoveryActions {
-    override val supportsSqliteEvidence = true
+internal fun WorkspaceAgentPluginHost.retainedRecoveryActions(earlier: Int? = null) = object : AgentRetainedRecoveryActions {
+    override val earlierCopy = earlier
+    override suspend fun archiveWorkingCopy(destination: String) = archiveEarlierWorkspace(requireNotNull(earlier), destination)
+    override val supportsSqliteEvidence = earlier == null
     override suspend fun captureSqliteEvidence(): String {
         val review = captureSqliteRollbackEvidence()
         return "Raw database and rollback journal preserved at ${review.evidenceDirectory.name}. " +
@@ -64,13 +71,16 @@ internal fun WorkspaceAgentPluginHost.retainedRecoveryActions() = object : Agent
             "This is not live recovery: workspace activation and cleanup remain blocked."
     }
     override val supportsDirectoryArchive = true
-    override val supportsConflictReview = true
-    override val supportsRetentionReview = true
+    override val supportsConflictReview = earlier == null
+    override val supportsRetentionReview = earlier == null
     override suspend fun reviewRetention(item: MirrorRetainedRecovery.Item) = reviewRetainedVersionRetention(item)
-    override suspend fun list(cursor: MirrorRetainedRecovery.Cursor?) = retainedWorkspaceVersions(cursor)
-    override suspend fun inspect(item: MirrorRetainedRecovery.Item) = inspectRetainedWorkspaceVersion(item)
-    override suspend fun copy(inspection: MirrorRetainedRecovery.Inspection, destination: String) = saveRetainedWorkspaceCopy(inspection, destination)
-    override suspend fun archive(item: MirrorRetainedRecovery.Item, destination: String) = archiveRetainedWorkspaceFolder(item, destination)
+    override suspend fun list(cursor: MirrorRetainedRecovery.Cursor?): MirrorRetainedRecovery.Page {
+        val page = retainedWorkspaceVersions(cursor, earlier)
+        return if (earlier == null) page else page.copy(interrupted = emptyList(), conflicts = emptyList())
+    }
+    override suspend fun inspect(item: MirrorRetainedRecovery.Item) = inspectRetainedWorkspaceVersion(item, earlier)
+    override suspend fun copy(inspection: MirrorRetainedRecovery.Inspection, destination: String) = saveRetainedWorkspaceCopy(inspection, destination, earlier)
+    override suspend fun archive(item: MirrorRetainedRecovery.Item, destination: String) = archiveRetainedWorkspaceFolder(item, destination, earlier)
     override suspend fun inspectInterrupted(operation: MirrorMetadataAuthority.Intent) = inspectInterruptedWorkspaceChange(operation)
     override suspend fun finishInterrupted(review: MirrorInterruptedRecovery.Review, complete: Boolean) = finishInterruptedWorkspaceChange(review, complete)
     override suspend fun inspectVersion(item: MirrorRetainedRecovery.Item) = inspectRetainedAcknowledgement(item)
@@ -89,6 +99,7 @@ internal data class AgentRetainedRecoveryState(
     val versionReview: MirrorConflictRecovery.VersionReview? = null,
     val conflictReview: MirrorConflictRecovery.Review? = null,
     val retentionReview: MirrorRetainedRecovery.RetentionReview? = null,
+    val archivingWorkingCopy: Boolean = false,
     val destination: String = "",
     val error: String? = null,
     val notice: String? = null,
@@ -211,11 +222,27 @@ internal class AgentRetainedRecoveryController(
     fun canArchive(item: MirrorRetainedRecovery.Item) = actions.supportsDirectoryArchive && item.kind == AnchoredWorkspaceFiles.Kind.DIRECTORY
     fun canSelect(item: MirrorRetainedRecovery.Item) = item.canCopy || canArchive(item)
 
+    val earlierCopy get() = actions.earlierCopy
+
+    fun selectWorkingCopy() {
+        val index = earlierCopy ?: return
+        if (!state.open || state.busy || !allowed()) return
+        state = state.copy(archivingWorkingCopy = true, destination = "cli-workspace-${index + 1}.tar", error = null, notice = null)
+    }
+
     fun destination(value: String) {
         if (state.open && !state.busy) state = state.copy(destination = value, error = null)
     }
 
     fun save() {
+        if (state.archivingWorkingCopy) {
+            val destination = state.destination
+            if (earlierCopy != null && destination.isNotBlank()) operate {
+                actions.archiveWorkingCopy(destination)
+                state.copy(archivingWorkingCopy = false, destination = "", notice = "Saved $destination.")
+            }
+            return
+        }
         val directory = state.directory
         if (directory != null) {
             val destination = state.destination
@@ -282,7 +309,7 @@ internal fun AgentRetainedRecoveryDialog(controller: AgentRetainedRecoveryContro
             shape = MaterialTheme.shapes.extraLarge,
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("Retained CLI versions", style = MaterialTheme.typography.headlineSmall)
+                Text(controller.earlierCopy?.let { stringResource(R.string.cli_copy_number, it + 1) } ?: "Retained CLI versions", style = MaterialTheme.typography.headlineSmall)
                 val selection = state.inspection
                 val interrupted = state.interrupted
                 val versionReview = state.versionReview
@@ -334,13 +361,14 @@ internal fun AgentRetainedRecoveryDialog(controller: AgentRetainedRecoveryContro
                             Text("Keep as conflict")
                         }
                     }
-                } else if (selection != null || state.directory != null) {
+                } else if (selection != null || state.directory != null || state.archivingWorkingCopy) {
                     Column(
                         modifier = Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         AgentRetainedRecoveryNotices(state)
-                        Text((selection?.item ?: state.directory!!).operation.path)
+                        if (state.archivingWorkingCopy) Text(stringResource(R.string.cli_save_working_copy))
+                        else Text((selection?.item ?: state.directory!!).operation.path)
                         Text(selection?.let { "${it.item.role.label} · ${it.version.size} bytes" }
                             ?: "Folder · TAR archive with all contents, empty folders and links")
                         OutlinedTextField(
@@ -367,6 +395,11 @@ internal fun AgentRetainedRecoveryDialog(controller: AgentRetainedRecoveryContro
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         item(key = "notice") { AgentRetainedRecoveryNotices(state) }
+                        if (controller.earlierCopy != null) item(key = "working-copy") {
+                            TextButton(onClick = controller::selectWorkingCopy, enabled = !state.busy) {
+                                Text(stringResource(R.string.cli_save_working_copy))
+                            }
+                        }
                         items(if (controller.supportsConflictReview) state.page?.conflicts.orEmpty() else emptyList(), key = { "conflict:$it" }) { path ->
                             TextButton(onClick = { controller.inspectConflict(path) }, enabled = !state.busy,
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Review conflict · $path") }
@@ -416,12 +449,12 @@ internal fun AgentRetainedRecoveryDialog(controller: AgentRetainedRecoveryContro
                         TextButton(onClick = { controller.page(null) }, enabled = !state.busy) { Text("Back") }
                     }
                     TextButton(onClick = controller::close, modifier = Modifier.heightIn(min = 48.dp)) { Text("Close") }
-                    if (state.inspection != null || state.directory != null) {
+                    if (state.inspection != null || state.directory != null || state.archivingWorkingCopy) {
                         TextButton(
                             onClick = controller::save,
                             enabled = !state.busy && state.destination.isNotBlank(),
                             modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(if (state.directory != null) "Save TAR copy" else "Save copy") }
+                        ) { Text(if (state.directory != null || state.archivingWorkingCopy) "Save TAR copy" else "Save copy") }
                     }
                 }
             }

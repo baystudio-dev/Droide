@@ -33,12 +33,13 @@ internal data class AgentCompactionBudget(val historyTokens: Int, val keepRecent
         // billing, subtract cached input, or reuse a sample from another session/model/window.
         fun calibrated(estimate: ContextEstimate, previous: AgentContextUsage?, sessionId: String,
             providerId: String, model: String): ContextEstimate = estimate.copy(approximateTokens =
-            kotlin.math.ceil(estimate.approximateTokens * scale(previous, sessionId, providerId, model))
+            kotlin.math.ceil(estimate.approximateTokens * scale(previous, sessionId, providerId, model, estimate))
                 .coerceAtMost(Int.MAX_VALUE.toDouble()).toInt())
 
-        private fun scale(previous: AgentContextUsage?, sessionId: String, providerId: String, model: String): Double {
+        private fun scale(previous: AgentContextUsage?, sessionId: String, providerId: String, model: String, estimate: ContextEstimate): Double {
             val sample = previous?.forSelection(providerId, model)?.takeIf {
-                it.sessionId == sessionId && !it.isEstimated && it.estimate.approximateTokens > 0
+                it.sessionId == sessionId && !it.isEstimated && it.estimate.approximateTokens > 0 &&
+                    it.estimate.knownContextLimit == estimate.knownContextLimit && it.estimate.knownInputLimit == estimate.knownInputLimit
             } ?: return 1.0
             return maxOf(1.0, sample.reportedInputTokens!!.toDouble() / sample.estimate.approximateTokens)
         }

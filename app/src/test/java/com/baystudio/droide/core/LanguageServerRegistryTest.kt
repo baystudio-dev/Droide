@@ -6,6 +6,48 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LanguageServerRegistryTest {
+    @Test fun replacingAnExtensionRefreshesWarmedLookupsAndPreservesEarlierSnapshots() {
+        val owner = "test.registry.replacement"
+        val path = "src/component.lookup-test.json"
+        val first = DeclarativeLanguageSpec("lookup-test", "First", listOf(".lookup-test.json"), listOf("LookupFixture"))
+        try {
+            assertEquals("json", LanguageRegistry.forFile(path)?.id)
+            LanguageRegistry.registerDeclarative(owner, listOf(first))
+            val earlier = LanguageRegistry.all
+            assertEquals("First", LanguageRegistry.forExtension("LOOKUP-TEST.JSON")?.name)
+            assertEquals("lookup-test", LanguageServerRegistry.protocolLanguageId(path))
+
+            LanguageRegistry.registerDeclarative(owner, listOf(first.copy(name = "Updated")))
+            assertEquals("Updated", LanguageRegistry.forFile(path)?.name)
+            assertEquals("Updated", LanguageRegistry.forFile("src/LookupFixture")?.name)
+            assertEquals("First", earlier.single { it.id == first.id }.name)
+
+            LanguageRegistry.registerDeclarative(owner, emptyList())
+            assertEquals(null, LanguageRegistry.forExtension("lookup-test.json"))
+            assertEquals("json", LanguageServerRegistry.protocolLanguageId(path))
+        } finally {
+            LanguageRegistry.unregisterDeclarative(owner)
+        }
+    }
+
+    @Test fun customCompoundExtensionPicksTheSameEditorAndServerLanguage() {
+        val extension = "fixture.layout"
+        val path = "ui/title.layout.json"
+        val contribution = DeclarativeLanguageSpec("layout", "Layout", listOf(".layout.json"), emptyList())
+        val server = LanguageServerSpec("layout-server", setOf("layout"), setOf("layout.json"), listOf(listOf("layout-lsp")), "workspace")
+        val initial = LanguageRegistry.syntaxRevision.value
+        try {
+            LanguageRegistry.registerDeclarative(extension, listOf(contribution))
+            assertEquals("layout", LanguageRegistry.forFile(path)?.id)
+            assertEquals("layout", LanguageServerRegistry.protocolLanguageId(path))
+            assertEquals(listOf(server.id), LanguageServerRegistry.forPath(path, listOf(server)).map { it.id })
+            assertTrue(LanguageRegistry.syntaxRevision.value > initial)
+        } finally {
+            LanguageRegistry.unregisterDeclarative(extension)
+        }
+        assertEquals("json", LanguageServerRegistry.protocolLanguageId(path))
+    }
+
     @Test fun resolvesCompoundLanguageFamiliesDeterministically() {
         assertTrue(LanguageServerRegistry.forPath("src/main.ts").any { it.id == "typescript" })
         assertTrue(LanguageServerRegistry.forPath("native/main.cpp").any { it.id == "clangd" })

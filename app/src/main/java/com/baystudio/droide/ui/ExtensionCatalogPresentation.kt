@@ -27,6 +27,8 @@ internal fun extensionDefaultChoice(items: List<ExtensionVersionState>): Extensi
             }
             ExtensionState.AVAILABLE -> if (item.version.recommended) 20 else 21
             ExtensionState.EXTERNAL -> 10
+            ExtensionState.MANUAL, ExtensionState.PROJECT_DEPENDENCY -> 30
+            ExtensionState.CHECKING -> 35
             ExtensionState.UNAVAILABLE -> 40
         }
     }
@@ -49,7 +51,7 @@ internal fun extensionCatalogCards(
 
 /** Missing external detection placeholders are not alternative versions that a user can install. */
 internal fun extensionSelectableChoices(items: List<ExtensionVersionState>): List<ExtensionVersionState> =
-    items.filter { it.state != ExtensionState.UNAVAILABLE }
+    items.filter { it.state != ExtensionState.UNAVAILABLE && it.state != ExtensionState.CHECKING }
         .distinctBy { it.version.version to it.version.scope }
 
 internal fun extensionExecutionLabel(item: ExtensionVersionState): String = when {
@@ -74,6 +76,9 @@ internal fun extensionChoiceLabel(item: ExtensionVersionState): String = when (i
     ExtensionState.EXTERNAL -> "${extensionExecutionLabel(item)} · detected outside Droide"
     ExtensionState.AVAILABLE -> "${item.version.version} · ${extensionExecutionLabel(item)} · " +
         if(item.family.id=="lsp.elp") "explicit health approval required" else "ready to install"
+    ExtensionState.MANUAL -> "Install in Terminal"
+    ExtensionState.PROJECT_DEPENDENCY -> "Project dependency"
+    ExtensionState.CHECKING -> "Checking installation status…"
     ExtensionState.UNAVAILABLE -> "${item.version.version} · ${extensionExecutionLabel(item)} · unavailable"
 }
 

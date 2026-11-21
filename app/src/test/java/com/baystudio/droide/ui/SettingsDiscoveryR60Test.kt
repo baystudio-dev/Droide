@@ -22,6 +22,8 @@ class SettingsDiscoveryR60Test {
     }
 
     @Test fun allStableCategoryKeysHaveDistinctNonEmptyMetadata() {
+        assertEquals(SettingsDiscovery.entries.keys, SettingsCategory.entries.map { it.name }.toSet())
+        assertEquals(SettingsGroup.entries.toSet(), SettingsCategory.entries.map { it.group }.toSet())
         assertEquals(20, SettingsDiscovery.entries.size)
         assertEquals(categoryKeys, SettingsDiscovery.entries.keys.toList())
         assertEquals(20, SettingsDiscovery.entries.keys.distinct().size)
@@ -50,6 +52,7 @@ class SettingsDiscoveryR60Test {
             "Spaces", "Tabs", "tab width", "indent size", "continuation indent", ".editorconfig",
             "External formatter fallback", ".droide/formatter.json", "smart typing", "completion",
             "wordwrap", "soft wrap", "indentation detection", "autocomplete",
+            "Show Android status bar", "bilah status", "Tampilkan status bar Android",
         )
         assertEquals(setOf("EDITOR"), matches("tab width"))
         assertEquals(setOf("EDITOR"), matches("continuation indent"))

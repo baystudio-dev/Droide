@@ -14,17 +14,20 @@ class ToolUpdatePlannerTest {
 
     @Test fun mutableNpmToolsAcceptNewVersionsWhileManagedSnapshotsRejectReplacement() {
         for (entry in UbuntuNpmCatalog.entries) {
-            val recipe = WorkstationInstallRecipe(entry.familyId, "99.8.7", entry.packageName, "99.8.7", entry.command, 22,
+            val recipe = WorkstationInstallRecipe(entry.familyId, "99.8.7", entry.packageName, "99.8.7", entry.command, maxOf(22, entry.minimumNodeMajor),
                 entry.provenance, allowLifecycleScripts = entry.allowLifecycleScripts, lifecycleScriptReview = entry.lifecycleScriptReview,
-                additionalDependencies = if (entry.familyId == "lsp.typescript") mapOf("typescript" to "8.1.0") else emptyMap())
-            if (entry.reviewedVersion == null) {
+                additionalDependencies = if (entry.familyId in setOf("lsp.typescript", LspMdxProfile.FAMILY)) mapOf("typescript" to "8.1.0") else emptyMap())
+            if (entry.reviewedVersion == null || entry.allowsPublisherUpdates) {
                 assertTrue(entry.familyId, LocalUbuntuNpmPolicy.supports(recipe))
             } else {
                 assertFalse("Pinned integration accepted an arbitrary replacement: ${entry.familyId}",
                     LocalUbuntuNpmPolicy.supports(recipe))
             }
         }
-        assertEquals(5, UbuntuNpmCatalog.entries.count { it.familyId.startsWith("plugin.") })
+        val agentIds = WorkspaceAgentPluginCatalog.entries.map { it.familyId }.toSet()
+        val npmAgents = UbuntuNpmCatalog.entries.filter { it.familyId.startsWith("plugin.") }.map { it.familyId }
+        assertTrue(npmAgents.containsAll(listOf("plugin.muse-code", "plugin.kimi-code", "plugin.deepseek-harness")))
+        assertTrue(agentIds.containsAll(npmAgents))
     }
 
     @Test fun aNewNodeMajorHasItsOwnPublisherArchiveAndPreservesExistingNode22Receipts() {

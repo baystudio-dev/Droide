@@ -3,10 +3,12 @@ package com.baystudio.droide.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -17,6 +19,8 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -29,6 +33,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.baystudio.droide.R
 import com.baystudio.droide.BuildConfig
 import com.baystudio.droide.core.*
 import kotlinx.coroutines.CancellationException
@@ -36,29 +42,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private enum class SettingsScope { USER, WORKSPACE }
+internal enum class SettingsScope { USER, WORKSPACE }
 
-private enum class SettingsCategory(val icon: ImageVector) {
-    GENERAL(Icons.Default.Settings),
-    APPEARANCE(Icons.Default.Palette),
-    EDITOR(Icons.Default.Edit),
-    LANGUAGES(Icons.Default.Code),
-    FILES(Icons.Default.Folder),
-    TERMINAL(Icons.Default.Terminal),
-    GIT(Icons.Default.AccountTree),
-    RUN(Icons.Default.PlayArrow),
-    AI(Icons.Default.AutoAwesome),
-    PROVIDERS(Icons.Default.Cloud),
-    PERMISSIONS(Icons.Default.AdminPanelSettings),
-    TOOLS(Icons.Default.Build),
-    PLUGINS(Icons.Default.Extension),
-    SKILLS(Icons.Default.AutoStories),
-    KEYBOARD(Icons.Default.Keyboard),
-    SECURITY(Icons.Default.Security),
-    PERFORMANCE(Icons.Default.Speed),
-    NOTIFICATIONS(Icons.Default.Notifications),
-    ACCOUNTS(Icons.Default.Person),
-    ABOUT(Icons.Default.Info);
+internal enum class SettingsCategory(val icon: ImageVector, val group: SettingsGroup) {
+    EDITOR(Icons.Outlined.Code, SettingsGroup.WORKBENCH),
+    APPEARANCE(Icons.Outlined.Contrast, SettingsGroup.WORKBENCH),
+    FILES(Icons.Outlined.Folder, SettingsGroup.WORKBENCH),
+    KEYBOARD(Icons.Outlined.Keyboard, SettingsGroup.WORKBENCH),
+    GENERAL(Icons.Outlined.Settings, SettingsGroup.WORKBENCH),
+    TERMINAL(Icons.Outlined.Terminal, SettingsGroup.DEVELOPMENT),
+    LANGUAGES(Icons.Outlined.Layers, SettingsGroup.DEVELOPMENT),
+    RUN(Icons.Outlined.PlayArrow, SettingsGroup.DEVELOPMENT),
+    GIT(Icons.Outlined.AccountTree, SettingsGroup.DEVELOPMENT),
+    AI(Icons.Outlined.ChatBubbleOutline, SettingsGroup.AGENTS),
+    TOOLS(Icons.Outlined.Build, SettingsGroup.AGENTS),
+    PROVIDERS(Icons.Outlined.Cloud, SettingsGroup.AGENTS),
+    PERMISSIONS(Icons.Outlined.AdminPanelSettings, SettingsGroup.AGENTS),
+    SKILLS(Icons.Outlined.AutoStories, SettingsGroup.AGENTS),
+    PLUGINS(Icons.Outlined.Extension, SettingsGroup.AGENTS),
+    ACCOUNTS(Icons.Outlined.Person, SettingsGroup.APPLICATION),
+    SECURITY(Icons.Outlined.Security, SettingsGroup.APPLICATION),
+    PERFORMANCE(Icons.Outlined.Speed, SettingsGroup.APPLICATION),
+    NOTIFICATIONS(Icons.Outlined.Notifications, SettingsGroup.APPLICATION),
+    ABOUT(Icons.Outlined.Info, SettingsGroup.APPLICATION);
 
     private val entry get() = SettingsDiscovery.entries.getValue(name)
     val title get() = entry.title
@@ -83,6 +89,8 @@ fun SettingsScreen(
     projectName: String,
     sharedWorkspace: java.io.File? = null,
     initialPermissionPolicy: PermissionPolicyDocument,
+    showEditorStatusBar: Boolean,
+    onShowEditorStatusBar: suspend (Boolean) -> Unit,
     onWordwrap: suspend (Boolean) -> Unit,
     onHardwareShortcuts: suspend (Boolean) -> Unit,
     onAccessoryKeysComfortable: suspend (Boolean) -> Unit,
@@ -112,6 +120,7 @@ fun SettingsScreen(
     onExportWorkspace: (() -> Unit)? = null,
     onExportStatus: (() -> Unit)? = null,
     initialCategoryName: String? = null,
+    workspaceTheme: DroideThemeSnapshot? = null,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -140,6 +149,7 @@ fun SettingsScreen(
     }
     var settingsScope by rememberSaveable { mutableStateOf(if (initialCategoryName == "TOOLS") SettingsScope.WORKSPACE else SettingsScope.USER) }
     var query by rememberSaveable { mutableStateOf("") }
+    var searchingDirectory by rememberSaveable { mutableStateOf(false) }
     var legalRoute by rememberSaveable { mutableStateOf<LegalRoute?>(null) }
     var selectedLicenseId by rememberSaveable { mutableStateOf<String?>(null) }
     var permissionPolicy by remember(projectName) { mutableStateOf(initialPermissionPolicy) }
@@ -164,14 +174,22 @@ fun SettingsScreen(
     fun savePreference(key: String, label: String, action: suspend () -> Unit) {
         settingsActions.launch(key, label) { action(); null }
     }
+    val statusBarSaveFailure = stringResource(R.string.editor_status_bar_save_failed)
+    fun saveEditorStatusBar(enabled: Boolean) = savePreference("editor-status-bar", statusBarSaveFailure) {
+        onShowEditorStatusBar(enabled)
+    }
     fun retryMcp(server: String) { settingsActions.launch("mcp:retry:$server", "MCP retry failed") { onRetryMcp(server) } }
     fun openMcpConfig() { settingsActions.launch("mcp:config", "Could not open MCP configuration") { onOpenMcpConfig(); null } }
     var themeSaving by remember(themes) { mutableStateOf(false) }
+    var themeRevision by remember(themes) { mutableIntStateOf(0) }
     fun changeTheme(name: String) {
         if (themeSaving) return
         themeSaving = true
         scope.launchUiCatching(onError = { snackbar.showSnackbar("Could not save theme: ${it.message ?: "unknown error"}") }) {
-            try { onTheme(name) } finally { themeSaving = false }
+            try {
+                onTheme(name)
+                themeRevision++
+            } finally { themeSaving = false }
         }
     }
     fun openNotificationSettings() {
@@ -255,230 +273,146 @@ fun SettingsScreen(
             )
         }
     }
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        
-
-        val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
-        val compactHeight = maxHeight < 480.dp * fontScale
-        val twoPane = maxWidth >= 720.dp * fontScale && !compactHeight
-        val showSearchField = twoPane || selected == null || query.isNotBlank()
-        fun navigateBack() {
+    val directoryState = rememberLazyListState()
+    val focus = LocalFocusManager.current
+    val filtered = remember(query) {
+        val term = query.trim().lowercase()
+        if (term.isEmpty()) SettingsCategory.entries else SettingsCategory.entries.filter { SettingsDiscovery.matches(it.name, term) }
+    }
+    BoxWithConstraints(Modifier.fillMaxSize().droideContentMotion("settings")
+        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
+        val scale = androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f)
+        val twoPane = maxWidth >= 720.dp * scale
+        val directoryWidth = (maxWidth * .30f).coerceIn(216.dp * scale, 320.dp * scale)
+        val detailCategory = selected ?: SettingsCategory.GENERAL
+        val showDirectory = selected == null || searchingDirectory
+        val navigateBack: () -> Unit = {
             when {
+                !twoPane && searchingDirectory -> {
+                    query = ""
+                    searchingDirectory = false
+                    focus.clearFocus()
+                }
                 selectedLicenseId != null -> selectedLicenseId = null
                 legalRoute != null -> legalRoute = null
-                !twoPane && selected != null -> selected = null
+                !twoPane && selected != null -> {
+                    selected = null
+                    query = ""
+                }
                 else -> onDismiss()
             }
         }
-        BackHandler(onBack = ::navigateBack)
-
-        Scaffold(
-            modifier = Modifier.fillMaxSize().droideContentMotion("settings")
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-            snackbarHost = { DismissibleSnackbarHost(snackbar) },
-            topBar = {
-                Surface(tonalElevation = 2.dp) {
-                    // A large font or keyboard may make the controls taller than the window.
-                    // Bound and scroll the header so the settings list always retains room.
-                    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight * .5f)
-                        .verticalScroll(rememberScrollState()).statusBarsPadding()) {
-                        PreferenceReadFailureRow("Provider preferences", preferenceRead.state.failed, preferenceRead::retry)
-                        Row(
-                            Modifier.fillMaxWidth().heightIn(min = if (compactHeight) 48.dp else 56.dp).padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (!twoPane && selected != null) {
-                                IconButton(onClick = ::navigateBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Back") }
-                            } else {
-                                Spacer(Modifier.width(8.dp))
+        val openCategory: (SettingsCategory) -> Unit = { category ->
+            focus.clearFocus()
+            selected = category
+            legalRoute = null
+            selectedLicenseId = null
+            searchingDirectory = false
+            if (!twoPane) query = ""
+        }
+        BackHandler(onBack = navigateBack)
+        Scaffold(snackbarHost = { DismissibleSnackbarHost(snackbar) }, contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding).statusBarsPadding().navigationBarsPadding().imePadding()) {
+                PreferenceReadFailureRow("Provider preferences", preferenceRead.state.failed, preferenceRead::retry)
+                Row(Modifier.fillMaxSize()) {
+                    if (twoPane || showDirectory) {
+                        Column(if (twoPane) Modifier.width(directoryWidth).fillMaxHeight() else Modifier.fillMaxSize()) {
+                            SettingsToolbar(true, twoPane, navigateBack, onDismiss)
+                            SettingsDirectory(filtered, if (twoPane) detailCategory else null, twoPane, settingsScope, { settingsScope = it },
+                                query, { value ->
+                                    if (!twoPane && value.isBlank()) selected = null
+                                    query = value
+                                    searchingDirectory = value.isNotBlank()
+                                }, directoryState, openCategory, Modifier.fillMaxSize())
+                        }
+                    }
+                    if (twoPane) VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    if (twoPane || !showDirectory) Column(Modifier.weight(1f).fillMaxHeight()
+                        .then(if (twoPane) Modifier.background(MaterialTheme.colorScheme.surface) else Modifier)) {
+                        if (twoPane) {
+                            Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                ScopeSelector(settingsScope, { settingsScope = it }, Modifier.weight(1f))
+                                SettingsClose(onDismiss)
                             }
-                            Text(
-                                if (!twoPane && selected != null) selected!!.title else "Settings",
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, contentDescription = "Close settings") }
-                        }
-                        if (showSearchField) {
-                            OutlinedTextField(
-                                value = query,
-                                onValueChange = { query = it },
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compactHeight) 2.dp else 4.dp),
-                                singleLine = true,
-                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                trailingIcon = if (query.isNotEmpty()) ({ IconButton(onClick = { query = "" }) { Icon(Icons.Default.Clear, contentDescription = "Clear search") } }) else null,
-                                placeholder = { Text("Search settings") },
-                            )
-                        }
-                        ScopeSelector(settingsScope, compact = compactHeight, onSelected = { settingsScope = it })
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        } else SettingsToolbar(false, false, navigateBack, onDismiss)
+                        SettingsDetail(
+                            category = detailCategory,
+                            settingsScope = settingsScope,
+                            themes = themes,
+                            workspaceTheme = workspaceTheme,
+                            themeRevision = themeRevision,
+                            compactScope = if (twoPane) null else ({ ScopeSelector(settingsScope, { settingsScope = it }) }),
+                            formattersEnabled = fmt,
+                            formatterSaving = formatterSaving,
+                            showEditorStatusBar = showEditorStatusBar,
+                            onShowEditorStatusBar = ::saveEditorStatusBar,
+                            wordwrap = wordwrap,
+                            hardwareShortcuts = hardwareShortcuts,
+                            accessoryKeysComfortable = accessoryKeysComfortable,
+                            codingKeyboardMode = codingKeyboardMode,
+                            keyboardModeSaving = keyboardModeSaving,
+                            codeStyleDefaults = codeStyleDefaults,
+                            androidDevelopment = androidDevelopment,
+                            deviceBridge = deviceBridge,
+                            projectName = projectName,
+                            sharedWorkspace = sharedWorkspace,
+                            agentPrefs = agentPrefs,
+                            agentPreferencesReady = preferenceRead.state.ready,
+                            githubAccountState = githubAccountState,
+                            githubRepositoryAccessAvailable = githubAccount.repositoryAccessUrl() != null,
+                            permissionPolicy = permissionPolicy,
+                            legalRoute = legalRoute,
+                            selectedLicenseId = selectedLicenseId,
+                            showNestedBack = twoPane,
+                            onFormatter = ::changeFormatter,
+                            onWordwrap = { value -> savePreference("wordwrap", "Could not save word wrap") { onWordwrap(value) } },
+                            onHardwareShortcuts = { value -> savePreference("hardware-shortcuts", "Could not save hardware shortcuts") { onHardwareShortcuts(value) } },
+                            onAccessoryKeysComfortable = { value -> savePreference("comfortable-keys", "Could not save accessory keys") { onAccessoryKeysComfortable(value) } },
+                            onCodingKeyboardMode = ::changeCodingKeyboardMode,
+                            onDetectIndentation = { value -> savePreference("detect-indentation", "Could not save indent detection") { onDetectIndentation(value) } },
+                            onIndentStyle = { value -> savePreference("indent-style", "Could not save indent style") { onIndentStyle(value) } },
+                            onTabWidth = { value -> savePreference("tab-width", "Could not save tab width") { onTabWidth(value) } },
+                            onIndentSize = { value -> savePreference("indent-size", "Could not save indent size") { onIndentSize(value) } },
+                            onContinuationIndent = { value -> savePreference("continuation-indent", "Could not save continuation indent") { onContinuationIndent(value) } },
+                            onTheme = ::changeTheme,
+                            themeSaving = themeSaving,
+                            onOpenNotificationSettings = ::openNotificationSettings,
+                            onPermission = ::changePermission,
+                            permissionPending = permissionPending.keys.toSet(),
+                            actionPending = actionPending,
+                            onLegalRoute = { legalRoute = it; selectedLicenseId = null },
+                            onLicense = { selectedLicenseId = it },
+                            onLegalBack = navigateBack,
+                            onOpenOfficialLink = officialLinkActions::open,
+                            onReportBug = bugReport::open,
+                            onOpenProviders = onOpenProviders,
+                            onOpenModels = onOpenModels,
+                            onConnectGitHub = connectGitHub,
+                            onRetryGitHubState = githubAccount::retryStoredState,
+                            onManageGitHubRepositoryAccess = manageGitHubRepositoryAccess,
+                            onDisconnectGitHub = disconnectGitHub,
+                            onOpenExtensions = onOpenExtensions,
+                            onOpenFiles = onOpenFiles,
+                            onExportWorkspace = onExportWorkspace,
+                            onExportStatus = onExportStatus,
+                            onOpenTerminal = onOpenTerminal,
+                            onOpenGit = onOpenGit,
+                            onOpenRunDebug = onOpenRunDebug,
+                            onOpenAgent = onOpenAgent,
+                            onOpenAgentSessions = onOpenAgentSessions,
+                            onOpenCapabilityHealth = onOpenCapabilityHealth,
+                            onSettingsScopeChange = { settingsScope = it },
+                            mcpHealth = mcpHealth,
+                            mcpManagement = mcpManagement,
+                            skillManagement = skillManagement,
+                            onRetryMcp = ::retryMcp,
+                            onOpenMcpConfig = ::openMcpConfig,
+                            onOpenMcpPermissions = { settingsScope = SettingsScope.WORKSPACE; selected = SettingsCategory.PERMISSIONS },
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     }
                 }
-            },
-        ) { padding ->
-            val filtered = remember(query) {
-                val q = query.trim().lowercase()
-                if (q.isBlank()) SettingsCategory.entries else SettingsCategory.entries.filter {
-                    SettingsDiscovery.matches(it.name, q)
-                }
-            }
-            if (twoPane) {
-                Row(Modifier.fillMaxSize().padding(padding)) {
-                    SettingsCategoryList(
-                        categories = filtered,
-                        selected = selected,
-                        onSelect = { selected = it; legalRoute = null; selectedLicenseId = null },
-                        modifier = Modifier.widthIn(min = 220.dp, max = 310.dp).fillMaxHeight(),
-                    )
-                    VerticalDivider()
-                    SettingsDetail(
-                        category = selected ?: SettingsCategory.GENERAL,
-                        settingsScope = settingsScope,
-                        themes = themes,
-                        formattersEnabled = fmt,
-                        formatterSaving = formatterSaving,
-                        wordwrap = wordwrap,
-                        hardwareShortcuts = hardwareShortcuts,
-                        accessoryKeysComfortable = accessoryKeysComfortable,
-                        codingKeyboardMode = codingKeyboardMode,
-                        keyboardModeSaving = keyboardModeSaving,
-                        codeStyleDefaults = codeStyleDefaults,
-                        androidDevelopment = androidDevelopment,
-                        deviceBridge = deviceBridge,
-                        projectName = projectName,
-                        sharedWorkspace = sharedWorkspace,
-                        agentPrefs = agentPrefs,
-                        agentPreferencesReady = preferenceRead.state.ready,
-                        githubAccountState = githubAccountState,
-                        githubRepositoryAccessAvailable = githubAccount.repositoryAccessUrl() != null,
-                        permissionPolicy = permissionPolicy,
-                        legalRoute = legalRoute,
-                        selectedLicenseId = selectedLicenseId,
-                        showNestedBack = twoPane,
-                        onFormatter = ::changeFormatter,
-                        onWordwrap = { value -> savePreference("wordwrap", "Could not save word wrap") { onWordwrap(value) } },
-                        onHardwareShortcuts = { value -> savePreference("hardware-shortcuts", "Could not save hardware shortcuts") { onHardwareShortcuts(value) } },
-                        onAccessoryKeysComfortable = { value -> savePreference("comfortable-keys", "Could not save accessory keys") { onAccessoryKeysComfortable(value) } },
-                        onCodingKeyboardMode = ::changeCodingKeyboardMode,
-                        onDetectIndentation = { value -> savePreference("detect-indentation", "Could not save indent detection") { onDetectIndentation(value) } },
-                        onIndentStyle = { value -> savePreference("indent-style", "Could not save indent style") { onIndentStyle(value) } },
-                        onTabWidth = { value -> savePreference("tab-width", "Could not save tab width") { onTabWidth(value) } },
-                        onIndentSize = { value -> savePreference("indent-size", "Could not save indent size") { onIndentSize(value) } },
-                        onContinuationIndent = { value -> savePreference("continuation-indent", "Could not save continuation indent") { onContinuationIndent(value) } },
-                        onTheme = ::changeTheme,
-                        themeSaving = themeSaving,
-                        onOpenNotificationSettings = ::openNotificationSettings,
-                        onPermission = ::changePermission,
-                        permissionPending = permissionPending.keys.toSet(),
-                        actionPending = actionPending,
-                        onLegalRoute = { legalRoute = it; selectedLicenseId = null },
-                        onLicense = { selectedLicenseId = it },
-                        onLegalBack = ::navigateBack,
-                        onOpenOfficialLink = officialLinkActions::open,
-                        onReportBug = bugReport::open,
-                        onOpenProviders = onOpenProviders,
-                        onOpenModels = onOpenModels,
-                        onConnectGitHub = connectGitHub,
-                        onRetryGitHubState = githubAccount::retryStoredState,
-                        onManageGitHubRepositoryAccess = manageGitHubRepositoryAccess,
-                        onDisconnectGitHub = disconnectGitHub,
-                        onOpenExtensions = onOpenExtensions,
-                        onOpenFiles = onOpenFiles,
-                        onExportWorkspace = onExportWorkspace,
-                        onExportStatus = onExportStatus,
-                        onOpenTerminal = onOpenTerminal,
-                        onOpenGit = onOpenGit,
-                        onOpenRunDebug = onOpenRunDebug,
-                        onOpenAgent = onOpenAgent,
-                        onOpenAgentSessions = onOpenAgentSessions,
-                        onOpenCapabilityHealth = onOpenCapabilityHealth,
-                        onSettingsScopeChange = { settingsScope = it },
-                        mcpHealth = mcpHealth,
-                        mcpManagement = mcpManagement,
-                        skillManagement = skillManagement,
-                        onRetryMcp = ::retryMcp,
-                        onOpenMcpConfig = ::openMcpConfig,
-                        onOpenMcpPermissions = { settingsScope = SettingsScope.WORKSPACE; selected = SettingsCategory.PERMISSIONS },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    )
-                }
-            } else if (selected == null || query.isNotBlank()) {
-                SettingsCategoryList(
-                    categories = filtered,
-                    selected = null,
-                    onSelect = { selected = it; query = ""; legalRoute = null; selectedLicenseId = null },
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                )
-            } else {
-                SettingsDetail(
-                    category = selected!!,
-                    settingsScope = settingsScope,
-                    themes = themes,
-                    formattersEnabled = fmt,
-                        formatterSaving = formatterSaving,
-                    wordwrap = wordwrap,
-                    hardwareShortcuts = hardwareShortcuts,
-                    accessoryKeysComfortable = accessoryKeysComfortable,
-                    codingKeyboardMode = codingKeyboardMode,
-                    keyboardModeSaving = keyboardModeSaving,
-                    codeStyleDefaults = codeStyleDefaults,
-                    androidDevelopment = androidDevelopment,
-                    deviceBridge = deviceBridge,
-                    projectName = projectName,
-                    sharedWorkspace = sharedWorkspace,
-                    agentPrefs = agentPrefs,
-                        agentPreferencesReady = preferenceRead.state.ready,
-                    githubAccountState = githubAccountState,
-                        githubRepositoryAccessAvailable = githubAccount.repositoryAccessUrl() != null,
-                    permissionPolicy = permissionPolicy,
-                    legalRoute = legalRoute,
-                    selectedLicenseId = selectedLicenseId,
-                    showNestedBack = twoPane,
-                    onFormatter = ::changeFormatter,
-                    onWordwrap = { value -> savePreference("wordwrap", "Could not save word wrap") { onWordwrap(value) } },
-                    onHardwareShortcuts = { value -> savePreference("hardware-shortcuts", "Could not save hardware shortcuts") { onHardwareShortcuts(value) } },
-                    onAccessoryKeysComfortable = { value -> savePreference("comfortable-keys", "Could not save accessory keys") { onAccessoryKeysComfortable(value) } },
-                    onCodingKeyboardMode = ::changeCodingKeyboardMode,
-                    onDetectIndentation = { value -> savePreference("detect-indentation", "Could not save indent detection") { onDetectIndentation(value) } },
-                    onIndentStyle = { value -> savePreference("indent-style", "Could not save indent style") { onIndentStyle(value) } },
-                    onTabWidth = { value -> savePreference("tab-width", "Could not save tab width") { onTabWidth(value) } },
-                    onIndentSize = { value -> savePreference("indent-size", "Could not save indent size") { onIndentSize(value) } },
-                    onContinuationIndent = { value -> savePreference("continuation-indent", "Could not save continuation indent") { onContinuationIndent(value) } },
-                    onTheme = ::changeTheme,
-                    themeSaving = themeSaving,
-                    onOpenNotificationSettings = ::openNotificationSettings,
-                    onPermission = ::changePermission,
-                    permissionPending = permissionPending.keys.toSet(),
-                        actionPending = actionPending,
-                    onLegalRoute = { legalRoute = it; selectedLicenseId = null },
-                    onLicense = { selectedLicenseId = it },
-                    onLegalBack = ::navigateBack,
-                    onOpenOfficialLink = officialLinkActions::open,
-                        onReportBug = bugReport::open,
-                    onOpenProviders = onOpenProviders,
-                    onOpenModels = onOpenModels,
-                    onConnectGitHub = connectGitHub,
-                        onRetryGitHubState = githubAccount::retryStoredState,
-                    onManageGitHubRepositoryAccess = manageGitHubRepositoryAccess,
-                    onDisconnectGitHub = disconnectGitHub,
-                    onOpenExtensions = onOpenExtensions,
-                    onOpenFiles = onOpenFiles,
-                    onExportWorkspace = onExportWorkspace,
-                    onExportStatus = onExportStatus,
-                    onOpenTerminal = onOpenTerminal,
-                    onOpenGit = onOpenGit,
-                    onOpenRunDebug = onOpenRunDebug,
-                    onOpenAgent = onOpenAgent,
-                    onOpenAgentSessions = onOpenAgentSessions,
-                    onOpenCapabilityHealth = onOpenCapabilityHealth,
-                    onSettingsScopeChange = { settingsScope = it },
-                    mcpHealth = mcpHealth,
-                    mcpManagement = mcpManagement,
-                    skillManagement = skillManagement,
-                    onRetryMcp = ::retryMcp,
-                    onOpenMcpConfig = ::openMcpConfig,
-                    onOpenMcpPermissions = { settingsScope = SettingsScope.WORKSPACE; selected = SettingsCategory.PERMISSIONS },
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                )
             }
         }
     }
@@ -486,49 +420,13 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun ScopeSelector(scope: SettingsScope, compact: Boolean = false, onSelected: (SettingsScope) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compact) 4.dp else 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(selected = scope == SettingsScope.USER, onClick = { onSelected(SettingsScope.USER) }, label = { Text("User") })
-        FilterChip(selected = scope == SettingsScope.WORKSPACE, onClick = { onSelected(SettingsScope.WORKSPACE) }, label = { Text("Workspace") })
-    }
-}
-
-@Composable
-private fun SettingsCategoryList(
-    categories: List<SettingsCategory>,
-    selected: SettingsCategory?,
-    onSelect: (SettingsCategory) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LazyColumn(modifier, contentPadding = PaddingValues(vertical = 8.dp)) {
-        if (categories.isEmpty()) item {
-            Column(Modifier.fillMaxWidth().padding(24.dp)) {
-                Text("No matching settings", style = MaterialTheme.typography.titleMedium)
-                Text("Try a different search.", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        items(categories, key = { it.name }) { category ->
-            ListItem(
-                headlineContent = { Text(category.title) },
-                supportingContent = { Text(category.subtitle, maxLines = 1) },
-                leadingContent = { Icon(category.icon, contentDescription = null) },
-                trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
-                colors = ListItemDefaults.colors(containerColor = if (category == selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
-                modifier = Modifier.heightIn(min = 48.dp).selectable(selected = selected == category, role = Role.Button) { onSelect(category) },
-            )
-        }
-    }
-}
-
-@Composable
 private fun SettingsDetail(
     category: SettingsCategory,
     settingsScope: SettingsScope,
     themes: ThemeManager,
+    workspaceTheme: DroideThemeSnapshot?,
+    themeRevision: Int,
+    compactScope: (@Composable () -> Unit)?,
     formattersEnabled: Boolean,
     formatterSaving: Boolean,
     wordwrap: Boolean,
@@ -550,6 +448,8 @@ private fun SettingsDetail(
     selectedLicenseId: String?,
     showNestedBack: Boolean,
     onFormatter: (Boolean) -> Unit,
+    showEditorStatusBar: Boolean,
+    onShowEditorStatusBar: (Boolean) -> Unit,
     onWordwrap: (Boolean) -> Unit,
     onHardwareShortcuts: (Boolean) -> Unit,
     onAccessoryKeysComfortable: (Boolean) -> Unit,
@@ -596,7 +496,11 @@ private fun SettingsDetail(
     modifier: Modifier = Modifier,
 ) {
     if (category == SettingsCategory.ABOUT && legalRoute != null) {
-        LegalSettingsContent(legalRoute, selectedLicenseId, onLicense, onLegalBack, onOpenOfficialLink, showNestedBack, modifier.droideContentMotion(Pair(legalRoute, selectedLicenseId)))
+        Column(modifier) {
+            compactScope?.invoke()
+            LegalSettingsContent(legalRoute, selectedLicenseId, onLicense, onLegalBack, onOpenOfficialLink, showNestedBack,
+                Modifier.fillMaxSize().droideContentMotion(Pair(legalRoute, selectedLicenseId)))
+        }
         return
     }
     // Category and scope own their scroll state. Do not reveal a new page at the old page's
@@ -605,9 +509,12 @@ private fun SettingsDetail(
         androidx.compose.foundation.ScrollState(0)
     }
     Column(modifier.droideContentMotion(Pair(category, settingsScope)).verticalScroll(detailScroll).padding(horizontal = 20.dp, vertical = 16.dp)) {
-        Text(category.title, style = MaterialTheme.typography.headlineSmall)
-        Text(category.subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(16.dp))
+        SettingsTitle(category.title)
+        if (compactScope != null) compactScope()
+        if (category != SettingsCategory.EDITOR && category != SettingsCategory.APPEARANCE) {
+            Text(category.subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(10.dp))
         when (category) {
             SettingsCategory.GENERAL -> {
                 SectionTitle("Workbench")
@@ -616,30 +523,32 @@ private fun SettingsDetail(
                 InfoRow("Session restoration", "Preserves editor, terminal and Agent state")
             }
             SettingsCategory.APPEARANCE -> {
-                SectionTitle("Theme")
+                val snapshot = workspaceTheme ?: remember(themes, themeRevision) { themes.snapshot() }
+                Text(stringResource(R.string.settings_workspace_theme), style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                SettingsCodePreview(snapshot.editor, codeStyleDefaults, wordwrap)
                 if (settingsScope == SettingsScope.WORKSPACE) {
-                    Column(Modifier.selectableGroup()) {
-                        themes.list().forEach { theme -> ChoiceRow(theme.name, theme.name == themes.current().name, enabled = !themeSaving) { onTheme(theme.name) } }
-                    }
+                    SettingsThemeChoices(themes, snapshot.name, !themeSaving, onTheme)
                     InfoRow("Storage", ".droide/theme.json")
                 } else ActionRow("Switch to Workspace settings", "Store theme for this workspace", { onSettingsScopeChange(SettingsScope.WORKSPACE) })
             }
             SettingsCategory.EDITOR -> {
                 if (settingsScope == SettingsScope.USER) {
-                    SectionTitle("Text editor")
-                    SwitchRow("Word wrap", "Wrap editor lines; large-file mode keeps wrapping off for responsiveness", wordwrap, onWordwrap, enabled = "wordwrap" !in actionPending)
-                    SwitchRow("Detect indentation", "Detect tabs, spaces and width from the file", codeStyleDefaults.detectIndentation, onDetectIndentation, enabled = "detect-indentation" !in actionPending)
-                    SectionTitle("Default indentation")
-                    Column(Modifier.selectableGroup()) {
-                    ChoiceRow("Spaces", codeStyleDefaults.indentStyle == IndentStyle.SPACES, enabled = "indent-style" !in actionPending) { onIndentStyle(IndentStyle.SPACES) }
-                    ChoiceRow("Tabs", codeStyleDefaults.indentStyle == IndentStyle.TABS, enabled = "indent-style" !in actionPending) { onIndentStyle(IndentStyle.TABS) }
-                    }
-                    Text("Tab width", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(2, 4, 8).forEach { n -> FilterChip(selected = codeStyleDefaults.tabWidth == n, enabled = "tab-width" !in actionPending, onClick = { onTabWidth(n) }, label = { Text(n.toString()) }) } }
-                    Text("Indent size", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(2, 4, 8).forEach { n -> FilterChip(selected = codeStyleDefaults.indentSize == n, enabled = "indent-size" !in actionPending, onClick = { onIndentSize(n) }, label = { Text(n.toString()) }) } }
-                    Text("Continuation indent", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(4, 8, 12).forEach { n -> FilterChip(selected = codeStyleDefaults.continuationIndent == n, enabled = "continuation-indent" !in actionPending, onClick = { onContinuationIndent(n) }, label = { Text(n.toString()) }) } }
+                    val snapshot = workspaceTheme ?: remember(themes, themeRevision) { themes.snapshot() }
+                    SettingsCodePreview(snapshot.editor, codeStyleDefaults, wordwrap)
+                    SectionTitle(stringResource(R.string.settings_display))
+                    SwitchRow("Word wrap", "Wrap long lines in the editor. Large files use horizontal scrolling.", wordwrap, onWordwrap, enabled = "wordwrap" !in actionPending)
+                    SwitchRow(stringResource(R.string.editor_show_android_status_bar), stringResource(R.string.editor_show_android_status_bar_summary),
+                        showEditorStatusBar, onShowEditorStatusBar, enabled = "editor-status-bar" !in actionPending)
+                    SectionTitle(stringResource(R.string.settings_indentation))
+                    SwitchRow("Detect indentation", "Read the indentation from the current file", codeStyleDefaults.detectIndentation,
+                        onDetectIndentation, enabled = "detect-indentation" !in actionPending)
+                    SettingsIndentStyle(codeStyleDefaults.indentStyle, "indent-style" !in actionPending, onIndentStyle)
+                    SettingsNumberChoice("Indent size", codeStyleDefaults.indentSize, listOf(2, 4, 8), "indent-size" !in actionPending, onIndentSize)
+                    SettingsNumberChoice("Tab width", codeStyleDefaults.tabWidth, listOf(2, 4, 8), "tab-width" !in actionPending, onTabWidth)
+                    SettingsNumberChoice("Continuation indent", codeStyleDefaults.continuationIndent, listOf(4, 8, 12),
+                        "continuation-indent" !in actionPending, onContinuationIndent)
                     InfoRow("Authority", ".editorconfig > detected style > user defaults")
                     InfoRow("Smart typing & completion", "Follows the active language and LSP")
                 } else {
@@ -1031,6 +940,7 @@ private fun OfficialLinkRow(link: SettingsOfficialLink, onOpen: (SettingsOfficia
 @Composable
 private fun OpenSourceLicenseList(manifest: OpenSourceLicenseManifest, onLicense: (String) -> Unit, onBack: () -> Unit, showBackHeader: Boolean, modifier: Modifier) {
     var query by rememberSaveable { mutableStateOf("") }
+    var searchingDirectory by rememberSaveable { mutableStateOf(false) }
     val visible = remember(query, manifest) {
         val q = query.trim().lowercase()
         if (q.isBlank()) manifest.entries else manifest.entries.filter {
@@ -1098,7 +1008,7 @@ private fun LegalPageTitle(title: String, onBack: () -> Unit, showBackHeader: Bo
 }
 
 @Composable private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.semantics { heading() }.padding(top = 16.dp, bottom = 8.dp))
+    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.semantics { heading() }.padding(top = 16.dp, bottom = 6.dp))
 }
 
 @Composable private fun ScopeNotice(actual: SettingsScope, required: SettingsScope, text: String) {
@@ -1118,15 +1028,21 @@ private fun LegalPageTitle(title: String, onBack: () -> Unit, showBackHeader: Bo
 }
 
 @Composable private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit, enabled: Boolean = true) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
-        trailingContent = { Switch(checked = checked, onCheckedChange = null, enabled = enabled) },
-        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChecked),
-    )
-    HorizontalDivider()
+    val colors = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp)
+        .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChecked)
+        .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled, colors = SwitchDefaults.colors(
+            checkedTrackColor = colors.primary, checkedThumbColor = colors.onPrimary,
+            uncheckedTrackColor = colors.surfaceVariant, uncheckedThumbColor = colors.onSurfaceVariant,
+            uncheckedBorderColor = colors.outlineVariant,
+        ))
+    }
+    HorizontalDivider(color = colors.outlineVariant)
 }
 
 @Composable private fun CodingKeyboardSettings(
@@ -1194,11 +1110,4 @@ private fun LegalPageTitle(title: String, onBack: () -> Unit, showBackHeader: Bo
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick),
     )
     HorizontalDivider()
-}
-
-@Composable private fun ChoiceRow(title: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = { if (!selected) onClick() }).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        RadioButton(selected, onClick = null, enabled = enabled)
-        Text(title, Modifier.padding(start = 8.dp))
-    }
 }

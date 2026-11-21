@@ -9,6 +9,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 
+internal enum class EditorRecoveryAvailability { LOADING, READY, READ_FAILED }
+
 internal enum class EditorSaveIssueKind { NOT_SAVED, NEWER_EDITS, SYNCHRONIZATION_PENDING, CAPTURE_FAILED, DOCUMENT_CHANGED }
 
 internal data class EditorSaveIssue(val path: String, val kind: EditorSaveIssueKind, val cause: Throwable)
@@ -98,6 +100,17 @@ internal class EditorSaveCoordinator(
                 else "Saved file still has pending work; retry Save or resolve the reported synchronization error"))
         }
         EditorSaveReport(issues = issues.distinctBy { it.path to it.kind }, warnings = warnings)
+    }
+
+    suspend fun prepareExecution(
+        recovery: EditorRecoveryAvailability,
+        persistRecovery: suspend () -> Unit,
+    ): EditorSaveReport = when (recovery) {
+        EditorRecoveryAvailability.READY -> saveAllBefore(persistRecovery)
+        EditorRecoveryAvailability.READ_FAILED -> readiness()
+        EditorRecoveryAvailability.LOADING -> EditorSaveReport(issues = listOf(
+            EditorSaveIssue("editor recovery", EditorSaveIssueKind.NOT_SAVED, IllegalStateException("Editor recovery is loading")),
+        ))
     }
 
     suspend fun saveAllBefore(prepare: suspend () -> Unit): EditorSaveReport {

@@ -14,12 +14,19 @@ internal object WorkspaceMcpServers {
         mapper: WorkspacePathMapper,
         processHost: StdioProcessHost,
     ): JsonArray {
-        val servers = McpManager(projectRoot, AgentPluginSource.EMPTY).list().filter { it.enabled }.take(MAX_EXTERNAL_MCP_SERVERS)
+        val servers = McpManager(projectRoot, AgentPluginSource.EMPTY).list().filter { it.enabled }
+        val executables = mutableMapOf<String, String?>()
+        suspend fun resolve(command: String): String? {
+            if (!executables.containsKey(command)) {
+                executables[command] = runSuspendCatching { processHost.resolveExecutable(command) }.getOrNull()
+            }
+            return executables[command]
+        }
         // Local CLI processes share the workspace-bound Unix socket. An ADB guest does not.
         val binding = if (processHost.executionScope == ProcessExecutionScope.LOCAL_LINUX_ARM64)
             ExternalIdeToolRegistry.forProject(projectRoot) else null
-        val cli = binding?.let { processHost.resolveExecutable("droide") }
-        val shell = cli?.let { processHost.resolveExecutable("sh") }
+        val cli = binding?.let { resolve("droide") }
+        val shell = cli?.let { resolve("sh") }
         return buildJsonArray {
             if (binding != null && cli != null && shell != null) {
                 val existing = servers.mapTo(hashSetOf()) { it.name.take(80) }
@@ -28,18 +35,20 @@ internal object WorkspaceMcpServers {
                 while (name in existing) name = "droide-ide-${suffix++}"
                 add(ExternalIdeProtocol.configuration(binding, cli, shell, name))
             }
-            servers.forEach { server ->
-                val executable = runSuspendCatching { processHost.resolveExecutable(server.argv.first()) }.getOrNull()
-                    ?: return@forEach
-                val args = mutableListOf<String>()
-                for (raw in server.argv.drop(1)) args += mapArgument(projectRoot, raw, mapper) ?: return@forEach
-                if (runCatching { ProcessSecurityPolicy.validateArgv(listOf(executable) + args) }.isFailure) return@forEach
+            var projected = 0
+            for (server in servers) {
+                if (projected == MAX_EXTERNAL_MCP_SERVERS) break
+                val executable = resolve(server.argv.first()) ?: continue
+                val args = server.argv.drop(1).mapNotNull { mapArgument(projectRoot, it, mapper) }
+                if (args.size != server.argv.size - 1) continue
+                if (runCatching { ProcessSecurityPolicy.validateArgv(listOf(executable) + args) }.isFailure) continue
                 add(buildJsonObject {
                     put("name", server.name.take(80))
                     put("command", executable)
                     put("args", JsonArray(args.map(::JsonPrimitive)))
                     put("env", JsonArray(emptyList()))
                 })
+                projected++
             }
         }
     }

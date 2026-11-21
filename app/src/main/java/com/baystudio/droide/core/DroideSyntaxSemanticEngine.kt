@@ -60,6 +60,7 @@ object DroideSyntaxSemanticEngine {
     fun highlight(text: String, languageId: String, semanticTokens: List<LspSemanticToken> = emptyList()): DroideHighlightResult {
         val lineCount = text.count { it == '\n' } + 1
         if (text.length > MAX_HIGHLIGHT_CHARS) return DroideHighlightResult(lineCount, emptyList(), skippedForSize = true)
+        if (languageId == "plaintext") return DroideHighlightResult(lineCount, emptyList())
         val lines = text.split('\n')
         val declarativeSpans = DeclarativeTextMateRegistry.highlight(text, languageId, MAX_HIGHLIGHT_SPANS)
             ?: if (languageId == "properties") JavaPropertiesHighlighting.highlight(text, MAX_HIGHLIGHT_SPANS)
@@ -76,17 +77,25 @@ object DroideSyntaxSemanticEngine {
                 }
             }
         }
-        if (semanticTokens.isNotEmpty() && spans.size < MAX_HIGHLIGHT_SPANS) {
-            for (token in semanticTokens) {
-                if (spans.size >= MAX_HIGHLIGHT_SPANS) break
-                val line = lines.getOrNull(token.line) ?: continue
-                val start = token.startCharacter.coerceIn(0, line.length)
-                val end = (start + token.length).coerceIn(start, line.length)
-                if (end <= start) continue
-                spans += semanticSpan(token, start, end)
-            }
+        val lexical = DroideHighlightResult(lineCount, spans)
+        return if (semanticTokens.isEmpty()) lexical else withSemanticTokens(lexical, lines, semanticTokens)
+    }
+
+    internal fun withSemanticTokens(lexical: DroideHighlightResult, lines: List<String>, tokens: List<LspSemanticToken>): DroideHighlightResult {
+        if (lexical.skippedForSize || tokens.isEmpty() || lexical.spans.size >= MAX_HIGHLIGHT_SPANS) return lexical
+        val overlay = ArrayList<DroideHighlightSpan>()
+        for (token in tokens) {
+            if (lexical.spans.size + overlay.size >= MAX_HIGHLIGHT_SPANS) break
+            val line = lines.getOrNull(token.line) ?: continue
+            val start = token.startCharacter
+            val contentLength = line.length - if (line.endsWith('\r')) 1 else 0
+            if (start !in 0 until contentLength || token.length !in 1..(contentLength - start)) continue
+            val end = start + token.length
+            if ((start > 0 && line[start].isLowSurrogate() && line[start - 1].isHighSurrogate()) ||
+                (end < contentLength && line[end].isLowSurrogate() && line[end - 1].isHighSurrogate())) continue
+            semanticSpan(token, start, end)?.let(overlay::add)
         }
-        return DroideHighlightResult(lineCount, spans)
+        return if (overlay.isEmpty()) lexical else lexical.copy(spans = lexical.spans + overlay)
     }
 
     private fun scanLine(
@@ -100,7 +109,7 @@ object DroideSyntaxSemanticEngine {
         when (family) {
             Family.HTML -> scanHtml(line, lineIndex, state, out)
             Family.MARKDOWN -> scanMarkdown(line, lineIndex, out)
-            Family.JSON -> scanJson(line, lineIndex, out)
+            Family.JSON -> scanJson(line, lineIndex, languageId == "jsonc", state, out)
             Family.YAML -> scanYaml(line, lineIndex, out)
             else -> scanCode(line, lineIndex, languageId, family, state, out)
         }
@@ -157,8 +166,7 @@ object DroideSyntaxSemanticEngine {
                 add(i, end, DroideHighlightKind.STRING); i = end; continue
             }
             if (ch.isDigit()) {
-                var j = i + 1
-                while (j < line.length && (line[j].isLetterOrDigit() || line[j] in "._xXbBoO+-")) j++
+                val j = numberEnd(line, i)
                 add(i, j, DroideHighlightKind.NUMBER); i = j; continue
             }
             if (ch == '@' && i + 1 < line.length && isIdentifierStart(line[i + 1])) {
@@ -227,18 +235,33 @@ object DroideSyntaxSemanticEngine {
         }
     }
 
-    private fun scanJson(line: String, lineIndex: Int, out: MutableList<DroideHighlightSpan>) {
+    private fun scanJson(line: String, lineIndex: Int, comments: Boolean, state: State, out: MutableList<DroideHighlightSpan>) {
         var i = 0
         fun add(a: Int, b: Int, k: DroideHighlightKind) { if (b > a && out.size < MAX_HIGHLIGHT_SPANS) out += DroideHighlightSpan(lineIndex, a, b, k) }
-        while (i < line.length) {
+        if (comments && state.blockComment != null) {
+            val end = line.indexOf("*/")
+            if (end < 0) { add(0, line.length, DroideHighlightKind.COMMENT); return }
+            i = end + 2
+            add(0, i, DroideHighlightKind.COMMENT)
+            state.blockComment = null
+        }
+        while (i < line.length && out.size < MAX_HIGHLIGHT_SPANS) {
             val ch = line[i]
-            if (ch == '"') {
+            if (comments && line.startsWith("//", i)) {
+                add(i, line.length, DroideHighlightKind.COMMENT)
+                break
+            } else if (comments && line.startsWith("/*", i)) {
+                val end = line.indexOf("*/", i + 2)
+                if (end < 0) { add(i, line.length, DroideHighlightKind.COMMENT); state.blockComment = "*/"; break }
+                add(i, end + 2, DroideHighlightKind.COMMENT)
+                i = end + 2
+            } else if (ch == '"') {
                 val e = scanQuoted(line, i, ch)
                 var k = e; while (k < line.length && line[k].isWhitespace()) k++
                 add(i, e, if (k < line.length && line[k] == ':') DroideHighlightKind.PROPERTY else DroideHighlightKind.STRING)
                 i = e
             } else if (ch.isDigit() || (ch == '-' && i + 1 < line.length && line[i + 1].isDigit())) {
-                var j = i + 1; while (j < line.length && (line[j].isDigit() || line[j] in ".eE+-")) j++
+                val j = numberEnd(line, if (ch == '-') i + 1 else i, json = true)
                 add(i, j, DroideHighlightKind.NUMBER); i = j
             } else if (line.startsWith("true", i) || line.startsWith("false", i) || line.startsWith("null", i)) {
                 val len = when { line.startsWith("false", i) -> 5; line.startsWith("true", i) -> 4; else -> 4 }
@@ -248,21 +271,39 @@ object DroideSyntaxSemanticEngine {
     }
 
     private fun scanYaml(line: String, lineIndex: Int, out: MutableList<DroideHighlightSpan>) {
-        val comment = line.indexOf('#').takeIf { it >= 0 && (it == 0 || line[it - 1] != '\\') }
-        val codeEnd = comment ?: line.length
-        val colon = line.indexOf(':').takeIf { it in 1 until codeEnd }
-        if (colon != null) {
+        var i = 0
+        var colon = -1
+        while (i < line.length && out.size < MAX_HIGHLIGHT_SPANS) {
+            val ch = line[i]
+            if (ch == '#' && (i == 0 || line[i - 1].isWhitespace())) {
+                out += DroideHighlightSpan(lineIndex, i, line.length, DroideHighlightKind.COMMENT)
+                break
+            }
+            if (ch == ':' && colon < 0 && (i + 1 == line.length || line[i + 1].isWhitespace())) colon = i
+            if (ch == '\'' || ch == '"') {
+                val e = if (ch == '"') scanQuoted(line, i, ch) else yamlSingleQuoteEnd(line, i)
+                out += DroideHighlightSpan(lineIndex, i, e, DroideHighlightKind.STRING)
+                i = e
+            } else if (ch.isDigit()) {
+                val j = numberEnd(line, i)
+                out += DroideHighlightSpan(lineIndex, i, j, DroideHighlightKind.NUMBER)
+                i = j
+            } else i++
+        }
+        if (colon > 0 && out.size < MAX_HIGHLIGHT_SPANS) {
             val start = line.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
             if (start < colon) out += DroideHighlightSpan(lineIndex, start, colon, DroideHighlightKind.PROPERTY)
         }
-        var i = 0
-        while (i < codeEnd && out.size < MAX_HIGHLIGHT_SPANS) {
-            val ch = line[i]
-            if (ch == '\'' || ch == '"') { val e = minOf(scanQuoted(line, i, ch), codeEnd); out += DroideHighlightSpan(lineIndex, i, e, DroideHighlightKind.STRING); i = e }
-            else if (ch.isDigit()) { var j=i+1; while(j<codeEnd && (line[j].isDigit()||line[j] in ".-+")) j++; out += DroideHighlightSpan(lineIndex,i,j,DroideHighlightKind.NUMBER); i=j }
-            else i++
+    }
+
+    private fun yamlSingleQuoteEnd(line: String, start: Int): Int {
+        var i = start + 1
+        while (i < line.length) {
+            if (line[i++] != '\'') continue
+            if (i == line.length || line[i] != '\'') return i
+            i++
         }
-        if (comment != null) out += DroideHighlightSpan(lineIndex, comment, line.length, DroideHighlightKind.COMMENT)
+        return line.length
     }
 
     private fun scanMarkdown(line: String, lineIndex: Int, out: MutableList<DroideHighlightSpan>) {
@@ -285,7 +326,7 @@ object DroideSyntaxSemanticEngine {
         }
     }
 
-    private fun semanticSpan(token: LspSemanticToken, start: Int, end: Int): DroideHighlightSpan {
+    private fun semanticSpan(token: LspSemanticToken, start: Int, end: Int): DroideHighlightSpan? {
         val kind = when (token.type) {
             "keyword", "modifier" -> DroideHighlightKind.KEYWORD
             "comment" -> DroideHighlightKind.COMMENT
@@ -297,8 +338,8 @@ object DroideSyntaxSemanticEngine {
             "type", "class", "enum", "interface", "struct", "typeParameter", "namespace" -> DroideHighlightKind.TYPE
             "property", "enumMember", "event", "tomlArrayKey", "tomlTableKey" -> DroideHighlightKind.PROPERTY
             "decorator" -> DroideHighlightKind.ANNOTATION
-            "parameter", "variable" -> DroideHighlightKind.VARIABLE
-            else -> DroideHighlightKind.NORMAL
+            "parameter", "variable", "label" -> DroideHighlightKind.VARIABLE
+            else -> return null
         }
         val mods = token.modifiers
         return DroideHighlightSpan(
@@ -346,6 +387,11 @@ object DroideSyntaxSemanticEngine {
     }
 
     private fun isIdentifierStart(c: Char) = c == '_' || c.isLetter()
+    private val codeNumber = Regex("""(?:0[xX][0-9a-fA-F_]+(?:\.[0-9a-fA-F_]+)?(?:[pP][+-]?[0-9_]+)?|0[bB][01_]+|0[oO][0-7_]+|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9][0-9_]*)?)(?:[uU](?:[lL]{1,2})?|[lL]{1,2}[uU]?|[fFdDnN])?(?![A-Za-z0-9_])""")
+    private val decimalNumber = Regex("""[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?""")
+    private fun numberEnd(line: String, start: Int, json: Boolean = false): Int =
+        (if (json) decimalNumber else codeNumber).matchAt(line, start)?.range?.last?.plus(1)
+            ?: decimalNumber.matchAt(line, start)?.range?.last?.plus(1) ?: start + 1
     private fun isIdentifierPart(c: Char) = c == '_' || c == '$' || c.isLetterOrDigit()
 
     private fun family(id: String): Family = when (id) {
@@ -355,7 +401,7 @@ object DroideSyntaxSemanticEngine {
         "lua" -> Family.LUA
         "html", "xml", "vue", "svelte" -> Family.HTML
         "css", "scss", "less" -> Family.CSS
-        "json" -> Family.JSON
+        "json", "jsonc" -> Family.JSON
         "yaml" -> Family.YAML
         "markdown" -> Family.MARKDOWN
         "clojure" -> Family.LISP

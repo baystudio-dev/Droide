@@ -157,4 +157,25 @@ class McpManagementTest {
         assertTrue(WorkspaceMcpServers.project(root, mapper, host).isEmpty())
         assertTrue(host.processes.isEmpty())
     }
+
+    @Test fun externalSessionsKeepEligibleServersAfterMissingCommands() = fixture {
+        val config = buildJsonObject {
+            for (i in 0..19) put("server-" + i.toString().padStart(2, '0'), buildJsonObject {
+                put("command", if (i < 16) "missing" else "available")
+            })
+        }
+        root.resolve(".droide").mkdirs()
+        root.resolve(".droide/mcp.json").writeText(buildJsonObject { put("servers", config) }.toString())
+        val lookups = mutableListOf<String>()
+        val selective = object : StdioProcessHost by host {
+            override suspend fun resolveExecutable(command: String): String? {
+                lookups += command
+                return command.takeIf { it == "available" }
+            }
+        }
+        val projected = WorkspaceMcpServers.project(root, WorkspacePathMapper(root, "/workspace/project"), selective)
+        assertEquals((16..19).map { "server-" + it }, projected.map { it.jsonObject.getValue("name").jsonPrimitive.content })
+        assertEquals(listOf("missing", "available"), lookups)
+        assertTrue(host.processes.isEmpty())
+    }
 }

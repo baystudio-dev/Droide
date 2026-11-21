@@ -3,6 +3,8 @@ package com.baystudio.droide.ui
 import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
@@ -13,6 +15,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import org.junit.After
 import org.junit.Before
@@ -52,7 +56,8 @@ class SettingsControlsWorkflowTest {
     @After fun cleanup() { terminals.dispose(false); bridge.close(); scope.cancel(); PathSecurity.deleteTreeNoFollow(root) }
 
     private fun mount(
-        themeAction: suspend (String) -> Unit = {},
+        themeAction: suspend (String) -> Unit = { ThemeManager(root).select(it) },
+        fontScale: Float = 1f,
         permissionAction: suspend (String, PermEffect) -> PermissionPolicyDocument = { _, _ -> PermissionPolicyDocument.EMPTY },
         category: String? = null,
         launchContext: android.content.Context? = null,
@@ -64,18 +69,100 @@ class SettingsControlsWorkflowTest {
         val themes = ThemeManager(root)
         val formatter = FormatterManager(root, terminals)
         val github = GitHubAccountManager(app)
-        compose.setContent { androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalContext provides (launchContext ?: app)) { DroideTheme { Box(Modifier.size(size.value.first, size.value.second)) {
+        compose.setContent { androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.ui.platform.LocalContext provides (launchContext ?: androidx.compose.ui.platform.LocalContext.current),
+            androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(androidx.compose.ui.platform.LocalDensity.current.density, fontScale),
+        ) { DroideTheme { Box(Modifier.size(size.value.first, size.value.second)) {
             renderingView = androidx.compose.ui.platform.LocalView.current
+            val context = app
+            val workbench = remember(context) { WorkbenchPreferences.flow(context) }.collectAsState(WorkbenchPreferences.Snapshot())
             if (mounted.value) SettingsScreen(themes, formatter, wrap.value, false, true, CodingKeyboardMode.COMPACT,
-                CodeStyleDefaults(), development, bridge, github, "Motion project", PermissionPolicyDocument.EMPTY,
+                workbench.value.codeStyleDefaults, development, bridge, github, "Motion project", initialPermissionPolicy = PermissionPolicyDocument.EMPTY,
+                showEditorStatusBar = workbench.value.showEditorStatusBar,
+                onShowEditorStatusBar = { WorkbenchPreferences.setShowEditorStatusBar(context, it) },
                 onWordwrap = wordwrapAction, onHardwareShortcuts = {}, onAccessoryKeysComfortable = {},
-                onCodingKeyboardMode = {}, onDetectIndentation = {}, onIndentStyle = {}, onTabWidth = {},
-                onIndentSize = {}, onContinuationIndent = {}, onTheme = themeAction, onPermissionRuleChange = permissionAction,
+                onCodingKeyboardMode = {}, onDetectIndentation = { WorkbenchPreferences.setDetectIndentation(context, it) },
+                onIndentStyle = { WorkbenchPreferences.setIndentStyle(context, it) }, onTabWidth = { WorkbenchPreferences.setTabWidth(context, it) },
+                onIndentSize = { WorkbenchPreferences.setIndentSize(context, it) }, onContinuationIndent = { WorkbenchPreferences.setContinuationIndent(context, it) }, onTheme = themeAction, onPermissionRuleChange = permissionAction,
                 onOpenProviders = { opened.add("providers") }, onOpenModels = { opened.add("models") }, onOpenExtensions = { opened.add("extensions") }, onOpenFiles = { opened.add("files") },
                 onOpenTerminal = { opened.add("terminal") }, onOpenGit = { opened.add("git") }, onOpenRunDebug = { opened.add("run") }, onOpenAgent = { opened.add("agent") },
                 onOpenAgentSessions = { opened.add("sessions") }, onOpenCapabilityHealth = { opened.add("health") }, mcpHealth = health,
                 onRetryMcp = retryAction, onOpenMcpConfig = configAction, initialCategoryName = category, onDismiss = { closes++; mounted.value = false })
         } } } }
+    }
+
+    @Test
+    @Config(qualifiers = "w390dp-h844dp-port-mdpi")
+    fun phoneDirectoryAndEditorPreviewFollowTheSameNavigation() {
+        size.value = 390.dp to 844.dp
+        mount()
+        compose.onNodeWithText("Workbench").assertIsDisplayed()
+        compose.onNodeWithText("Development").assertIsDisplayed()
+        screenshot("phone-directory")
+        compose.onNodeWithText("Editor").performClick()
+        compose.onNodeWithContentDescription("Kotlin code preview, main.kt").assertIsDisplayed()
+        screenshot("phone-editor")
+        compose.onNodeWithText("Indent size").performScrollTo().performClick()
+        compose.onNode(hasText("8") and hasAnyAncestor(isPopup())).performClick()
+        compose.waitUntil { runBlocking { WorkbenchPreferences.flow(app).first().indentSize == 8 } }
+        compose.onNodeWithText("Tabs").performScrollTo().performClick()
+        compose.waitUntil { runBlocking { WorkbenchPreferences.flow(app).first().indentStyle == IndentStyle.TABS } }
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Search settings").assertIsDisplayed()
+    }
+
+    @Test fun workspaceThemeCanBePreviewedSavedAndReopened() {
+        mount(category = "APPEARANCE")
+        compose.onNodeWithText("Workspace", useUnmergedTree = true).performClick()
+        compose.waitUntil { compose.onAllNodesWithText("Droide Dark").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Droide Dark").assertIsSelected()
+        screenshot("tablet-appearance")
+        compose.onNodeWithText("Tokyo Night").performScrollTo().performClick()
+        compose.waitUntil { ThemeManager(root).current().name == "tokyonight" }
+        compose.onNodeWithText("Tokyo Night").assertIsSelected()
+        compose.runOnIdle { mounted.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { mounted.value = true }
+        compose.onNodeWithText("Workspace", useUnmergedTree = true).performClick()
+        compose.waitUntil { compose.onAllNodesWithText("Tokyo Night").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Tokyo Night").assertIsSelected()
+    }
+
+    @Test fun rotationKeepsTheSelectedPageAndWorkspaceScope() {
+        size.value = 360.dp to 640.dp
+        mount()
+        compose.onNodeWithText("Workspace", useUnmergedTree = true).performClick()
+        compose.onNodeWithText("Editor").performClick()
+        compose.onNodeWithText("External formatter fallback").assertIsDisplayed()
+        compose.runOnIdle { size.value = 850.dp to 360.dp }
+        compose.onNodeWithText("Search settings").assertIsDisplayed()
+        compose.onNodeWithText("External formatter fallback").assertIsDisplayed()
+        screenshot("phone-landscape")
+        compose.runOnIdle { size.value = 360.dp to 640.dp }
+        compose.onNodeWithContentDescription("Back").assertIsDisplayed()
+        compose.onNodeWithText("External formatter fallback").assertIsDisplayed()
+    }
+
+    @Test fun activeSearchSurvivesSwitchingFromTwoPanesToOne() {
+        mount(category = "GENERAL")
+        compose.onNodeWithText("Search settings").performTextInput("continuation indent")
+        compose.runOnIdle { size.value = 360.dp to 640.dp }
+        compose.onNodeWithContentDescription("Clear search").performClick()
+        compose.onNodeWithText("Search settings").assertIsDisplayed().performTextInput("continuation indent")
+        compose.onNodeWithText("Editor").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Continuation indent").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithText("Search settings").assertIsDisplayed()
+    }
+
+    @Test fun smallWindowAndLargeTextKeepActionsReachable() {
+        size.value = 320.dp to 285.dp
+        mount(fontScale = 1.65f)
+        compose.onNodeWithText("Search settings").performScrollTo().performTextInput("indent")
+        compose.onNodeWithText("Editor").performScrollTo().performClick()
+        compose.onNodeWithText("Continuation indent").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Close settings").assertIsDisplayed().performClick()
+        assertEquals(1, closes)
     }
 
     @Test fun readOnlyFactsHaveNoTapAction() {
@@ -90,6 +177,33 @@ class SettingsControlsWorkflowTest {
         compose.runOnIdle { assertEquals(true, wrap.value) }
     }
 
+    @Test
+    @Config(qualifiers = "in-rID-w360dp-h640dp-port-mdpi")
+    fun compactEditorShowsTheIndonesianStatusBarSwitch() {
+        size.value = 360.dp to 640.dp
+        mount(category = "EDITOR")
+        compose.onNodeWithText("Tampilkan status bar Android").performScrollTo().assertIsOff()
+    }
+
+    @Test fun androidStatusBarSwitchPersistsAcrossReopeningAndIsUserScoped() {
+        val context = app
+        fun stored() = runBlocking { WorkbenchPreferences.flow(context).first().showEditorStatusBar }
+        assertEquals(false, stored())
+        mount(category = "EDITOR")
+        val row = compose.onNodeWithText("Show Android status bar")
+        row.performScrollTo().assertIsOff().performClick()
+        compose.waitUntil(5_000) { stored() }
+        row.assertIsOn()
+        compose.onNodeWithText("Workspace", useUnmergedTree = true).performClick()
+        row.assertDoesNotExist()
+        compose.runOnIdle { mounted.value = false }
+        compose.waitForIdle()
+        compose.runOnIdle { mounted.value = true }
+        row.performScrollTo().assertIsOn().performClick()
+        compose.waitUntil(5_000) { !stored() }
+        row.assertIsOff()
+    }
+
     @Test fun searchHasAnExplicitEmptyState() {
         mount()
         compose.onNodeWithText("Search settings").performTextInput("no-such-setting-9137")
@@ -99,7 +213,7 @@ class SettingsControlsWorkflowTest {
     private fun screenshot(name: String) {
         val directory = System.getProperty("droide.headerEvidenceDir") ?: return
         compose.runOnIdle {
-            val bitmap = android.graphics.Bitmap.createBitmap(renderingView.width, renderingView.height, android.graphics.Bitmap.Config.ARGB_8888)
+            val bitmap = android.graphics.Bitmap.createBitmap(minOf(renderingView.width, (size.value.first.value * renderingView.resources.displayMetrics.density).toInt()), minOf(renderingView.height, (size.value.second.value * renderingView.resources.displayMetrics.density).toInt()), android.graphics.Bitmap.Config.ARGB_8888)
             renderingView.draw(android.graphics.Canvas(bitmap))
             val file = java.io.File(directory, "$name.png").apply { parentFile.mkdirs() }
             file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }

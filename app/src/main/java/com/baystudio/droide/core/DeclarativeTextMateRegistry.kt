@@ -58,12 +58,17 @@ object DeclarativeTextMateRegistry {
                 loaded += LoadedGrammar(extensionId, contribution.language, contribution.scopeName, registry, grammar)
             }
         }
-        if (loaded.isNotEmpty()) byExtension[extensionId] = loaded
+        if (loaded.isNotEmpty()) {
+            byExtension[extensionId] = loaded
+            LanguageRegistry.syntaxChanged()
+        }
     }
 
     @Synchronized
     fun unregister(extensionId: String) {
-        byExtension.remove(extensionId)?.forEach { runCatching { it.registry.dispose() } }
+        val removed = byExtension.remove(extensionId) ?: return
+        removed.forEach { synchronized(it.grammar) { runCatching { it.registry.dispose() } } }
+        LanguageRegistry.syntaxChanged()
     }
 
     @Synchronized
@@ -77,15 +82,14 @@ object DeclarativeTextMateRegistry {
     }
 
     internal fun highlightGrammar(grammar: IGrammar, text: String, maxSpans: Int): List<DroideHighlightSpan>? {
-        // Sora 0.24.6's OnigString mixes code-point and UTF-16 offsets for surrogate pairs. Converting final tokens
-        // cannot fix internal regex/backreference positions.
-        if (text.any(Char::isSurrogate)) return emptyList()
         val deadline = System.nanoTime() + MAX_TOTAL_NANOS
         val spans = ArrayList<DroideHighlightSpan>(minOf(maxSpans, text.length / 5 + 8))
         var state: IStateStack? = null
         return runCatching {
-            text.split('\n').forEachIndexed { lineIndex, line ->
-                if (System.nanoTime() > deadline || spans.size >= maxSpans) error("TextMate tokenization budget exceeded")
+            for ((lineIndex, line) in text.splitToSequence('\n').withIndex()) {
+                // A surrogate makes this tokenizer's offsets and subsequent multiline state unreliable.
+                if (line.any(Char::isSurrogate) || spans.size >= maxSpans) break
+                if (System.nanoTime() > deadline) error("TextMate tokenization budget exceeded")
                 val result = grammar.tokenizeLine(line, state, lineBudget)
                 if (result.isStoppedEarly) error("TextMate line tokenization budget exceeded")
                 state = result.ruleStack
@@ -119,25 +123,32 @@ object DeclarativeTextMateRegistry {
     )
 
     private fun styleForScopes(scopes: List<String>): ScopeStyle {
-        val joined = scopes.joinToString(" ").lowercase()
-        return when {
-            "comment" in joined -> ScopeStyle(DroideHighlightKind.COMMENT, italic = true)
-            "string.regexp" in joined || "regexp" in joined -> ScopeStyle(DroideHighlightKind.REGEXP)
-            "string" in joined -> ScopeStyle(DroideHighlightKind.STRING)
-            "constant.numeric" in joined || "number" in joined -> ScopeStyle(DroideHighlightKind.NUMBER)
-            "keyword" in joined || "storage.modifier" in joined -> ScopeStyle(DroideHighlightKind.KEYWORD, bold = true)
-            "storage.type" in joined || "entity.name.type" in joined || "entity.name.class" in joined ||
-            "support.type" in joined || "entity.name.section" in joined -> ScopeStyle(DroideHighlightKind.TYPE)
-            "entity.name.function" in joined || "support.function" in joined || "meta.function-call" in joined ->
-                ScopeStyle(DroideHighlightKind.FUNCTION)
-            "entity.name.tag" in joined || "meta.tag" in joined -> ScopeStyle(DroideHighlightKind.TAG)
-            "entity.other.attribute-name" in joined -> ScopeStyle(DroideHighlightKind.ATTRIBUTE)
-            "variable.other.property" in joined || "support.type.property-name" in joined -> ScopeStyle(DroideHighlightKind.PROPERTY)
-            "variable" in joined -> ScopeStyle(DroideHighlightKind.VARIABLE)
-            "entity.name.decorator" in joined || "meta.annotation" in joined -> ScopeStyle(DroideHighlightKind.ANNOTATION)
-            "keyword.operator" in joined || "punctuation" in joined -> ScopeStyle(DroideHighlightKind.OPERATOR)
-            else -> ScopeStyle(DroideHighlightKind.NORMAL)
+        var punctuation = false
+        for (index in scopes.indices.reversed()) {
+            val scope = scopes[index].lowercase()
+            fun matches(prefix: String) = scope == prefix || scope.startsWith(prefix + ".")
+            val kind = when (scope.substringBefore('.')) {
+                "comment" -> return ScopeStyle(DroideHighlightKind.COMMENT, italic = true)
+                "keyword" -> if (matches("keyword.operator")) DroideHighlightKind.OPERATOR else DroideHighlightKind.KEYWORD
+                "string" -> if (matches("string.regexp")) DroideHighlightKind.REGEXP else DroideHighlightKind.STRING
+                "constant" -> if (matches("constant.numeric")) DroideHighlightKind.NUMBER else null
+                "storage" -> if (matches("storage.type")) DroideHighlightKind.TYPE else if (matches("storage.modifier")) DroideHighlightKind.KEYWORD else null
+                "variable" -> if (matches("variable.other.property")) DroideHighlightKind.PROPERTY else DroideHighlightKind.VARIABLE
+                "support", "entity", "meta" -> when {
+                    matches("support.type.property-name") -> DroideHighlightKind.PROPERTY
+                    matches("entity.other.attribute-name") -> DroideHighlightKind.ATTRIBUTE
+                    matches("entity.name.decorator") || matches("meta.annotation") -> DroideHighlightKind.ANNOTATION
+                    matches("entity.name.function") || matches("support.function") || matches("meta.function-call") -> DroideHighlightKind.FUNCTION
+                    matches("entity.name.tag") || matches("meta.tag") -> DroideHighlightKind.TAG
+                    matches("support.type") || matches("entity.name.type") || matches("entity.name.class") || matches("entity.name.section") -> DroideHighlightKind.TYPE
+                    else -> null
+                }
+                "punctuation" -> { punctuation = true; null }
+                else -> null
+            }
+            if (kind != null) return ScopeStyle(kind, bold = kind == DroideHighlightKind.KEYWORD)
         }
+        return ScopeStyle(if (punctuation) DroideHighlightKind.OPERATOR else DroideHighlightKind.NORMAL)
     }
 
     private fun resolve(root: File, relative: String): File {

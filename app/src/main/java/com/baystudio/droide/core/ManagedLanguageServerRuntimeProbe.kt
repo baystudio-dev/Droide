@@ -1,5 +1,7 @@
 package com.baystudio.droide.core
 
+import com.baystudio.droide.BuildConfig
+
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -115,7 +117,7 @@ class ManagedLanguageServerRuntimeProbe(
                 "initialize",
                 buildJsonObject {
                     put("processId", JsonNull)
-                    put("clientInfo", buildJsonObject { put("name", "Droide Runtime Probe"); put("version", "1.00") })
+                    put("clientInfo", buildJsonObject { put("name", "Droide Runtime Probe"); put("version", BuildConfig.VERSION_NAME) })
                     put("rootUri", rootUri)
                     put("workspaceFolders", buildJsonArray {
                         add(buildJsonObject { put("uri", rootUri); put("name", workDir.name.ifBlank { "workspace" }) })

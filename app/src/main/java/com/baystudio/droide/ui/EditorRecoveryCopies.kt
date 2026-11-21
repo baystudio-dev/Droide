@@ -114,11 +114,12 @@ internal fun EditorRecoveryCopiesDialog(
     onDismiss: () -> Unit,
     archivedIssues: List<EditorRecoveryEvidenceIssue> = emptyList(),
     discardActions: EditorRecoveryDiscardActions?,
+    retryRecovery: (() -> Unit)? = null,
 ) {
     val recovery = remember(state, files) { EditorRecoveryCopies(state, files) }
     DisposableEffect(recovery) { onDispose { recovery.close() } }
     val discardStatus = discardActions?.state?.collectAsState()?.value ?: EditorRecoveryDiscardUiState()
-    val copies = remember(recovery, discardStatus.revision) { state.retainedCopies() }
+    val copies = remember(recovery, allowed, discardStatus.revision) { state.retainedCopies() }
     var selected by remember(recovery) { mutableStateOf<EditorWorkspaceState.RetainedCopy?>(null) }
     var destination by remember(recovery) { mutableStateOf("") }
     var busy by remember(recovery) { mutableStateOf(false) }
@@ -154,6 +155,7 @@ internal fun EditorRecoveryCopiesDialog(
         text = {
             Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Open an older recovery copy in a new unsaved tab. The original recovery copy and current edits stay unchanged. Nothing is written to the project until you Save.")
+                if (retryRecovery != null) TextButton(onClick = retryRecovery) { Text("Retry reading recovery") }
                 if (archivedIssues.isNotEmpty()) {
                     Text("Archived recovery evidence needs attention", color = MaterialTheme.colorScheme.error)
                     Text("Healthy drafts remain available. These archived records were kept unchanged and cannot be opened or removed here.")

@@ -13,81 +13,72 @@ data class MergeConflictBlock(
 
 object MergeConflictResolver {
     private data class ParsedBlock(
-        val public: MergeConflictBlock,
-        val startLine: Int,
-        val endLineInclusive: Int,
+        val preview: MergeConflictBlock,
+        val start: Int,
+        val end: Int,
+        val current: String,
+        val incoming: String,
     )
 
     fun blocks(text: String, maxBlocks: Int = 200): List<MergeConflictBlock> =
-        parse(text, maxBlocks).map { it.public }
+        parse(text, maxBlocks).map { it.preview }
 
-    fun hasMarkers(text: String): Boolean = text.replace("\r\n", "\n").lineSequence().any { line ->
+    fun hasMarkers(text: String): Boolean = text.lineSequence().any { line ->
         line.startsWith("<<<<<<<") || line.startsWith("=======") || line.startsWith(">>>>>>>") || line.startsWith("|||||||")
     }
 
     fun resolve(text: String, blockIndex: Int, choice: ConflictChoice): String {
-        val parsed = parse(text, 500)
-        val block = parsed.firstOrNull { it.public.index == blockIndex }
+        val block = parse(text, 500).getOrNull(blockIndex)
             ?: throw IllegalArgumentException("Conflict block $blockIndex no longer exists")
-        val newline = if ("\r\n" in text) "\r\n" else "\n"
-        val normalized = text.replace("\r\n", "\n")
-        val trailingNewline = normalized.endsWith('\n')
-        val lines = normalized.split('\n').toMutableList().apply {
-            if (trailingNewline && isNotEmpty() && last().isEmpty()) removeAt(lastIndex)
+        val selected = when (choice) {
+            ConflictChoice.CURRENT -> block.current
+            ConflictChoice.INCOMING -> block.incoming
+            ConflictChoice.BOTH -> block.current + block.incoming
         }
-        val replacementText = when (choice) {
-            ConflictChoice.CURRENT -> block.public.current
-            ConflictChoice.INCOMING -> block.public.incoming
-            ConflictChoice.BOTH -> listOf(block.public.current, block.public.incoming)
-                .filter { it.isNotEmpty() }
-                .joinToString("\n")
-        }
-        val replacement = if (replacementText.isEmpty()) emptyList() else replacementText.split('\n')
-        lines.subList(block.startLine, block.endLineInclusive + 1).clear()
-        lines.addAll(block.startLine, replacement)
-        val rendered = lines.joinToString(newline)
-        return if (trailingNewline) rendered + newline else rendered
+        val replacement = if (block.end == text.length && !text.endsWith('\n')) withoutLastLineEnding(selected) else selected
+        return text.replaceRange(block.start, block.end, replacement)
     }
 
+    private fun withoutLastLineEnding(text: String): String =
+        if (text.endsWith("\r\n")) text.dropLast(2) else text.removeSuffix("\n")
+
+    private fun display(text: String): String = withoutLastLineEnding(text).replace("\r\n", "\n")
+
     private fun parse(text: String, maxBlocks: Int): List<ParsedBlock> {
-        val normalized = text.replace("\r\n", "\n")
-        val lines = normalized.split('\n')
-        val out = mutableListOf<ParsedBlock>()
-        var i = 0
-        while (i < lines.size && out.size < maxBlocks.coerceIn(1, 500)) {
-            val start = lines[i]
-            if (!start.startsWith("<<<<<<<")) { i++; continue }
-            val startLine = i
-            val currentLabel = start.removePrefix("<<<<<<<").trim().ifBlank { "Current" }
-            i++
-            val current = mutableListOf<String>()
-            val base = mutableListOf<String>()
-            val incoming = mutableListOf<String>()
-            while (i < lines.size && !lines[i].startsWith("=======") && !lines[i].startsWith("|||||||")) current += lines[i++]
-            if (i < lines.size && lines[i].startsWith("|||||||")) {
-                i++
-                while (i < lines.size && !lines[i].startsWith("=======")) base += lines[i++]
-            }
-            if (i >= lines.size || !lines[i].startsWith("=======")) break
-            i++
-            while (i < lines.size && !lines[i].startsWith(">>>>>>>")) incoming += lines[i++]
-            if (i >= lines.size) break
-            val incomingLabel = lines[i].removePrefix(">>>>>>>").trim().ifBlank { "Incoming" }
-            val endLine = i
-            out += ParsedBlock(
-                MergeConflictBlock(
-                    index = out.size,
-                    currentLabel = currentLabel,
-                    incomingLabel = incomingLabel,
-                    current = current.joinToString("\n"),
-                    incoming = incoming.joinToString("\n"),
-                    base = base.takeIf { it.isNotEmpty() }?.joinToString("\n"),
-                ),
-                startLine,
-                endLine,
-            )
-            i++
+        fun nextLine(start: Int): Int {
+            val newline = text.indexOf('\n', start)
+            return if (newline < 0) text.length else newline + 1
         }
-        return out
+        fun marker(from: Int, primary: String, alternate: String? = null): Int {
+            var line = from
+            while (line < text.length && !text.startsWith(primary, line) &&
+                (alternate == null || !text.startsWith(alternate, line))) line = nextLine(line)
+            return line
+        }
+        val blocks = mutableListOf<ParsedBlock>()
+        var cursor = 0
+        while (cursor < text.length && blocks.size < maxBlocks.coerceIn(1, 500)) {
+            val start = marker(cursor, "<<<<<<<")
+            if (start == text.length) break
+            val currentStart = nextLine(start)
+            val currentEnd = marker(currentStart, "=======", "|||||||")
+            val hasBase = text.startsWith("|||||||", currentEnd)
+            val baseStart = if (hasBase) nextLine(currentEnd) else currentEnd
+            val divider = if (hasBase) marker(baseStart, "=======") else currentEnd
+            if (divider == text.length) break
+            val incomingStart = nextLine(divider)
+            val close = marker(incomingStart, ">>>>>>>")
+            if (close == text.length) break
+            cursor = nextLine(close)
+            val current = text.substring(currentStart, currentEnd)
+            val incoming = text.substring(incomingStart, close)
+            val preview = MergeConflictBlock(
+                blocks.size, text.substring(start + 7, currentStart).trim().ifBlank { "Current" },
+                text.substring(close + 7, cursor).trim().ifBlank { "Incoming" }, display(current), display(incoming),
+                if (hasBase) display(text.substring(baseStart, divider)) else null,
+            )
+            blocks += ParsedBlock(preview, start, cursor, current, incoming)
+        }
+        return blocks
     }
 }

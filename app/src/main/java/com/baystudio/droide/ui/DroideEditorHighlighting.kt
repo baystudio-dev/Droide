@@ -8,6 +8,7 @@ import com.baystudio.droide.core.DroideSyntaxSemanticEngine
 import com.baystudio.droide.core.IndentGuidePlanner
 import com.baystudio.droide.core.LspHeldResultGuard
 import com.baystudio.droide.core.LspManager
+import com.baystudio.droide.core.LanguageRegistry
 import com.baystudio.droide.core.runSuspendCatching
 import io.github.rosemoe.sora.lang.styling.CodeBlock
 import io.github.rosemoe.sora.lang.styling.MappedSpans
@@ -28,44 +29,47 @@ internal class DroideEditorHighlightController(
     private val lsp: LspManager,
     private val scope: CoroutineScope,
     codeStyle: CodeStyleProfile,
+    private val syntaxRevision: Long = LanguageRegistry.syntaxRevision.value,
 ) {
     private var codeStyle = codeStyle
     private var generation = 0L
     private var syntaxJob: Job? = null
-    private var semanticJob: Job? = null
     private var released = false
     private var heldGuards: List<LspHeldResultGuard> = emptyList()
+
+    fun matches(language: String, manager: LspManager, revision: Long) =
+        !released && languageId == language && lsp === manager && syntaxRevision == revision
 
     fun schedule(text: String, immediate: Boolean = false) {
         if (released) return
         val requestGeneration = ++generation
         syntaxJob?.cancel()
-        semanticJob?.cancel()
-
         syntaxJob = scope.launchUiCatching(onError = { editor.reportSurfaceFailure(it) }) {
-            if (!immediate) delay(55)
-            val local = withContext(Dispatchers.Default) {
-                DroideSyntaxSemanticEngine.highlight(text, languageId)
-            }
-            if (requestGeneration != generation || released) return@launchUiCatching
-            apply(local, text, requestGeneration)
+            highlightGeneration(text, immediate, requestGeneration)
         }
+    }
 
-        if (text.length <= DroideSyntaxSemanticEngine.MAX_HIGHLIGHT_CHARS && languageId != "plaintext") {
-            semanticJob = scope.launchUiCatching(onError = { editor.reportSurfaceFailure(it) }) {
+    private suspend fun highlightGeneration(text: String, immediate: Boolean, requestGeneration: Long) = coroutineScope {
+        val semanticJob = if (text.length <= DroideSyntaxSemanticEngine.MAX_HIGHLIGHT_CHARS && languageId != "plaintext") {
+            async(Dispatchers.IO) {
                 delay(if (immediate) 120 else 220)
-                val semantic = withContext(Dispatchers.IO) {
-                    runSuspendCatching { lsp.semanticTokens(path, text) }.getOrDefault(emptyList())
-                }
-                val guards = semantic.mapNotNull { it.activationGuard }
-                if (requestGeneration != generation || released || semantic.isEmpty() || guards.any { !it.accepts() }) return@launchUiCatching
-                val enriched = withContext(Dispatchers.Default) {
-                    DroideSyntaxSemanticEngine.highlight(text, languageId, semantic)
-                }
-                if (requestGeneration != generation || released || guards.any { !it.accepts() }) return@launchUiCatching
-                apply(enriched, text, requestGeneration, guards)
+                runSuspendCatching { lsp.semanticTokens(path, text) }.getOrDefault(emptyList())
             }
+        } else null
+        if (!immediate) delay(55)
+        val local = withContext(Dispatchers.Default) {
+            DroideSyntaxSemanticEngine.highlight(text, languageId)
         }
+        if (requestGeneration != generation || released) return@coroutineScope
+        apply(local, text, requestGeneration)
+        val semantic = semanticJob?.await().orEmpty()
+        if (requestGeneration != generation || released || semantic.isEmpty()) return@coroutineScope
+        val guards = semantic.mapNotNull { it.activationGuard }
+        if (guards.any { !it.accepts() }) return@coroutineScope
+        val enriched = withContext(Dispatchers.Default) {
+            DroideSyntaxSemanticEngine.withSemanticTokens(local, text.split('\n'), semantic)
+        }
+        if (enriched !== local) apply(enriched, text, requestGeneration, guards)
     }
 
     /** Clear an expired original native capture without issuing another native request. */
@@ -74,7 +78,6 @@ internal class DroideEditorHighlightController(
         heldGuards = emptyList()
         val requestGeneration = ++generation
         syntaxJob?.cancel()
-        semanticJob?.cancel()
         val text = editor.text.toString()
         installSafeBaseStyles(text)
         syntaxJob = scope.launchUiCatching(onError = editor::reportSurfaceFailure) {
@@ -106,7 +109,6 @@ internal class DroideEditorHighlightController(
         released = true
         generation++
         syntaxJob?.cancel()
-        semanticJob?.cancel()
     }
 
     

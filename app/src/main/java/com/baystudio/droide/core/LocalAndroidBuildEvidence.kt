@@ -1,6 +1,11 @@
 package com.baystudio.droide.core
 
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.security.MessageDigest
 import java.util.UUID
 
 
@@ -9,16 +14,30 @@ internal object LocalAndroidBuildEvidence {
     private const val MAX_BYTES = 512L * 1024L
     private const val MAX_ROOTS = 2048
 
-    fun prepare(projectRoot: File): Session {
+    fun supportsBuildEvents(version: String?): Boolean =
+        version?.let(GradleRuntimeCompatibility::parse)?.let { it >= GradleRuntimeCompatibility.Version(8, 1) } == true
+
+    fun prepare(projectRoot: File, script: ByteArray): Session {
+        require(script.size in 1..65_536)
         val root = projectRoot.canonicalFile
-        val directory = PathSecurity.resolveWithin(root, ".droide/build-evidence/${UUID.randomUUID()}")
-        check(directory.mkdirs() && !PathSecurity.isSymbolicLink(directory)) { "Cannot prepare Gradle artifact evidence" }
+        val parent = root.resolve(".droide/build-evidence")
+        require(parent.canonicalFile == parent) { "Unsafe Gradle evidence directory" }
+        Files.createDirectories(parent.toPath())
+        val hash = MessageDigest.getInstance("SHA-256").digest(script).joinToString("") { "%02x".format(it) }
+        val init = File(parent, "outputs-$hash.gradle")
+        if (!Files.isRegularFile(init.toPath(), NOFOLLOW_LINKS) || init.length() != script.size.toLong() ||
+            !init.readBytes().contentEquals(script)) {
+            val temp = Files.createTempFile(parent.toPath(), ".outputs-", ".tmp")
+            try {
+                Files.write(temp, script)
+                Files.move(temp, init.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+            } finally {
+                Files.deleteIfExists(temp)
+            }
+        }
+        val directory = Files.createDirectory(parent.resolve(UUID.randomUUID().toString()).toPath()).toFile()
         return try {
-            val init = File(directory, "outputs.init.gradle")
-            val manifest = File(directory, "outputs.tsv")
-            manifest.writeText("", Charsets.UTF_8)
-            init.writeText(script(root, manifest), Charsets.UTF_8)
-            Session(directory, init, manifest)
+            Session(directory, init, Files.createFile(directory.resolve("outputs.tsv").toPath()).toFile())
         } catch (failure: Throwable) {
             PathSecurity.deleteTreeNoFollow(directory)
             throw failure
@@ -47,36 +66,4 @@ internal object LocalAndroidBuildEvidence {
         }
         return result.toList()
     }
-
-    private fun groovyQuote(value: String): String = "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
-
-    private fun script(root: File, manifest: File): String = """
-        def droideRoot = new File(${groovyQuote(root.path)}).canonicalFile.toPath()
-        def droideManifest = new File(${groovyQuote(manifest.path)})
-        def droideOutputLock = new Object()
-        def droideSeenOutputs = new HashSet<String>()
-        gradle.taskGraph.afterTask { task, state ->
-            if (!state.executed || state.failure != null || state.noSource) return
-            def outcome = state.upToDate ? 'UP-TO-DATE' : (state.skipMessage == 'FROM-CACHE' ? 'FROM-CACHE' : 'EXECUTED')
-            if (state.skipped && outcome == 'EXECUTED') return
-            task.outputs.files.files.each { output ->
-                def canonical = output.canonicalFile
-                def outputPath = canonical.toPath()
-                if (!outputPath.startsWith(droideRoot) || !canonical.exists()) return
-                def relative = droideRoot.relativize(outputPath).toString().replace('\\', '/')
-                if (!(relative == 'build/outputs' || relative.startsWith('build/outputs/') || relative.endsWith('/build/outputs') || relative.contains('/build/outputs/'))) return
-                def path = canonical.path
-                if (path.length() > 4096 || path.toCharArray().any { c -> ((int) c) < 32 || ((int) c) == 127 }) throw new GradleException('Unsafe Droide output path')
-                synchronized (droideOutputLock) {
-                    def row = outcome + '\t' + path + '\n'
-                    if (droideSeenOutputs.add(row)) {
-                        if (droideSeenOutputs.size() > $MAX_ROOTS || droideManifest.length() + row.getBytes('UTF-8').length > $MAX_BYTES) {
-                            throw new GradleException('Droide artifact evidence exceeded its limit')
-                        }
-                        droideManifest.append(row, 'UTF-8')
-                    }
-                }
-            }
-        }
-    """.trimIndent() + "\n"
 }

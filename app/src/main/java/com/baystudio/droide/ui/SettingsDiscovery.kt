@@ -35,6 +35,7 @@ internal object SettingsDiscovery {
             "Editor", "Word wrap, indentation and formatter fallback",
             listOf(
                 "Text editor", "Word wrap wordwrap soft wrap", "Detect indentation", "Indentation detection",
+                "Show Android status bar clock battery notifications", "Tampilkan status bar Android jam baterai notifikasi bilah status",
                 "Default indentation",
                 "Indent style", "Spaces", "Tabs", "Tab width", "Indent size", "Continuation indent",
                 "Authority .editorconfig detected style user defaults",

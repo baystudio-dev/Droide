@@ -2,6 +2,9 @@ package com.baystudio.droide.ui
 
 import com.baystudio.droide.core.WorkspaceFailureReason
 import com.baystudio.droide.core.FileRepository
+import com.baystudio.droide.core.BinaryFileException
+import com.baystudio.droide.core.LargeFileException
+import com.baystudio.droide.core.UnsupportedTextEncodingException
 import com.baystudio.droide.core.DiskFileVersion
 import com.baystudio.droide.core.WorkspaceDocumentSaveRequest
 import com.baystudio.droide.core.WorkspaceDocumentSaveReport
@@ -357,8 +360,33 @@ internal class EditorWorkspaceDocumentAuthority(
 
     private sealed interface DiskState {
         data object Missing : DiskState
+        data object Unchanged : DiskState
+        data class Unavailable(val cause: java.io.IOException) : DiskState
         data class Text(val content: String, val version: DiskFileVersion) : DiskState
         data object Other : DiskState
+    }
+
+    private suspend fun observeDisk(repository: FileRepository, baseline: ReconcileBaseline): DiskState {
+        val path = baseline.path
+        return try {
+            val attributes = repository.attributesIfPresent(path) ?: return DiskState.Missing
+            if (!attributes.isRegularFile) return DiskState.Other
+            val saved = baseline.diskVersion
+            if (baseline.loaded && baseline.kind == EditorDocumentKind.TEXT && saved?.existed == true &&
+                attributes.size() == saved.bytes && repository.matchesVersion(path, saved)) {
+                return DiskState.Unchanged
+            }
+            val text = repository.readEditorText(path)
+            DiskState.Text(text, withContext(Dispatchers.IO) { DiskFileVersion.fromText(text) })
+        } catch (_: LargeFileException) {
+            DiskState.Other
+        } catch (_: BinaryFileException) {
+            DiskState.Other
+        } catch (_: UnsupportedTextEncodingException) {
+            DiskState.Other
+        } catch (failure: java.io.IOException) {
+            DiskState.Unavailable(failure)
+        }
     }
 
     private suspend fun reconcilePersisted(path: String?, failOnConflict: Boolean): WorkspacePersistedReconciliation {
@@ -374,15 +402,7 @@ internal class EditorWorkspaceDocumentAuthority(
 
         val disk = linkedMapOf<String, DiskState>()
         for (baseline in baselines) {
-            disk[baseline.path] = when {
-                !repository.exists(baseline.path) -> DiskState.Missing
-                else -> runCatching {
-                    val text = repository.readTextForEdit(baseline.path)
-                    val version = withContext(Dispatchers.IO) { DiskFileVersion.fromText(text) }
-                    DiskState.Text(text, version) as DiskState
-                }
-                    .getOrDefault(DiskState.Other)
-            }
+            disk[baseline.path] = observeDisk(repository, baseline)
         }
 
         val actions = mutableListOf<EditorLspAction>()
@@ -401,6 +421,8 @@ internal class EditorWorkspaceDocumentAuthority(
                     val observed = when (persisted) {
                         is DiskState.Text -> persisted.version
                         DiskState.Missing -> DiskFileVersion.fromText(null)
+                        DiskState.Unchanged -> baseline.diskVersion
+                        is DiskState.Unavailable -> continue
                         DiskState.Other -> null
                     }
                     if (baseline.diskVersion == null || baseline.diskVersion != observed) conflicts += baseline.path
@@ -423,6 +445,7 @@ internal class EditorWorkspaceDocumentAuthority(
                     continue
                 }
                 when (val persisted = disk.getValue(baseline.path)) {
+                    DiskState.Unchanged, is DiskState.Unavailable -> continue
                     DiskState.Missing -> {
                         // Removing an ancestor also removes live descendants. A clean
                         // ancestor must not erase a descendant's pending work.
@@ -481,6 +504,7 @@ internal class EditorWorkspaceDocumentAuthority(
             )
         }
         runLspActions(actions)
+        disk.values.filterIsInstance<DiskState.Unavailable>().firstOrNull()?.let { throw it.cause }
         return result
     }
 

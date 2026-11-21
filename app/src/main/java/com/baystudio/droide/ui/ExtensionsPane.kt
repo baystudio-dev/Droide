@@ -9,7 +9,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -113,6 +112,7 @@ fun ExtensionsPane(
     activeFile: String,
     initialFamilyId: String? = null,
     environmentRevision: Long = 0L,
+    onOpenTerminal: (() -> Unit)? = null,
     onInitialFamilyHandled: () -> Unit = {},
 ) {
     manager.temporaryRecoveryReason?.let { reason ->
@@ -237,6 +237,7 @@ fun ExtensionsPane(
             selected != null -> ExtensionDetail(
                 item = selected,
                 manager = manager,
+                onOpenTerminal = onOpenTerminal,
                 onSelectItem = { selectedIdentity = ExtensionSelection(it.family.id, it.version.version) },
                 onBack = { selectedIdentity = null },
                 onRefresh = {
@@ -338,6 +339,9 @@ private fun extensionListStatus(item: ExtensionVersionState): String? = when (it
     ExtensionState.INSTALLED -> "Installed"
     ExtensionState.EXTERNAL -> "Installed"
     ExtensionState.AVAILABLE -> "Not installed"
+    ExtensionState.MANUAL -> "Install in Terminal"
+    ExtensionState.PROJECT_DEPENDENCY -> "Project dependency"
+    ExtensionState.CHECKING -> "Checking…"
     ExtensionState.UNAVAILABLE -> "Unavailable"
 }
 
@@ -349,6 +353,9 @@ private fun extensionDetailStatus(item: ExtensionVersionState): String {
         ExtensionState.INSTALLED -> concise ?: "Installed"
         ExtensionState.EXTERNAL -> concise ?: "Detected on workstation"
         ExtensionState.AVAILABLE -> concise ?: "Ready to install"
+        ExtensionState.MANUAL -> "Managed through the Ubuntu terminal"
+        ExtensionState.PROJECT_DEPENDENCY -> "Managed by the project"
+        ExtensionState.CHECKING -> "Checking installation status…"
         ExtensionState.UNAVAILABLE -> concise ?: "Not available for this device or setup"
     }
 }
@@ -620,16 +627,10 @@ private fun MarketplaceExtensionDetail(
 
 @Composable
 private fun ExtensionStateBadge(state: ExtensionState, modifier: Modifier = Modifier) {
-    if (state == ExtensionState.AVAILABLE || state == ExtensionState.EXTERNAL) return
-    val tint = when (state) {
-        ExtensionState.BUILT_IN, ExtensionState.INSTALLED -> MaterialTheme.colorScheme.primary
-        ExtensionState.EXTERNAL, ExtensionState.AVAILABLE -> MaterialTheme.colorScheme.secondary
-        ExtensionState.UNAVAILABLE -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val image = when (state) {
-        ExtensionState.BUILT_IN, ExtensionState.INSTALLED -> Icons.Default.CheckCircle
-        ExtensionState.EXTERNAL, ExtensionState.AVAILABLE -> Icons.Default.Info
-        ExtensionState.UNAVAILABLE -> Icons.Default.Warning
+    val (image, tint) = when (state) {
+        ExtensionState.BUILT_IN, ExtensionState.INSTALLED -> Icons.Default.CheckCircle to MaterialTheme.colorScheme.primary
+        ExtensionState.UNAVAILABLE -> Icons.Default.Warning to MaterialTheme.colorScheme.onSurfaceVariant
+        else -> return
     }
     Surface(
         modifier = modifier.size(17.dp),
@@ -646,6 +647,7 @@ private fun ExtensionDetail(
     item: ExtensionVersionState,
     manager: DevelopmentExtensionsManager,
     onSelectItem: (ExtensionVersionState) -> Unit,
+    onOpenTerminal: (() -> Unit)?,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
 ) {
@@ -718,7 +720,9 @@ private fun ExtensionDetail(
             }
         }
         Text(item.family.description, style = MaterialTheme.typography.bodyMedium)
-        if (updatePolicy.hasVersionPicker) {
+        if (updatePolicy.hasVersionPicker && versionChoices.any {
+                it.state == ExtensionState.AVAILABLE || it.state == ExtensionState.INSTALLED || it.state == ExtensionState.EXTERNAL
+            }) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (reviewedAndroid != null) {
                     Button(onClick = { prepareVersion(reviewedAndroid.version.version) },
@@ -840,11 +844,15 @@ private fun ExtensionDetail(
             Text(installState.log, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
         }
         if (item.state == ExtensionState.UNAVAILABLE) {
-            OutlinedButton(onClick = {}, enabled = false) { Text("Install unavailable") }
             Text(item.detail, style = MaterialTheme.typography.bodySmall)
         }
 
         when (item.state) {
+            ExtensionState.MANUAL, ExtensionState.PROJECT_DEPENDENCY -> onOpenTerminal?.let { open ->
+                Button(onClick = open) {
+                    Text(if (item.state == ExtensionState.PROJECT_DEPENDENCY) "Open project terminal" else "Open Terminal")
+                }
+            }
             ExtensionState.AVAILABLE -> {
                 Button(
                     enabled = installJob == null && !installState.running,

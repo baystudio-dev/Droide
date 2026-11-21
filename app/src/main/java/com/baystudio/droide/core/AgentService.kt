@@ -38,6 +38,7 @@ class AgentService(
     private val appContext: android.content.Context? = null,
     private val runtimeScope: CoroutineScope? = null,
     private val providerConfiguration: ProviderRegistry.ConfiguredSnapshot? = null,
+    val browserTabs: WorkspaceBrowserTabs? = null,
     private val codeStyleDefaults: suspend () -> CodeStyleDefaults = {
         appContext?.let { WorkbenchPreferences.flow(it).first().codeStyleDefaults } ?: CodeStyleDefaults()
     },
@@ -57,9 +58,7 @@ class AgentService(
         plugins = agentPluginSource,
     )
     private val lifecycleHooks by lazy { AgentHookLifecycleBridge(hooks, { currentSessionId.orEmpty() }, { _mode.value }) }
-    val sessions = SessionManager(workDir, llm).also {
-        it.toolOutputStore = { AgentToolOutputStore.forWorkspace(workDir) }
-    }
+    val sessions = SessionManager(workDir, llm)
     private val promptCoordinator = AgentPromptCoordinator(sessions, MAX_USER_MESSAGE_CHARS, MAX_AGENT_TURNS)
     val pendingInputs: StateFlow<List<AgentPendingInput>> = promptCoordinator.pendingInputs
     val todos = TodoManager()
@@ -152,6 +151,7 @@ class AgentService(
     private val _streamState = MutableStateFlow(AgentStreamState())
     private val streamProjector = AgentStreamProjector(_streamState, MAX_ASSISTANT_CHARS, MAX_TOOL_ARGUMENT_CHARS)
     val streamState: StateFlow<AgentStreamState> = _streamState.asStateFlow()
+    private class PreflightCompactionRequired : RuntimeException()
     private val _contextUsage = MutableStateFlow<AgentContextUsage?>(null)
     val contextUsage: StateFlow<AgentContextUsage?> = _contextUsage.asStateFlow()
     private val _compactionActivity = MutableStateFlow<AgentCompactionActivity?>(null)
@@ -203,6 +203,7 @@ class AgentService(
         val id: String, val generation: Long, val messages: List<AgentMessage>, val apiHistory: List<JsonObject>,
         val todos: List<Todo>, val mode: AgentMode, val pending: List<AgentPendingInput>, val historyVersion: Long,
         val textEdits: SessionTextEditEvidence.Evidence?, val typedChat: TypedChatCheckpoint? = null,
+        val usage: AgentContextUsage?,
     )
     private data class RunPublicationOwner(val generation: Long, val sessionId: String, val historyVersion: Long)
     /** A run never becomes newer when older queued work or a later steer is promoted. */
@@ -297,7 +298,7 @@ class AgentService(
     private fun requestProvenance(sessionId: String? = currentSessionId): AgentRequestProvenance = executionIdentity.request(sessionId)
     private fun permissionScope(): String = AgentPermissionScope.id(_mode.value, requestProvenance())
     fun ownedProcessDiagnostics(): OwnedProcessDiagnostics = OwnedProcessDiagnostics(backgroundCommands)
-    fun cancel() { job?.cancel(); backgroundCommands.cancelForegroundCommands() }
+    fun cancel() { job?.cancel(); browserTabs?.revoke(); backgroundCommands.cancelForegroundCommands() }
     /** Explicit Exit only. Keep the history ticket until the last real save receipt succeeds. */
     suspend fun stopAndCheckpointForExit(): Unit = exitCheckpointMutex.withLock {
         val caller = currentCoroutineContext().job
@@ -342,6 +343,7 @@ class AgentService(
         }
     }
     fun shutdown() {
+        browserTabs?.revoke()
         retireAuthority()
         cancelContextCompaction()
         currentSessionId?.let(approvals::clearSessionApprovals); job?.cancel(); McpManager.shutdownSessions(workDir, mcpProcessHost)
@@ -439,10 +441,10 @@ class AgentService(
         typedCheckpoint = restoredTyped
         _messages.value = AgentTextEditProjection.apply(restoredMessages, restoredTextEdits)
         currentSessionId = s.id
-        _contextUsage.value = null
+        _contextUsage.value = s.lastRequestUsage?.restoredFor(s.id)?.takeIf { s.typedChat == restoredTyped }
         if (_compactionActivity.value?.sessionId != s.id) _compactionActivity.value = null
         subagentBridge.bindParent(s.id)
-        if (previousSessionId != s.id) { previousSessionId?.let(approvals::clearSessionApprovals); perms.clearSessionAllows() }
+        if (previousSessionId != s.id) { browserTabs?.revoke(); previousSessionId?.let(approvals::clearSessionApprovals); perms.clearSessionAllows() }
         todos.set(s.todos, s.id)
         _persistenceError.value = null
         _streamState.value = AgentStreamState()
@@ -523,7 +525,7 @@ class AgentService(
                 "Finish the running Agent task or use Stop before compacting this conversation manually."
             }
             OwnedSessionSnapshot(sid, runGeneration.get(), _messages.value, completeApiHistoryForModel(), todos.get(sid), _mode.value, pendingInputs.value,
-                conversationHistory.ownershipVersion, textEditEvidence)
+                conversationHistory.ownershipVersion, textEditEvidence, usage = _contextUsage.value?.takeIf { it.sessionId == sid })
         }
         if (snapshot == null) "No active session." else {
         val exact = conversationHistory.completeExactOrNull(snapshot.historyVersion)
@@ -1052,11 +1054,13 @@ class AgentService(
                     val activeHistory = withRunPublication(owner) {
                         if (typedRequest == null) conversationHistory.strictActiveForProvider() else emptyList()
                     }
-                    val estimate = llm.estimateContext(systemText, activeHistory, toolDefinitions, activeConfig.providerId, activeConfig.baseUrl, activeConfig.model,
+                    val window = AgentIdeContextProjection.Window()
+                    val projectedHistory = activeHistory.map(window::project)
+                    val estimate = llm.estimateContext(systemText, projectedHistory, toolDefinitions, activeConfig.providerId, activeConfig.baseUrl, activeConfig.model,
                         AgentRequestSupport.outputTokens(activeConfig))
                     val calibrated = AgentCompactionBudget.calibrated(estimate, _contextUsage.value, runSessionId,
                         activeConfig.providerId, activeConfig.model)
-                    if (typedRequest == null && calibrated.shouldCompact && !preflightCompacted) {
+                    suspend fun compactBeforeRequest() {
                         val compactId = "compaction:$turn:preflight"
                         withRunPublication(owner) {
                             upsertStreamPart(
@@ -1070,13 +1074,21 @@ class AgentService(
                                 )
                             )
                         }
-                        val changed = compactActiveContext(activeConfig, owner, overflowRecovery = false,
-                            systemText = systemText, tools = toolDefinitions)
+                        var deferred = false
+                        val detail = try {
+                            val changed = compactActiveContext(activeConfig, owner, overflowRecovery = false,
+                                systemText = systemText, tools = toolDefinitions)
+                            if (changed) "Context compacted" else "No compaction required"
+                        } catch (_: TypedChatCompactor.SummaryBudgetExceeded) {
+                            deferred = true
+                            "Continuing with the original history; the summary would exceed this step's budget."
+                        }
                         withRunPublication(owner) {
+                            if (deferred) _compactionActivity.value = _compactionActivity.value?.copy(running = false, detail = detail)
                             updateStreamPart(compactId) {
                                 it.copy(
                                     state = AgentStreamPartState.COMPLETED,
-                                    detail = if (changed) "Context compacted" else "No compaction required",
+                                    detail = detail,
                                     endedAtMs = System.currentTimeMillis(),
                                 )
                             }
@@ -1086,18 +1098,19 @@ class AgentService(
                             }
                         }
                         preflightCompacted = true
-                        // Even a no-op compaction may suspend while instructions change.
-                        // Re-read once; the flag prevents another preflight compaction here.
+                    }
+                    if (typedRequest == null && calibrated.shouldCompact && !preflightCompacted) {
+                        compactBeforeRequest()
                         continue
                     }
                     ProviderRuntimeGuard.requireCertifiedSelection(activeConfig.providerId, activeConfig.baseUrl, activeConfig.model, providerConfiguration)
                     reqJson = AgentRequestSupport.build(activeConfig, systemText,
-                        VisionSupport.materializeHistory(activeHistory, workDir), toolDefinitions)
+                        VisionSupport.materializeHistory(projectedHistory, workDir), toolDefinitions)
                     // Materializing attachments can suspend too. Rebuild on a mode change.
                     ensureRunCurrent(generation, runSessionId)
                     if (_mode.value != requestMode) continue
-                    val requestContext = AgentContextUsage(runSessionId, activeConfig.providerId, activeConfig.model, estimate)
-                    withRunPublication(owner) { _contextUsage.value = if (typedRequest == null) requestContext else null }
+                    var requestContext = AgentContextUsage(runSessionId, activeConfig.providerId, activeConfig.model, estimate)
+                    if (typedRequest == null) withRunPublication(owner) { _contextUsage.value = requestContext }
                     val streamedText = StringBuilder()
                     val textPartId = "text:$turn"
                     val requestAccounting = ProviderRequestAccounting(activeConfig.providerId) { sample ->
@@ -1194,7 +1207,16 @@ class AgentService(
                             val accepted = llm.streamOwnedChat(activeConfig.providerId, activeConfig.baseUrl, activeConfig.apiKey,
                                 activeConfig.model, JsonObject(reqJson.filterKeys { it != "messages" }), history,
                                 responseSession, { id -> resources.owned.authorize(responseOwner.copy(callId = id)) },
-                                onRecovery = { recovery -> receivedRecoveryCheckpoint(resources, responseOwner, target, recovery) }, onEvent = onProviderEvent)
+                                onRecovery = { recovery -> receivedRecoveryCheckpoint(resources, responseOwner, target, recovery) },
+                                onContextEstimate = if (typedRequest == null) null else { measured ->
+                                    withRunPublication(owner) {
+                                        val actual = AgentCompactionBudget.calibrated(measured, _contextUsage.value, runSessionId,
+                                            activeConfig.providerId, activeConfig.model)
+                                        if (actual.shouldCompact && !preflightCompacted) throw PreflightCompactionRequired()
+                                        requestContext = requestContext.copy(estimate = measured)
+                                        _contextUsage.value = requestContext
+                                    }
+                                }, onEvent = onProviderEvent)
                             // Provider usage belongs to this completed request even if later projection or owner admission fails.
                             stepAccounting = requestAccounting.response(buildJsonObject {
                                 accepted.usage?.let { put("usage", it) }
@@ -1323,6 +1345,9 @@ class AgentService(
                             }
                         }
                         break
+                    } catch (_: PreflightCompactionRequired) {
+                        compactBeforeRequest()
+                        continue
                     } catch (t: Throwable) {
                         // Accounting is independent of whether this run may still publish UI/history.
                         requestAccounting.failure(t)?.let { stepAccounting = it }
@@ -1721,12 +1746,16 @@ class AgentService(
                 // One Stop epoch owns the entire response, including calls that are
                 // still queued behind permission prompts or unrelated tools.
                 val skippedForUserSteer = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-                val browserToolWork = if (browserCalls.isEmpty()) emptyList()
-                    else browserController?.registerToolWorkBatch(browserCalls.size).orEmpty()
+                val browserRoutes = browserCalls.associate { call ->
+                    call.index to browserTabs?.route((call.args["tab"] as? JsonPrimitive)?.contentOrNull, runSessionId)
+                }
+                fun callBrowser(index: Int) = if (browserTabs == null) browserController else browserRoutes[index]?.browser
+                val browserWorkByIndex = mutableMapOf<Int, AgentBrowserController.ToolWork>()
                 try {
-                val browserWorkByIndex = browserCalls.mapIndexedNotNull { index, call ->
-                    browserToolWork.getOrNull(index)?.let { call.index to it }
-                }.toMap()
+                for ((controller, calls) in browserCalls.groupBy { callBrowser(it.index) }) {
+                    val tickets = controller?.registerToolWorkBatch(calls.size) ?: continue
+                    calls.forEachIndexed { i, call -> browserWorkByIndex[call.index] = tickets[i] }
+                }
                 fun publishToolPart(id: String, transform: (AgentStreamPart) -> AgentStreamPart) =
                     publishOwnedStream(generation, runSessionId) { update(id, transform) }
                 prepared.forEach { call ->
@@ -1754,6 +1783,10 @@ class AgentService(
                 val committedImages = AgentToolImages()
                 // Receipts belong to one prepared call, never to mutable browser state.
                 val browserPublications = java.util.concurrent.ConcurrentHashMap<Int, AgentTools.BrowserPublicationAuthority>()
+                fun repeatOrdinal(call: PreparedToolCall): Int {
+                    val motion = call.name == "browser" && (call.args["operation"] as? JsonPrimitive)?.contentOrNull in setOf("scroll", "swipe")
+                    return if (!motion) call.repeatOrdinal else if (lastSig == call.signature) repeat + 1 else 1
+                }
                 suspend fun executePrepared(call: PreparedToolCall): ToolOutcome {
                     exitFence.requireOpen()
                     currentCoroutineContext().ensureActive()
@@ -1785,9 +1818,11 @@ class AgentService(
                         activeToolNames = requestToolNames,
                         ideActions = ideActions, lspEditActions = lspEditActions,
                         toolchainActions = toolchainActions, capabilityActions = capabilityActions,
-                        browserController = browserController,
+                        browserController = callBrowser(call.index),
+                        browserTabs = browserTabs,
                         browserToolWork = browserWorkByIndex[call.index],
-                        browserRequestCurrent = { isRunCurrent(generation, runSessionId) },
+                        browserRequestCurrent = { isRunCurrent(generation, runSessionId) &&
+                            browserRoutes[call.index]?.let { browserTabs?.isCurrent(it) } != false },
                         browserRunId = mediaRunId,
                         browserCallId = "${call.index}:${call.id}",
                         mediaRunId = mediaRunId,
@@ -1990,7 +2025,7 @@ class AgentService(
                             approvals.withApprovalOwner(requireNotNull(toolOwner.approvalAdmission)) {
                                 AgentTools.withBrowserToolWork(fname, ctx) browserWork@{
                                     refreshBrowserPreflight()?.let { return@browserWork it }
-                                    val doomDenied = call.repeatOrdinal >= 3 && approvals.withBrowserValidity({ browserDenial() == null }, admission = { refreshBrowserPreflight() == null }) {
+                                    val doomDenied = repeatOrdinal(call) >= 3 && approvals.withBrowserValidity({ browserDenial() == null }, admission = { refreshBrowserPreflight() == null }) {
                                         AgentApprovalSupport.doomLoopDenied(
                                             approvals, perms, toolOwner.permissionScope, fname, rawArgs, toolOwner.provenance,
                                             arguments = fargs,
@@ -2056,7 +2091,7 @@ class AgentService(
                         ToolOutcome(call, evidencedMessage, failed = true)
                     } finally {
                         // Argument/policy rejections never enter the browser scope.
-                        ctx.browserToolWork?.let { browserController?.releaseToolWork(it) }
+                        ctx.browserToolWork?.let { ctx.browserController?.releaseToolWork(it) }
                     }
                 }
                 fun publicationSafe(outcome: ToolOutcome): ToolOutcome {
@@ -2078,7 +2113,7 @@ class AgentService(
                     // preview. Retention refusal is not execution failure and must not replay it.
                     val retainedPreview = withContext(Dispatchers.IO) {
                         AgentRetainedToolOutputProjection.project(call.name, outcome.result) {
-                            AgentToolOutputStore.forWorkspace(workDir).retain(runSessionId, it)
+                            sessions.retainToolOutput(runSessionId, it)
                         }
                     }
                     ensureRunCurrent(generation, runSessionId)
@@ -2125,8 +2160,8 @@ class AgentService(
                     publishUiHistory(uiHistory, owner)
                     publication.commit(outcome.media, outcome.images)
                     if (call.id !in skippedForUserSteer) {
+                        repeat = if (!outcome.failed && browserPublications[call.index]?.scrollAdvanced == true) 0 else repeatOrdinal(call)
                         lastSig = call.signature
-                        repeat = call.repeatOrdinal
                     }
                 }
                 try {
@@ -2148,7 +2183,7 @@ class AgentService(
                 }
                 } finally {
                     // Covers setup failure, STEER-skipped calls and full Agent cancellation.
-                    browserToolWork.forEach { browserController?.releaseToolWork(it) }
+                    browserWorkByIndex.forEach { (index, ticket) -> callBrowser(index)?.releaseToolWork(ticket) }
                 }
                 withRunPublication(owner) {
                     finishStep(turn, if (skippedForUserSteer.isNotEmpty()) "Prior tools skipped for user steering" else "Tools complete").let { stepPart ->
@@ -2669,7 +2704,7 @@ class AgentService(
         val snapshot = synchronized(admissionLock) {
             if (!isRunCurrent(generation, sid) || loadingSessionGeneration != null) return false
             OwnedSessionSnapshot(sid, generation, _messages.value, if (typedCheckpoint == null) completeApiHistoryForModel() else emptyList(), todos.get(sid), _mode.value, pendingInputs.value,
-                conversationHistory.ownershipVersion, textEditEvidence, typedCheckpoint)
+                conversationHistory.ownershipVersion, textEditEvidence, typedCheckpoint, _contextUsage.value?.restoredFor(sid))
         }
         try {
             val exactFork = if (snapshot.typedChat == null) conversationHistory.completeExactOrNull(snapshot.historyVersion) else null
@@ -2691,6 +2726,7 @@ class AgentService(
                         messages = compactMessages,
                         apiHistory = snapshot.apiHistory,
                         typedChat = snapshot.typedChat,
+                        lastRequestUsage = snapshot.usage,
                         forkHistory = exactFork ?: emptyList(),
                         forkHistoryVersion = if (exactFork != null) SessionForkHistory.SCHEMA_VERSION else 0,
                         todos = snapshot.todos,

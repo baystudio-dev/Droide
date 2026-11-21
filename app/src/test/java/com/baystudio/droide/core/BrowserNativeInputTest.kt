@@ -22,9 +22,10 @@ import org.robolectric.annotation.Config
 class BrowserNativeInputTest {
     private class InputView(context: Context) : WebView(context) {
         data class Touch(val action: Int, val x: Float, val y: Float, val tool: Int)
+        var allowFocus = true
         val events = mutableListOf<Touch>()
         val keys = mutableListOf<Pair<Int, Int>>()
-        override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?) = true
+        override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?) = allowFocus
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             events += Touch(event.actionMasked, event.x, event.y, event.getToolType(0)); return true
         }
@@ -53,19 +54,22 @@ class BrowserNativeInputTest {
         } finally { view.destroy() }
     }
 
-    @Test fun swipeUsesOrderedMotionAndDragUsesMouseInput() = runBlocking {
-        for (mouse in listOf(false, true)) {
-            val view = view()
-            try {
-                AgentBrowserNativeInput.gesture(view, AgentBrowserNativeInput.Point(.2f, .8f), AgentBrowserNativeInput.Point(.8f, .2f),
-                    durationMs = 100, mouse = mouse, dispatch = { it() }, cancel = { it() })
-                assertEquals(MotionEvent.ACTION_DOWN, view.events.first().action)
-                assertEquals(MotionEvent.ACTION_UP, view.events.last().action)
-                assertTrue(view.events.count { it.action == MotionEvent.ACTION_MOVE } >= 2)
-                assertEquals(if (mouse) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER, view.events.first().tool)
-                assertTrue(view.events.first().y > view.events.last().y)
-            } finally { view.destroy() }
-        }
+    @Test fun swipeDeliversOrderedTouchMotionAndHoverUsesAMousePointer() = runBlocking {
+        val view = view()
+        try {
+            val start = AgentBrowserNativeInput.Point(.2f, .8f)
+            AgentBrowserNativeInput.gesture(view, start, AgentBrowserNativeInput.Point(.8f, .2f),
+                durationMs = 100, dispatch = { it() }, cancel = { it() })
+            assertEquals(MotionEvent.ACTION_DOWN, view.events.first().action)
+            assertEquals(MotionEvent.ACTION_UP, view.events.last().action)
+            assertTrue(view.events.count { it.action == MotionEvent.ACTION_MOVE } >= 2)
+            assertTrue(view.events.all { it.tool == MotionEvent.TOOL_TYPE_FINGER })
+            assertTrue(view.events.first().y > view.events.last().y)
+            view.events.clear()
+            AgentBrowserNativeInput.gesture(view, start, hover = true, dispatch = { it() }, cancel = { it() })
+            assertEquals(MotionEvent.ACTION_HOVER_MOVE, view.events.single().action)
+            assertEquals(MotionEvent.TOOL_TYPE_MOUSE, view.events.single().tool)
+        } finally { view.destroy() }
     }
 
     @Test fun revokedAuthorityCancelsPartlyDeliveredGestureWithoutAnUpOrReplay() = runBlocking {
@@ -107,6 +111,44 @@ class BrowserNativeInputTest {
             }.isFailure)
             assertTrue(view.events.isEmpty())
         } finally { view.destroy() }
+    }
+
+    @Test fun pointerWorksWithoutKeyboardFocusAndExplicitDragCanMoveThreePixels() = runBlocking {
+        val view = view()
+        try {
+            view.allowFocus = false
+            AgentBrowserNativeInput.gesture(view, AgentBrowserNativeInput.Point(.5f,.5f), AgentBrowserNativeInput.Point(.508f,.5f),
+                durationMs = 100, fineMotion = true, dispatch = { it() }, cancel = { it() })
+            assertEquals(MotionEvent.ACTION_DOWN, view.events.first().action)
+            assertEquals(MotionEvent.ACTION_UP, view.events.last().action)
+            assertEquals(3.04f, view.events.last().x - view.events.first().x, .02f)
+        } finally { view.destroy() }
+    }
+
+    @Test fun deliberateHoldReleasesOnceAndCancellationOnlyCancelsTheOriginalPress() = runBlocking {
+        val view = view()
+        try {
+            val point = AgentBrowserNativeInput.Point(.5f,.5f)
+            val started = CompletableDeferred<Unit>()
+            val hold = launch { AgentBrowserNativeInput.gesture(view, point, durationMs = 500,
+                dispatch = { it(); started.complete(Unit) }, cancel = { it() }) }
+            started.await();delay(60)
+            assertEquals(listOf(MotionEvent.ACTION_DOWN), view.events.map { it.action })
+            hold.cancelAndJoin()
+            assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL), view.events.map { it.action })
+            view.events.clear()
+            AgentBrowserNativeInput.gesture(view, point, durationMs = 120, dispatch = { it() }, cancel = { it() })
+            assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), view.events.map { it.action })
+        } finally { view.destroy() }
+    }
+
+    @Test fun dragAcceptsOneDestinationAndValidatesFiniteOffsets() {
+        BrowserActionOptions(endTarget = "#drop").validateDrag()
+        BrowserActionOptions(deltaX = -3f).validateDrag()
+        for (options in listOf(BrowserActionOptions(), BrowserActionOptions(deltaY = 0f),
+            BrowserActionOptions(endTarget = "#drop", deltaX = 2f)))
+            assertTrue(runCatching { options.validateDrag() }.isFailure)
+        assertTrue(runCatching { BrowserActionOptions(deltaX = Float.NaN) }.isFailure)
     }
 
     @Test fun changedTargetBeforeDispatchDoesNotSendAPointer() = runBlocking {

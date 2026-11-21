@@ -280,6 +280,7 @@ object AgentTools {
         val toolchainActions: AgentToolchainActions? = null,
         val capabilityActions: AgentCapabilityActions? = null,
         val browserController: AgentBrowserController? = null,
+        val browserTabs: WorkspaceBrowserTabs? = null,
         val browserToolWork: AgentBrowserController.ToolWork? = null,
         val browserRequestCurrent: () -> Boolean = { true },
         val browserPublication: BrowserPublicationAuthority = BrowserPublicationAuthority(),
@@ -319,6 +320,7 @@ object AgentTools {
         @Volatile private var check: (() -> String?)? = null
         @Volatile private var rejected: String? = null
         private val grants = java.util.concurrent.CopyOnWriteArrayList<() -> Boolean>()
+        @Volatile internal var scrollAdvanced = false
         internal fun bindSessionGrant(current: () -> Boolean) { grants += current }
         internal fun capture(check: () -> String?) { this.check = check }
         internal val captured: Boolean get() = check != null
@@ -379,7 +381,8 @@ object AgentTools {
         return if (name == "skill" || name == "rule") AgentContextToolResult.diagnostic(result) else result
     }
 
-    private suspend fun executeUnscoped(name: String, args: JsonObject, c: Ctx): String {
+    private suspend fun executeUnscoped(name: String, args: JsonObject, c: Ctx,
+        reboundDocument: AgentBrowserController.DocumentIdentity? = null): String {
         return try {
         
         val realName = when (name) {
@@ -407,7 +410,7 @@ object AgentTools {
                 "MCP server configuration changed after tool advertisement. Refresh the Agent tool catalog."
             }
             gate("mcp", resource, c)?.let { return it }
-            return manager.callTool(selection, descriptor.toolName, args)
+            return manager.callTool(selection, descriptor.toolName, args, descriptor.inputSchema)
         }
         AgentModePolicy.check(c.mode, realName)?.let { return it }
         if (realName == "tool_search") {
@@ -1039,237 +1042,7 @@ object AgentTools {
                 c.onProgress(AgentToolProgress(detail = "User answered"))
                 "User answered: $ans"
             }
-            "browser" -> {
-                val controller = c.browserController ?: return "ERROR: integrated Android browser is unavailable"
-                val op = args["operation"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase(java.util.Locale.ROOT) ?: "read"
-                require(op in setOf("open", "navigate", "read", "find", "links", "scroll", "status", "console", "dialog",
-                    "back", "reload", "wait", "screenshot", "click", "type", "check", "key", "hover", "swipe", "drag", "wait_for", "dialog_respond")) { "Unsupported browser operation" }
-                val url = args["url"]?.jsonPrimitive?.contentOrNull?.trim()
-                val target = args["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val input = args["text"]?.jsonPrimitive?.contentOrNull
-                val submit = args["submit"]?.jsonPrimitive?.booleanOrNull ?: false
-                val dialogText = args["dialog_text"]?.jsonPrimitive?.contentOrNull
-                val actionOptions = BrowserActionOptions(
-                    checked = args["checked"]?.jsonPrimitive?.booleanOrNull,
-                    optionIndex = args["option_index"]?.jsonPrimitive?.intOrNull,
-                    keyStroke = args["key"]?.jsonPrimitive?.contentOrNull,
-                    endTarget = args["end_target"]?.jsonPrimitive?.contentOrNull,
-                    timeoutMs = args["timeout_ms"]?.jsonPrimitive?.longOrNull ?: 4_000,
-                    durationMs = args["duration_ms"]?.jsonPrimitive?.longOrNull ?: 350)
-                require(op != "check" || actionOptions.checked != null) { "check requires a boolean checked value" }
-                if (AgentRepairCompletionPolicy.browserInteracts(op) && c.mode != AgentMode.BUILD) {
-                    return "DENIED (${c.mode} mode): interactive browser mutation requires BUILD mode."
-                }
-                if (op == "dialog_respond") require(input in setOf("accept", "dismiss")) { "dialog_respond text must be accept or dismiss" }
-                require(input == null || input.length <= 20_000) { "Browser input is too large" }
-                require(dialogText == null || dialogText.length <= AgentBrowserDialogs.MAX_RESPONSE_CHARACTERS) { "Browser dialog response is too large" }
-                // Capture before the first approval suspension, including read/local approvals.
-                browserUnverifiedOutputDenial(op, c)?.let { return it }
-                val reviewIdentity = controller.captureReviewIdentity()
-                val fullPage = args["full_page"]?.jsonPrimitive?.booleanOrNull ?: false
-                val frozenConsole = if (op == "console") controller.freezeConsole(
-                    args["start_line"]?.jsonPrimitive?.intOrNull ?: args["start"]?.jsonPrimitive?.intOrNull ?: 0,
-                    args["num_lines"]?.jsonPrimitive?.intOrNull ?: args["num_results"]?.jsonPrimitive?.intOrNull ?: 80,
-                    reviewIdentity) else null
-                val expectedDocument = reviewIdentity.takeUnless { op in setOf("open", "navigate") }
-                val knownDialog = controller.pendingDialog.value
-                val reviewedDialog = knownDialog.takeIf { op == "dialog_respond" }
-                val effectiveUrl = AgentRepairCompletionPolicy.browserPermissionTarget(op, url, reviewIdentity.url)
-                require(effectiveUrl.length <= 8_192) { "Browser URL exceeds 8192 characters" }
-                require(target.length <= 20_000) { "Browser target exceeds 20000 characters" }
-                fun browserReview(action: String, page: String) = BrowserApprovalContext(
-                    operation = op,
-                    url = page,
-                    target = target.takeIf { it.isNotBlank() },
-                    reason = when (action) {
-                        "browser_local" -> "Access a development server on this device."
-                        "browser_interact" -> when (op) {
-                            "type" -> if (submit)
-                                "Enter text and submit it on this page." else "Enter text on this page."
-                            "dialog_respond" -> if (input == "dismiss") "Dismiss the website's pending dialog without submitting an answer."
-                                else "Accept the website's pending dialog." + if (dialogText != null)
-                                    " Send the supplied prompt answer (${dialogText.length} characters; content hidden from this preview)." else ""
-                            else -> "Interact with an element on this page."
-                        }
-                        else -> "Read this browser page or its output."
-                    },
-                )
-                val readResource = effectiveUrl.ifBlank { "browser:$op" }
-                val loopback = AgentRepairCompletionPolicy.classifyBrowserTarget(effectiveUrl) == AgentRepairCompletionPolicy.BrowserTargetClass.LOOPBACK_HTTP
-                val interactionResource = if (AgentRepairCompletionPolicy.browserInteracts(op))
-                    BrowserInteractionAuthority.policyResource(effectiveUrl, op, target) else null
-                val consoleSources = frozenConsole?.observation?.sources?.map { it.url }.orEmpty().distinct()
-                val requiredPermissions = browserKnownPermissions(op, effectiveUrl, target, knownDialog) +
-                    browserSourcePermissions(consoleSources) + if (op == "drag")
-                        browserKnownPermissions(op, effectiveUrl, requireNotNull(actionOptions.endTarget), null) else emptyList()
-                browserPermissionDenial(requiredPermissions, c)?.let { return it }
-                browserDialogReviewError(op, target, reviewedDialog)?.let { return it }
-                val reviewStillCurrent: () -> Boolean = {
-                    c.browserRequestCurrent() && browserPermissionDenial(requiredPermissions, c) == null &&
-                        browserUnverifiedOutputDenial(op, c) == null &&
-                        (expectedDocument == null || controller.isReviewIdentityCurrent(expectedDocument)) &&
-                        (reviewedDialog == null || controller.pendingDialog.value == reviewedDialog)
-                }
-                suspend fun reviewPermission(action: String, resource: String, sessionResource: String = resource): String? {
-                    // Check every known requirement before each prompt, including after
-                    // another approval suspended. One ASK must never mask a later DENY.
-                    browserPermissionDenial(requiredPermissions, c)?.let { return it }
-                    val result = gate(action, resource, c, sessionResource,
-                        browserReview(action, effectiveUrl), reviewStillCurrent)
-                    return browserPermissionDenial(requiredPermissions, c) ?: result
-                }
-                browserPermissionDenial(requiredPermissions, c)?.let { return it }
-                if (interactionResource != null) {
-                    reviewPermission("browser_interact", interactionResource,
-                        BrowserInteractionAuthority.sessionResource(reviewIdentity.authorityKey, effectiveUrl, op, target, input, submit, dialogText))?.let { return it }
-                }
-                reviewPermission("webfetch", readResource, BrowserSessionApprovalScope.browserReadGrantResource(readResource))?.let { return it }
-                if (loopback) reviewPermission("browser_local", effectiveUrl)?.let { return it }
-                // The native dialog's requesting URL is a known source, not a claim
-                // that the top-level document owns every frame. Review both scopes.
-                reviewedDialog?.sourceUrl?.takeIf { it != effectiveUrl }?.let { source ->
-                    val sourceInteraction = BrowserInteractionAuthority.policyResource(source, op, target)
-                    browserPermissionDenial(requiredPermissions, c)?.let { return it }
-                    gate("browser_interact", sourceInteraction, c,
-                        BrowserInteractionAuthority.sessionResource(reviewIdentity.authorityKey, source, op, target, input, submit, dialogText),
-                        browserReview("browser_interact", source), reviewStillCurrent)?.let { return it }
-                    browserPermissionDenial(requiredPermissions, c)?.let { return it }
-                    gate("webfetch", source, c, BrowserSessionApprovalScope.browserReadGrantResource(source),
-                        browserReview("webfetch", source), reviewStillCurrent)?.let { return it }
-                    if (AgentRepairCompletionPolicy.classifyBrowserTarget(source) == AgentRepairCompletionPolicy.BrowserTargetClass.LOOPBACK_HTTP) {
-                        browserPermissionDenial(requiredPermissions, c)?.let { return it }
-                        gate("browser_local", source, c, browserContext = browserReview("browser_local", source),
-                            approvalValid = reviewStillCurrent)?.let { return it }
-                    }
-                }
-                for (source in consoleSources.filter { it != effectiveUrl }) {
-                    // Site-session consent covers captured embedded output, not future navigation/control of that
-                    // origin.
-                    if (BrowserSiteSession.resource(effectiveUrl)?.let { resource ->
-                        c.approvals.hasSessionApproval(c.provenance.sessionId.ifBlank { c.sessionId.orEmpty() },
-                            c.permissionScope, BrowserSiteSession.ACTION, resource)
-                    } == true) continue
-                    gate("webfetch", source, c, BrowserSessionApprovalScope.browserReadGrantResource(source),
-                        browserReview("webfetch", source), reviewStillCurrent)?.let { return it }
-                    if (AgentRepairCompletionPolicy.classifyBrowserTarget(source) == AgentRepairCompletionPolicy.BrowserTargetClass.LOOPBACK_HTTP)
-                        gate("browser_local", source, c, browserContext = browserReview("browser_local", source),
-                            approvalValid = reviewStillCurrent)?.let { return it }
-                }
-                if (!reviewStillCurrent()) return "DENIED: browser policy, request, document or dialog changed during review; inspect again."
-                if (requiredPermissions.any { (action, resource) -> !ApprovalPolicyGuard.remainsPermitted(c.perms, action, resource, c.permissionScope) }) {
-                    return "DENIED (policy changed during review): browser operation was not dispatched"
-                }
-                val outputConsent = if (op in setOf("screenshot", "console")) BrowserOutputConsent.create(c.perms,
-                    BrowserOutputConsent.Request(requireNotNull(c.sessionId), c.browserRunId, c.browserCallId,
-                        c.permissionScope, reviewIdentity, op, fullPage = op == "screenshot" && fullPage,
-                        consoleIdentity = frozenConsole?.identity),
-                    requestCurrent = { c.browserRequestCurrent() && browserPermissionDenial(requiredPermissions, c) == null },
-                    documentCurrent = { controller.isReviewIdentityCurrent(reviewIdentity) }) else null
-                var consentPublished = false
-                try {
-                    if (outputConsent != null) {
-                        val scope = if (frozenConsole != null)
-                            "Selected console snapshot, lines ${frozenConsole.start} to ${frozenConsole.end} (end exclusive). Reported source URLs are diagnostics, not certified frame identities."
-                        else if (fullPage)
-                            "Bounded vertical full-page screenshot at viewport width. Capture limits apply; live content may change and fixed overlays may repeat."
-                        else "Visible browser viewport screenshot. Live content may change."
-                        val approval = c.approvals.withBrowserValidity(
-                            check = { reviewStillCurrent() && outputConsent.validForApproval() },
-                            admission = { controller.sampleCurrentUrlForPreflight() == reviewIdentity.url &&
-                                reviewStillCurrent() && outputConsent.validForApproval() }) {
-                            c.approvals.requestApproval(
-                                kind = "browser_unverified_output", summary = "Allow one browser $op output?",
-                                detail = "$scope\n${BrowserOutputConsent.DISCLOSURE}",
-                                action = "webfetch", resource = readResource, permissionScope = c.permissionScope,
-                                provenance = c.provenance,
-                                approvalSessionId = c.provenance.sessionId.ifBlank { c.sessionId.orEmpty() },
-                                sessionGrantAction = BrowserSiteSession.ACTION,
-                                sessionGrantResource = BrowserSiteSession.resource(effectiveUrl).orEmpty(),
-                                browserContext = BrowserApprovalContext(op, effectiveUrl,
-                                    reason = "Allow this output. Session choice: ${BrowserSiteSession.DESCRIPTION}", outputScope = scope,
-                                    sessionAccess = BrowserSiteSession.resource(effectiveUrl) != null),
-                                isStillCurrent = { reviewStillCurrent() && outputConsent.validForApproval() })
-                        }
-                        if (approval is ApprovalDecision.Denied || !outputConsent.approve()) return BrowserOutputConsent.WITHHELD
-                        bindBrowserSiteGrant(c, effectiveUrl)
-                    }
-                    c.browserPublication.capture {
-                        if (!c.browserRequestCurrent() || browserPermissionDenial(requiredPermissions, c) != null ||
-                            outputConsent?.validForDispatch() == false)
-                            "DENIED (policy or request changed): Browser output was withheld; do not replay the action automatically."
-                        else null
-                    }
-                    val observation = try { kotlinx.coroutines.withContext(actionOptions) { controller.executeObserved(
-                        operation = op,
-                        url = url,
-                        expectedCurrentUrl = effectiveUrl.takeIf { op !in setOf("open", "navigate") },
-                        expectedDocument = expectedDocument,
-                        expectedDialog = reviewedDialog,
-                        validateAuthority = {
-                            c.browserPublication.denial()?.let { throw BrowserPublicationRevokedException(it) }
-                        },
-                        target = target,
-                        text = input,
-                        submit = submit,
-                        waitMs = (args["wait_ms"]?.jsonPrimitive?.longOrNull ?: 150L).coerceIn(50L, 10_000L),
-                        allowLoopback = loopback,
-                        start = args["start_line"]?.jsonPrimitive?.intOrNull ?: args["start"]?.jsonPrimitive?.intOrNull ?: 0,
-                        count = args["num_lines"]?.jsonPrimitive?.intOrNull ?: args["num_results"]?.jsonPrimitive?.intOrNull ?: 80,
-                        query = args["query"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                        elementStart = args["element_start"]?.jsonPrimitive?.intOrNull ?: 0,
-                        elementCount = args["element_count"]?.jsonPrimitive?.intOrNull ?: 30,
-                        dialogText = dialogText,
-                        fullPage = fullPage,
-                        outputConsent = outputConsent,
-                        frozenConsole = frozenConsole,
-                        reviewedLoopbackOrigin = BrowserSessionApprovalScope.canonicalOrigin(effectiveUrl).takeIf { loopback },
-                        mediaOwnerId = c.sessionId,
-                    ) } } catch (cancelled: CancellationException) {
-                        throw cancelled
-                    } catch (changed: BrowserSurfaceChangedException) {
-                        throw changed
-                    } catch (revoked: BrowserPublicationRevokedException) {
-                        return revoked.message.orEmpty()
-                    } catch (failure: Exception) {
-                        // Renderer/JavaScript exception strings may contain unreviewed page
-                        // data. Diagnostics stay generic until a separately authorized read.
-                        return "ERROR: browser operation could not complete (${failure.javaClass.simpleName}); inspect the active page before retrying. It was not replayed."
-                    }
-                    var published = false
-                    var retainedMediaOwner: String? = null
-                    try {
-                        browserObservationGate(observation, readResource, loopback, c, op, target, requiredPermissions,
-                            (listOfNotNull(reviewedDialog?.sourceUrl) + consoleSources).distinct())?.let { return it }
-                        // Capture immutable operation and observed-source scopes before any
-                        // retained-media callback or outer post-tool hook can suspend.
-                        c.browserPublication.capture {
-                            if (!c.browserRequestCurrent() || browserPermissionDenial(requiredPermissions, c) != null)
-                                "DENIED (policy or request changed): Browser output was withheld; do not replay the action automatically."
-                            else browserObservationPolicyCheck(observation, readResource, c, op)
-                        }
-                        c.browserPublication.denial()?.let { return it }
-                        val result = observation.payload
-                        if (op == "screenshot" && c.sessionId != null && observation.media != null) {
-                            retainedMediaOwner = c.sessionId
-                            controller.retainObservationMedia(observation, c.sessionId)
-                            // Disk ownership transfer can suspend; policy must still permit
-                            // this immutable source before text or media becomes visible.
-                            c.browserPublication.denial()?.let { return it }
-                            currentCoroutineContext().ensureActive()
-                            c.onMediaReady?.invoke(observation.media)
-                            c.appContext?.let { ChatMediaCleanup.schedule(it, c.workDir) }
-                        }
-                        published = true
-                        consentPublished = true
-                        result
-                    } finally {
-                        if (!published) controller.discardObservation(observation, retainedMediaOwner)
-                        else if (retainedMediaOwner != null) controller.discardObservation(observation)
-                    }
-                } finally {
-                    if (!consentPublished) outputConsent?.invalidate()
-                }
-            }
+            "browser" -> executeBrowser(args, c, reboundDocument)
             "artifact" -> {
                 gate("edit", req(args, "type"), c)?.let { return it }
                 val type = req(args, "type")
@@ -1287,6 +1060,296 @@ object AgentTools {
     } catch (revoked: BrowserPublicationRevokedException) {
         revoked.message.orEmpty()
     } catch (e: Exception) { "ERROR: ${e.message}" }
+    }
+
+    private suspend fun executeBrowser(args: JsonObject, c: Ctx, reboundDocument: AgentBrowserController.DocumentIdentity?): String {
+        browserTabDenial(args, c)?.let { return it }
+        val controller = c.browserController ?: return "ERROR: integrated Android browser is unavailable"
+        val op = args["operation"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase(java.util.Locale.ROOT) ?: "read"
+        if (op == "request_user_tab") {
+            val tabs = c.browserTabs ?: return "ERROR: separate tabs are unavailable"
+            val session = c.sessionId ?: return "DENIED: an active chat is required"
+            if (tabs.handoff.value?.sessionId != session) {
+                val decision = c.approvals.requestApproval(kind = "browser_user_tab", summary = "Let this chat use your Web tab?",
+                    detail = "The agent can work on the page and forms open in your tab. Website permissions still apply. End access from Browser actions or by stopping or switching the chat.",
+                    provenance = c.provenance, approvalSessionId = "", isStillCurrent = c.browserRequestCurrent)
+                if (decision == ApprovalDecision.Denied || !tabs.share(session, c.browserRequestCurrent))
+                    return "DENIED: your Web tab was not shared"
+            }
+            return """{"success":true,"kind":"browser_tab_access","tab":"user","scope":"this_chat"}"""
+        }
+        if (op == "viewport") {
+            val current = controller.viewport.value ?: return "DENIED: the user tab follows the device window"
+            val profile = AgentBrowserViewport.from(args, current)
+            val reloadForSiteVersion = controller.changeViewport(profile, c.browserRequestCurrent)
+            return buildJsonObject {
+                put("success", true); put("kind", "browser_viewport"); put("tab", "agent")
+                put("mode", profile.mode); put("width", profile.width); put("height", profile.height)
+                put("reload_for_site_version", reloadForSiteVersion)
+                if (reloadForSiteVersion) put("note", "This document was loaded in the previous mode. To request the selected site version, open its URL again when ready to leave this page.")
+            }.toString()
+        }
+        require(op in setOf("open", "navigate", "read", "find", "links", "scroll", "status", "console", "dialog",
+            "back", "reload", "wait", "screenshot", "click", "type", "check", "key", "hover", "swipe", "drag", "double_click", "hold", "wait_for", "dialog_respond")) { "Unsupported browser operation" }
+        val url = args["url"]?.jsonPrimitive?.contentOrNull?.trim()
+        val target = args["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val input = args["text"]?.jsonPrimitive?.contentOrNull
+        val submit = args["submit"]?.jsonPrimitive?.booleanOrNull ?: false
+        val dialogText = args["dialog_text"]?.jsonPrimitive?.contentOrNull
+        val actionOptions = BrowserActionOptions(
+            checked = args["checked"]?.jsonPrimitive?.booleanOrNull,
+            optionIndex = args["option_index"]?.jsonPrimitive?.intOrNull,
+            keyStroke = args["key"]?.jsonPrimitive?.contentOrNull,
+            endTarget = args["end_target"]?.jsonPrimitive?.contentOrNull,
+            timeoutMs = args["timeout_ms"]?.jsonPrimitive?.longOrNull ?: 4_000,
+            durationMs = args["duration_ms"]?.jsonPrimitive?.longOrNull ?: if (op == "hold") (android.view.ViewConfiguration.getLongPressTimeout().toLong() + 100).coerceIn(100, 2_000) else 350,
+            touchDrag = when (args["drag_input"]?.jsonPrimitive?.contentOrNull) {
+                null, "auto" -> false
+                "touch" -> true
+                else -> throw IllegalArgumentException("drag_input must be auto or touch")
+            },
+            deltaX = args["delta_x"]?.let { requireNotNull(it.jsonPrimitive.floatOrNull) { "delta_x must be a number" } },
+            deltaY = args["delta_y"]?.let { requireNotNull(it.jsonPrimitive.floatOrNull) { "delta_y must be a number" } })
+        if (op == "drag") actionOptions.validateDrag()
+        require(op != "check" || actionOptions.checked != null) { "check requires a boolean checked value" }
+        if (AgentRepairCompletionPolicy.browserInteracts(op) && c.mode != AgentMode.BUILD) {
+            return "DENIED (${c.mode} mode): interactive browser mutation requires BUILD mode."
+        }
+        if (op == "dialog_respond") require(input in setOf("accept", "dismiss")) { "dialog_respond text must be accept or dismiss" }
+        require(input == null || input.length <= 20_000) { "Browser input is too large" }
+        require(dialogText == null || dialogText.length <= AgentBrowserDialogs.MAX_RESPONSE_CHARACTERS) { "Browser dialog response is too large" }
+        // Capture before the first approval suspension, including read/local approvals.
+        browserUnverifiedOutputDenial(op, c)?.let { return it }
+        val frozenStatus = if (op == "status") controller.freezeStatus() else null
+        val reviewIdentity = frozenStatus?.document ?: controller.captureReviewIdentity()
+        if (reboundDocument != null && !reviewIdentity.matches(reboundDocument))
+            return "ERROR: the page changed again before input. Use status to inspect the current page."
+        val fullPage = args["full_page"]?.jsonPrimitive?.booleanOrNull ?: false
+        val frozenConsole = if (op == "console") controller.freezeConsole(
+            args["start_line"]?.jsonPrimitive?.intOrNull ?: args["start"]?.jsonPrimitive?.intOrNull ?: 0,
+            args["num_lines"]?.jsonPrimitive?.intOrNull ?: args["num_results"]?.jsonPrimitive?.intOrNull ?: 80,
+            reviewIdentity) else null
+        val expectedDocument = reviewIdentity.takeUnless { op in setOf("open", "navigate", "status") }
+        val knownDialog = if (frozenStatus != null) frozenStatus.dialog else controller.pendingDialog.value
+        val reviewedDialog = knownDialog.takeIf { op == "dialog_respond" }
+        val effectiveUrl = AgentRepairCompletionPolicy.browserPermissionTarget(op, url, reviewIdentity.url)
+        require(effectiveUrl.length <= 8_192) { "Browser URL exceeds 8192 characters" }
+        require(target.length <= 20_000) { "Browser target exceeds 20000 characters" }
+        fun browserReview(action: String, page: String) = BrowserApprovalContext(
+            operation = op,
+            url = page,
+            target = target.takeIf { it.isNotBlank() },
+            reason = when (action) {
+                "browser_local" -> "Access a development server on this device."
+                "browser_interact" -> when (op) {
+                    "type" -> if (submit)
+                        "Enter text and submit it on this page." else "Enter text on this page."
+                    "dialog_respond" -> if (input == "dismiss") "Dismiss the website's pending dialog without submitting an answer."
+                        else "Accept the website's pending dialog." + if (dialogText != null)
+                            " Send the supplied prompt answer (${dialogText.length} characters; content hidden from this preview)." else ""
+                    else -> "Interact with an element on this page."
+                }
+                else -> "Read this browser page or its output."
+            },
+        )
+        val readResource = effectiveUrl.ifBlank { "browser:$op" }
+        val loopback = AgentRepairCompletionPolicy.classifyBrowserTarget(effectiveUrl) == AgentRepairCompletionPolicy.BrowserTargetClass.LOOPBACK_HTTP
+        val interactionResource = if (AgentRepairCompletionPolicy.browserInteracts(op))
+            BrowserInteractionAuthority.policyResource(effectiveUrl, op, target) else null
+        val consoleSources = frozenConsole?.observation?.sources?.map { it.url }.orEmpty().distinct()
+        val requiredPermissions = browserKnownPermissions(op, effectiveUrl, target, knownDialog) +
+            browserSourcePermissions(consoleSources) + if (op == "drag" && actionOptions.endTarget != null)
+                browserKnownPermissions(op, effectiveUrl, actionOptions.endTarget, null) else emptyList()
+        browserPermissionDenial(requiredPermissions, c)?.let { return it }
+        browserDialogReviewError(op, target, reviewedDialog)?.let { return it }
+        if (frozenStatus != null) c.browserPublication.capture {
+            if (!c.browserRequestCurrent()) "DENIED: browser request is no longer current"
+            else browserPermissionDenial(requiredPermissions, c)
+        }
+        val reviewStillCurrent: () -> Boolean = {
+            c.browserRequestCurrent() && browserPermissionDenial(requiredPermissions, c) == null &&
+                browserUnverifiedOutputDenial(op, c) == null &&
+                (expectedDocument == null || controller.isReviewIdentityCurrent(expectedDocument)) &&
+                (reviewedDialog == null || controller.pendingDialog.value == reviewedDialog)
+        }
+        val readOrFeedScroll = op in setOf("read", "find", "links") || op == "scroll" && target.isBlank()
+        val existingSite = BrowserSiteSession.resource(effectiveUrl)?.takeIf { readOrFeedScroll && reboundDocument == null }
+        val existingGrant = existingSite?.let { c.approvals.sessionApprovalValidity(
+            c.provenance.sessionId.ifBlank { c.sessionId.orEmpty() }, c.permissionScope, BrowserSiteSession.ACTION, it) }
+        suspend fun refreshBeforeInput(): String? {
+            if (existingGrant?.invoke() != true || !c.browserRequestCurrent() ||
+                browserPermissionDenial(requiredPermissions, c) != null) return null
+            val current = controller.captureReviewIdentity()
+            if (current.matches(reviewIdentity) || current.leaseToken !== reviewIdentity.leaseToken ||
+                BrowserSiteSession.resource(current.url) != existingSite) return null
+            c.browserPublication.bindSessionGrant(existingGrant)
+            return executeUnscoped("browser", args, c, current)
+        }
+        suspend fun reviewPermission(action: String, resource: String, sessionResource: String = resource): String? {
+            // Check every known requirement before each prompt, including after
+            // another approval suspended. One ASK must never mask a later DENY.
+            browserPermissionDenial(requiredPermissions, c)?.let { return it }
+            val result = gate(action, resource, c, sessionResource,
+                browserReview(action, effectiveUrl), reviewStillCurrent)
+            return browserPermissionDenial(requiredPermissions, c) ?: result
+        }
+        browserPermissionDenial(requiredPermissions, c)?.let { return it }
+        if (interactionResource != null) {
+            reviewPermission("browser_interact", interactionResource,
+                BrowserInteractionAuthority.sessionResource(reviewIdentity.authorityKey, effectiveUrl, op, target, input, submit, dialogText))?.let { return it }
+        }
+        reviewPermission("webfetch", readResource, BrowserSessionApprovalScope.browserReadGrantResource(readResource))?.let { return refreshBeforeInput() ?: it }
+        if (loopback) reviewPermission("browser_local", effectiveUrl)?.let { return refreshBeforeInput() ?: it }
+        // The native dialog's requesting URL is a known source, not a claim
+        // that the top-level document owns every frame. Review both scopes.
+        reviewedDialog?.sourceUrl?.takeIf { it != effectiveUrl }?.let { source ->
+            val sourceInteraction = BrowserInteractionAuthority.policyResource(source, op, target)
+            browserPermissionDenial(requiredPermissions, c)?.let { return it }
+            gate("browser_interact", sourceInteraction, c,
+                BrowserInteractionAuthority.sessionResource(reviewIdentity.authorityKey, source, op, target, input, submit, dialogText),
+                browserReview("browser_interact", source), reviewStillCurrent)?.let { return it }
+            browserPermissionDenial(requiredPermissions, c)?.let { return it }
+            gate("webfetch", source, c, BrowserSessionApprovalScope.browserReadGrantResource(source),
+                browserReview("webfetch", source), reviewStillCurrent)?.let { return it }
+            if (AgentRepairCompletionPolicy.classifyBrowserTarget(source) == AgentRepairCompletionPolicy.BrowserTargetClass.LOOPBACK_HTTP) {
+                browserPermissionDenial(requiredPermissions, c)?.let { return it }
+                gate("browser_local", source, c, browserContext = browserReview("browser_local", source),
+                    approvalValid = reviewStillCurrent)?.let { return it }
+            }
+        }
+        for (source in consoleSources.filter { it != effectiveUrl }) {
+            // Site-session consent covers captured embedded output, not future navigation/control of that
+            // origin.
+            if (BrowserSiteSession.resource(effectiveUrl)?.let { resource ->
+                c.approvals.hasSessionApproval(c.provenance.sessionId.ifBlank { c.sessionId.orEmpty() },
+                    c.permissionScope, BrowserSiteSession.ACTION, resource)
+            } == true) continue
+            gate("webfetch", source, c, BrowserSessionApprovalScope.browserReadGrantResource(source),
+                browserReview("webfetch", source), reviewStillCurrent)?.let { return it }
+            if (AgentRepairCompletionPolicy.classifyBrowserTarget(source) == AgentRepairCompletionPolicy.BrowserTargetClass.LOOPBACK_HTTP)
+                gate("browser_local", source, c, browserContext = browserReview("browser_local", source),
+                    approvalValid = reviewStillCurrent)?.let { return it }
+        }
+        if (!reviewStillCurrent()) return refreshBeforeInput() ?: "DENIED: browser policy, request, document or dialog changed during review; inspect again."
+        if (requiredPermissions.any { (action, resource) -> !ApprovalPolicyGuard.remainsPermitted(c.perms, action, resource, c.permissionScope) }) {
+            return "DENIED (policy changed during review): browser operation was not dispatched"
+        }
+        val outputConsent = if (op in setOf("screenshot", "console")) BrowserOutputConsent.create(c.perms,
+            BrowserOutputConsent.Request(requireNotNull(c.sessionId), c.browserRunId, c.browserCallId,
+                c.permissionScope, reviewIdentity, op, fullPage = op == "screenshot" && fullPage,
+                consoleIdentity = frozenConsole?.identity),
+            requestCurrent = { c.browserRequestCurrent() && browserPermissionDenial(requiredPermissions, c) == null },
+            documentCurrent = { controller.isReviewIdentityCurrent(reviewIdentity) }) else null
+        var consentPublished = false
+        return try {
+            if (outputConsent != null) {
+                val scope = if (frozenConsole != null)
+                    "Selected console snapshot, lines ${frozenConsole.start} to ${frozenConsole.end} (end exclusive). Reported source URLs are diagnostics, not certified frame identities."
+                else if (fullPage)
+                    "Bounded vertical full-page screenshot at viewport width. Capture limits apply; live content may change and fixed overlays may repeat."
+                else "Visible browser viewport screenshot. Live content may change."
+                val approval = c.approvals.withBrowserValidity(
+                    check = { reviewStillCurrent() && outputConsent.validForApproval() },
+                    admission = { controller.sampleCurrentUrlForPreflight() == reviewIdentity.url &&
+                        reviewStillCurrent() && outputConsent.validForApproval() }) {
+                    c.approvals.requestApproval(
+                        kind = "browser_unverified_output", summary = "Allow one browser $op output?",
+                        detail = "$scope\n${BrowserOutputConsent.DISCLOSURE}",
+                        action = "webfetch", resource = readResource, permissionScope = c.permissionScope,
+                        provenance = c.provenance,
+                        approvalSessionId = c.provenance.sessionId.ifBlank { c.sessionId.orEmpty() },
+                        sessionGrantAction = BrowserSiteSession.ACTION,
+                        sessionGrantResource = BrowserSiteSession.resource(effectiveUrl).orEmpty(),
+                        browserContext = BrowserApprovalContext(op, effectiveUrl,
+                            reason = "Allow this output. Session choice: ${BrowserSiteSession.DESCRIPTION}", outputScope = scope,
+                            sessionAccess = BrowserSiteSession.resource(effectiveUrl) != null),
+                        isStillCurrent = { reviewStillCurrent() && outputConsent.validForApproval() })
+                }
+                if (approval is ApprovalDecision.Denied || !outputConsent.approve()) return BrowserOutputConsent.WITHHELD
+                bindBrowserSiteGrant(c, effectiveUrl)
+            }
+            c.browserPublication.capture {
+                if (!c.browserRequestCurrent() || browserPermissionDenial(requiredPermissions, c) != null ||
+                    outputConsent?.validForDispatch() == false)
+                    "DENIED (policy or request changed): Browser output was withheld; do not replay the action automatically."
+                else null
+            }
+            val observation = try { frozenStatus?.observation ?: kotlinx.coroutines.withContext(actionOptions) { controller.executeObserved(
+                operation = op,
+                url = url,
+                expectedCurrentUrl = effectiveUrl.takeIf { op !in setOf("open", "navigate") },
+                expectedDocument = expectedDocument,
+                expectedDialog = reviewedDialog,
+                validateAuthority = {
+                    c.browserPublication.denial()?.let { throw BrowserPublicationRevokedException(it) }
+                },
+                target = target,
+                text = input,
+                submit = submit,
+                waitMs = (args["wait_ms"]?.jsonPrimitive?.longOrNull ?: 150L).coerceIn(50L, 10_000L),
+                allowLoopback = loopback,
+                start = args["start_line"]?.jsonPrimitive?.intOrNull ?: args["start"]?.jsonPrimitive?.intOrNull ?: 0,
+                count = args["num_lines"]?.jsonPrimitive?.intOrNull ?: args["num_results"]?.jsonPrimitive?.intOrNull ?: 80,
+                query = args["query"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                elementStart = args["element_start"]?.jsonPrimitive?.intOrNull ?: 0,
+                elementCount = args["element_count"]?.jsonPrimitive?.intOrNull ?: 30,
+                dialogText = dialogText,
+                fullPage = fullPage,
+                outputConsent = outputConsent,
+                frozenConsole = frozenConsole,
+                reviewedLoopbackOrigin = BrowserSessionApprovalScope.canonicalOrigin(effectiveUrl).takeIf { loopback },
+                mediaOwnerId = c.sessionId,
+            ) } } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (changed: BrowserReviewChangedException) {
+                return refreshBeforeInput() ?: "ERROR: browser document changed before dispatch. Inspect the current page."
+            } catch (changed: BrowserSurfaceChangedException) {
+                if (op in setOf("read", "find", "links")) refreshBeforeInput()?.let { return it }
+                throw changed
+            } catch (revoked: BrowserPublicationRevokedException) {
+                return revoked.message.orEmpty()
+            } catch (notReady: BrowserDomNotReadyException) {
+                return "ERROR: the browser DOM is not ready. Call read again once the page is visible."
+            } catch (failure: Exception) {
+                // Renderer/JavaScript exception strings may contain unreviewed page
+                // data. Diagnostics stay generic until a separately authorized read.
+                return "ERROR: browser operation could not complete (${failure.javaClass.simpleName}); inspect the active page before retrying. It was not replayed."
+            }
+            var published = false
+            var retainedMediaOwner: String? = null
+            try {
+                browserObservationGate(observation, readResource, loopback, c, op, target, requiredPermissions,
+                    (listOfNotNull(reviewedDialog?.sourceUrl) + consoleSources).distinct())?.let { return it }
+                // Capture immutable operation and observed-source scopes before any
+                // retained-media callback or outer post-tool hook can suspend.
+                c.browserPublication.capture {
+                    if (!c.browserRequestCurrent() || browserPermissionDenial(requiredPermissions, c) != null)
+                        "DENIED (policy or request changed): Browser output was withheld; do not replay the action automatically."
+                    else browserObservationPolicyCheck(observation, readResource, c, op)
+                }
+                c.browserPublication.denial()?.let { return it }
+                val result = observation.payload
+                if (op == "screenshot" && c.sessionId != null && observation.media != null) {
+                    retainedMediaOwner = c.sessionId
+                    controller.retainObservationMedia(observation, c.sessionId)
+                    // Disk ownership transfer can suspend; policy must still permit
+                    // this immutable source before text or media becomes visible.
+                    c.browserPublication.denial()?.let { return it }
+                    currentCoroutineContext().ensureActive()
+                    c.onMediaReady?.invoke(observation.media)
+                    c.appContext?.let { ChatMediaCleanup.schedule(it, c.workDir) }
+                }
+                published = true
+                consentPublished = true
+                c.browserPublication.scrollAdvanced = observation.scrollAdvanced
+                result
+            } finally {
+                if (!published) controller.discardObservation(observation, retainedMediaOwner)
+                else if (retainedMediaOwner != null) controller.discardObservation(observation)
+            }
+        } finally {
+            if (!consentPublished) outputConsent?.invalidate()
+        }
     }
 
     /** Match the reviewed payload under the repository lock, including after permission callbacks. */
@@ -1472,19 +1535,33 @@ object AgentTools {
     /** Read-only preflight: no mount, DNS, approval, session grant or native operation. */
     internal fun browserRequestPreflight(name: String, args: JsonObject, c: Ctx, sampledCurrentUrl: String? = null): String? {
         if (name != "browser") return null
+        browserTabDenial(args, c)?.let { return it }
         val controller = c.browserController ?: return "ERROR: integrated Android browser is unavailable"
         return try {
             val operation = args["operation"]?.jsonPrimitive?.contentOrNull?.trim()?.lowercase(java.util.Locale.ROOT) ?: "read"
+            if (operation == "viewport" || operation == "request_user_tab") return null
             val target = args["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val url = AgentRepairCompletionPolicy.browserPermissionTarget(operation,
                 args["url"]?.jsonPrimitive?.contentOrNull?.trim(), sampledCurrentUrl ?: controller.currentUrl())
             val dialog = controller.pendingDialog.value
             browserUnverifiedOutputDenial(operation, c) ?:
             browserPermissionDenial(browserKnownPermissions(operation, url, target, dialog) +
-                browserKnownConsolePermissions(operation, args, controller), c)
+                browserKnownConsolePermissions(operation, args, controller) +
+                (args["end_target"]?.jsonPrimitive?.contentOrNull?.takeIf { operation == "drag" }
+                    ?.let { browserKnownPermissions(operation, url, it, null) }.orEmpty()), c)
                 ?: browserDialogReviewError(operation, target, dialog)
         } catch (invalid: IllegalArgumentException) {
             "ERROR: invalid browser request (${invalid.message})"
+        }
+    }
+
+    private fun browserTabDenial(args: JsonObject, c: Ctx): String? {
+        val tab = args["tab"] ?: return null
+        return when ((tab as? JsonPrimitive)?.contentOrNull) {
+            "agent" -> null
+            "user" -> if (c.browserController != null && c.browserTabs?.route("user", c.sessionId)?.browser === c.browserController)
+                null else "DENIED: the user tab is private. If the user asked you to use their tab, call request_user_tab on the agent tab first."
+            else -> "ERROR: tab must be agent or user"
         }
     }
 

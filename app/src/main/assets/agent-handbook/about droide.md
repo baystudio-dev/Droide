@@ -308,10 +308,12 @@ The attachment + stays fixed beside scrolling model/reasoning/mode controls. `/m
 
 **Web**
 1. Open **Web**, enter the page URL in the address field, and choose **Go** or the keyboard's submit action.
-2. Use **Browser actions** for Back, Reload, and Go.
+2. Use **Browser actions** for Back, Reload, and Go. In the agent’s desktop tab, pinch and drag to inspect its live preview. **Fit to screen** resets the preview and **Interact with page** lets you touch the site. Preview zoom leaves agent reads, clicks and screenshots in the selected viewport.
 3. Use **Expand browser** for more space and **Exit expanded browser** to return.
 4. For a local development server, start the server in the appropriate environment first, use its actual reachable URL/port, and inspect the server output if the page does not load.
 5. **Keep active** retains supported browser work while navigating away. Turning it off can stop current and queued browser operations; read the confirmation.
+
+Enter a full HTTPS address or a hostname such as `www.example.org` in the Web tab. The address bar follows redirects. The agent can read visible video and audio controls and scroll the feed under the center of its viewport. A website download opens a confirmation in its tab. **Download** saves the file to Android Downloads. If the agent sees `download_waiting_for_user`, have the user open that tab to review the file. Websites that require another browser or app can be opened from the Web menu.
 
 Agent access to a local server or browser interaction can require separate permissions. Keep active is not blanket permission to click, submit, or share data. A website's completed action is not undone by closing the browser. If the browser cannot initialize, inspect the displayed Android web-rendering-component guidance and **Retry browser**; do not reset project data.
 
@@ -371,7 +373,7 @@ These are the destinations configured in **Settings → About & Legal**. They id
 
 - Official website: https://droide.rekacipta.biz.id/
 - How Droide works: https://droide.rekacipta.biz.id/technology.html
-- Source repository: https://github.com/baystudio-dev/Droide-v1.-00
+- Source repository: https://github.com/baystudio-dev/Droide
 - BayStudio on GitHub: https://github.com/baystudio-dev
 - Bluesky: https://bsky.app/profile/droideapp.bsky.social
 - Instagram: https://instagram.com/droideapp?psln=M2p0YjRpeHpqY3Jh
@@ -410,7 +412,7 @@ Source-reviewed 2026-11-14. This is the release-oriented product architecture; u
 1. The editor's live buffer can contain unsaved text that differs from disk. Editor-aware agent reads can observe that buffer; a compiler or ordinary shell reads saved bytes.
 2. Canonical projects live under the application's private `filesDir/projects/<project-id>`. A project ID and its root must remain distinct and consistent. An Android document-provider URI is not an ordinary Linux path.
 3. A linked device folder is synchronized through `SafMirror`; provider content, the private working copy and the live buffer are separate observations. Completion/conflict status determines what was copied.
-4. An external chat agent can work in a persistent review copy under application-owned `agent-workspaces`. Its command finishing does not prove publication to the canonical project. Retained changes are not disposable cache.
+4. An external chat agent can work in a persistent review copy under application-owned `agent-workspaces`. Its command finishing does not prove publication to the canonical project. Retained changes are not disposable cache. If an earlier runtime may still write to its copy, the panel opens a separate copy from the saved project. Under **Files → Earlier CLI copies**, the user can recover unpublished files or save the older working tree as a TAR archive.
 5. Conversation history, editor recovery, export captures and owned chat-media copies have their own lifecycle. Restoring or deleting one does not automatically restore/delete the others.
 
 **Execution and isolation**
@@ -544,7 +546,7 @@ On supported Android versions Droide can use previous-exit information to enter 
 **Panel navigation, Stop, close and Exit**
 Switching panels or rotating the device should not be treated as a request to cancel application-owned work. Closing a terminal tab, interrupting its foreground command, stopping an agent turn, ending browser Keep active, and exiting the application have different scopes. Stop may cancel the active run while already completed file or remote website effects remain. A detached background job needs its own inspection/stop action.
 
-Explicit **Exit** closes admission, preserves drafts/checkpoints and stops owned work. Successful cleanup requests closure immediately. An independent 15-second deadline requests Android application termination if preservation or stopping stalls; retries do not restart that timer. Deadline termination does not prove every pending write completed. On reopening, use the retained recovery state and inspect uncertain results. Record the last stage/error when diagnosing slow Exit; do not remove recovery files or kill unrelated processes.
+Explicit **Exit** closes admission, preserves drafts/checkpoints and stops owned work. Successful cleanup requests closure immediately. An independent 5-second deadline requests Android application termination if preservation or stopping stalls; retries do not restart that timer. Deadline termination does not prove every pending write completed. On reopening, use the retained recovery state and inspect uncertain results. Record the last stage/error when diagnosing slow Exit; do not remove recovery files or kill unrelated processes.
 
 The stopped presentation offers **Open Droide** to begin again. It does not mean that all earlier tasks or the manual CPU lock will automatically restart. Android force-stop/process death can bypass normal shutdown callbacks; recovery after restart is a separate path and is not a guarantee that every unfinished operation completed.
 
@@ -592,7 +594,7 @@ For failures, distinguish invalid JSON/configuration, executable discovery, serv
 **Browser interaction workflow**
 Use ordinary `web` research for static search/source reading when suitable; use the on-device browser for JavaScript pages, interactive forms or local UI verification. Reuse the current page. Start with status and `read`; use returned element references or unique selectors for small buttons and inputs. After navigation or DOM replacement, refresh references instead of repeatedly clicking a stale target.
 
-The advertised browser tool includes click, type, check, key, hover, scroll, swipe, drag and bounded waiting where supported. `type` can replace editable text or select an option; `check` requests a checkbox/radio/switch state explicitly. Choose the intended scroll container. Use `wait_for` or readiness checks for a specific condition, then verify the resulting page/field state. Keyboard/system shortcuts, protected browser dialogs and inaccessible frames can have limits; inspect the returned diagnostic rather than promising universal automation.
+Use `click`, `double_click`, or `hold` on a visible control. A hold releases automatically after `duration_ms`. To scroll a panel, target it or an element inside it. If a feed reports `moved: false`, try its suggested `swipe`; omit the target for the visible feed. Swipe direction describes the finger. Use `drag` with either `end_target` for a drop or `delta_x` and `delta_y` in CSS pixels for a precise move. Choose `drag_input: touch` for a widget that expects touch events. `type` edits text and selects options, and `check` sets a checkbox, radio or switch. A page may change immediately after input. When an interaction returns `page_pending` or a partial dispatch, use `read` to inspect the outcome before taking another action. Site access granted for the session covers subsequent steps on that origin.
 
 An action dispatched successfully is not proof that the website accepted a form or payment. If cancellation/timeout occurs after dispatch, the effect can be uncertain: inspect the page before repeating it. Browser output/capture has its own limits and possible explicit consent. Prefer DOM/text evidence when sufficient; a screenshot is one bounded view, not proof about the entire page or every frame.
 
@@ -668,7 +670,7 @@ Move validates source identity before rename and verifies the result afterward. 
 **SSH connections**
 Install `cli.ssh` through Extensions or `droide pkg install cli.ssh` if `command -v ssh` cannot find it. For interactive login, agents must request `exec_command` with `requires_tty=true`, then observe that same session with `write_stdin`. Pipe mode is appropriate for an explicitly noninteractive remote command with configured key authentication, not for answering login prompts. Use `ssh -o ConnectTimeout=15 user@server` without literal Markdown backticks; Bash backticks capture the command's output instead of displaying the remote session normally. Password entry intentionally has no echo. Verify the host fingerprint and follow the session's authorization for credentials; do not disable host-key checking, inject passwords into command arguments, or answer prompts blindly.
 
-Ubuntu's normal OpenSSH configuration includes Droide client defaults for a 15-second connection-setup timeout and `IPQoS none`, avoiding problematic DSCP handling on some VPN/router paths. They do not time out an established session, change authentication, or force a remote PTY for file transfers. Override per host in `~/.ssh/config` or with `-o`; customized copies of `/etc/ssh/ssh_config.d/90-droide-client.conf` are preserved. A custom main config that omits the include directory or an explicit `-F` file may bypass these defaults.
+Ubuntu's normal OpenSSH configuration includes Droide client defaults for a 5-second connection-setup timeout and `IPQoS none`, avoiding problematic DSCP handling on some VPN/router paths. They do not time out an established session, change authentication, or force a remote PTY for file transfers. Override per host in `~/.ssh/config` or with `-o`; customized copies of `/etc/ssh/ssh_config.d/90-droide-client.conf` are preserved. A custom main config that omits the include directory or an explicit `-F` file may bypass these defaults.
 
 For a stalled connection, interrupt the owned foreground command and retry with `ssh -vv -o ConnectTimeout=15 -o ConnectionAttempts=1 user@server`. Inspect the last stage: connecting/timeout means route, VPN or server reachability; a connected socket waiting for a server banner/key exchange is a different failure; permission denied is authentication; a visible shell prompt confirms login. For private VPN addresses, check that the VPN includes Droide even if another app connects successfully. Check any user proxy/jump-host configuration; connection timeout does not supervise arbitrary `ProxyCommand` scripts. Export only the relevant, redacted diagnostic output. A started process, zero output, or successful TCP connection alone never proves SSH login succeeded.
 

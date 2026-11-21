@@ -8,7 +8,8 @@ class FileIconRegistryCoverageTest {
     @Test fun everyBuiltInLanguageExtensionAndFilenameHasItsArtwork() {
         val aliases = mapOf("cpp" to "cplusplus", "scss" to "sass", "jsonc" to "json",
             "dockerfile" to "docker", "batch" to "bat", "latex" to "tex", "proto" to "protobuf")
-        val fileOverrides = mapOf("sample.h" to "cplusplus", "sample.svg" to "image")
+        val fileOverrides = mapOf("sample.h" to "cplusplus", "sample.svg" to "image",
+            "tsconfig.json" to "tsconfig", "bun.lock" to "lock")
         for (language in LanguageRegistry.all.filter { LanguageRegistry.isBuiltIn(it.id) }) {
             for (name in language.extensions.map { "sample.$it" } + language.filenames) {
                 val expected = fileOverrides[name] ?: aliases[language.id] ?: language.id

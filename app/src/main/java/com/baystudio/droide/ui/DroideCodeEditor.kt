@@ -37,7 +37,7 @@ import kotlin.math.roundToInt
 
 internal class DroideCodeEditor(
     context: Context,
-    private val languageId: String,
+    internal var languageId: String,
     private val accessoryModifiers: AccessoryModifierController? = null,
     codeStyle: CodeStyleProfile,
 ) : CodeEditor(context) {

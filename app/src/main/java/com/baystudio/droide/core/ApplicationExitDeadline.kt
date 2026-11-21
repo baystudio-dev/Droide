@@ -35,7 +35,10 @@ internal class ApplicationExitDeadline(
         cancelTermination?.invoke()
     }
 
-    companion object { const val TIMEOUT_MS = 15_000L }
+    companion object {
+        const val TIMEOUT_SECONDS = 5L
+        const val TIMEOUT_MS = TIMEOUT_SECONDS * 1_000L
+    }
 }
 
 private val exitDeadlineExecutor = Executors.newScheduledThreadPool(2) { task ->

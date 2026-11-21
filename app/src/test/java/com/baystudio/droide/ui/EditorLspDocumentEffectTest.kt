@@ -39,6 +39,7 @@ class EditorLspDocumentEffectTest {
 
     private fun fixture(
         lsp: RecordingLsp = RecordingLsp(),
+        language: () -> String = { "kotlin" },
         block: suspend (EditorDocument, FileRepository, RecordingLsp, suspend (Int) -> Unit) -> Unit,
     ) = runBlocking {
         val root = Files.createTempDirectory("editor-lsp-effect-").toFile()
@@ -58,7 +59,7 @@ class EditorLspDocumentEffectTest {
             }
         }
         try {
-            composition.setContent { EditorLspDocumentEffect(document, path, lsp) }
+            composition.setContent { EditorLspDocumentEffect(document, path, lsp, language()) }
             awaitCalls(1)
             block(document, files, lsp, ::awaitCalls)
             val beforeDispose = lsp.calls.toList()
@@ -81,6 +82,18 @@ class EditorLspDocumentEffectTest {
         await(3)
         assertEquals(listOf("open:Main.kt", "close:Main.kt", "open:Main.kt"), lsp.calls)
         assertEquals(document.content, lsp.lastText)
+    }
+
+    @Test fun aLanguageChangeReopensTheCurrentUnsavedText() {
+        val language = mutableStateOf("kotlin")
+        fixture(language = { language.value }) { document, _, lsp, await ->
+            document.capture("val unsaved = 4\n")
+            await(2)
+            language.value = "custom"
+            await(4)
+            assertEquals(listOf("open:Main.kt", "change:Main.kt", "close:Main.kt", "open:Main.kt"), lsp.calls)
+            assertEquals(document.content, lsp.lastText)
+        }
     }
 
     @Test fun aDiskReloadSynchronizesEvenWhenTheTypingVersionDidNotChange() = fixture { document, files, lsp, await ->

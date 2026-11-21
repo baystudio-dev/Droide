@@ -50,7 +50,69 @@ class AgentFirstClassMcpEnvelopeTest {
     @Test fun escapedOversizedResultRemainsBoundedValidJson() = execute(result("\"\n".repeat(10000),false)) { _,output ->
         assertEquals(JsonPrimitive(true),Json.parseToJsonElement(output).jsonObject["truncated"]);assertTrue(output.length<=10000)
     }
-    private class FakeMcpHost(private val toolResult: JsonObject) : StdioProcessHost {
+    private fun withCatalog(host: FakeMcpHost, block: suspend (File, AgentTools.Ctx, McpToolRegistry) -> Unit) = runBlocking {
+        val root = Files.createTempDirectory("mcp-catalog").toFile()
+        try {
+            root.resolve(".droide").mkdirs()
+            root.resolve(".droide/mcp.json").writeText("""{"servers":{"local":{"command":"fake-mcp","protocol":"legacy-2025"}}}""")
+            val c = mcpEnvelopeContext(root)
+            val ctx = AgentTools.Ctx(c.files, c.terminal, c.git, c.approvals, c.questions, c.history, c.perms,
+                c.mode, c.llm, c.llmConfig, root, c.todos, c.sessionId, c.lsp, mcpProcessHost = host)
+            withTimeout(10_000) { block(root, ctx, McpToolRegistry(root, processHost = host)) }
+        } finally {
+            McpManager.shutdownSessions(root, host)
+            McpToolRegistry.invalidate(root)
+            PathSecurity.deleteTreeNoFollow(root)
+        }
+    }
+
+    @Test fun aResourceOnlyServerConnectsWithoutSendingToolsList() {
+        val host = FakeMcpHost(result("",false), resourceOnly = true)
+        withCatalog(host) { root, ctx, registry ->
+            assertTrue(registry.discoverAgentTools(ctx.perms, ctx.permissionScope).isEmpty())
+            assertEquals(0, host.listCount.get())
+            val manager = McpManager(root, processHost = host)
+            assertTrue(manager.contextOperation("local","list_resources",buildJsonObject {}).contains("fixture://one"))
+            assertEquals(1, host.starts.size)
+        }
+    }
+
+    @Test fun schemaChangedAfterAdvertisementRequiresFreshDescriptorBeforeDispatch() {
+        val host = FakeMcpHost(result("new",false))
+        withCatalog(host) { _, ctx, registry ->
+            val old = registry.discoverAgentTools(ctx.perms, ctx.permissionScope).single()
+            host.schema = """{"type":"object","properties":{"count":{"type":"integer"}}}"""
+            val outcome = AgentTools.execute(old.functionName, buildJsonObject {}, ctx)
+            assertTrue(outcome, outcome.contains("refresh", ignoreCase = true))
+            assertEquals(1L, host.toolEntered.count)
+            val current = registry.discoverAgentTools(ctx.perms, ctx.permissionScope).single()
+            assertNotEquals(old.functionName, current.functionName)
+            assertTrue(AgentTools.execute(current.functionName, buildJsonObject {}, ctx).contains("\"new\""))
+        }
+    }
+
+    @Test fun idleToolListNotificationRefreshesOnlyTheChangedCatalog() {
+        val host = FakeMcpHost(result("",false))
+        withCatalog(host) { _, ctx, registry ->
+            val previous = registry.discoverAgentTools(ctx.perms, ctx.permissionScope).single()
+            assertEquals(previous, registry.discoverAgentTools(ctx.perms, ctx.permissionScope).single())
+            assertEquals(1, host.listCount.get())
+            host.schema = """{"type":"object","properties":{"name":{"type":"string"}}}"""
+            host.notifyCatalog()
+            val current = registry.discoverAgentTools(ctx.perms, ctx.permissionScope).single()
+            assertNotEquals(previous.functionName, current.functionName)
+            assertEquals(2, host.listCount.get())
+        }
+    }
+
+    private class FakeMcpHost(private val toolResult: JsonObject, private val resourceOnly: Boolean = false) : StdioProcessHost {
+        @Volatile var schema = """{"type":"object"}"""
+        val listCount = AtomicInteger()
+        lateinit var transport: OutputStream
+        fun notifyCatalog() {
+            transport.write(("""{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}""" + "\n").toByteArray())
+            transport.flush()
+        }
         override val executionScope = ProcessExecutionScope.LOCAL_LINUX_ARM64
         val starts = mutableListOf<HostedStdioProcess>()
         val toolEntered = CountDownLatch(1)
@@ -61,6 +123,7 @@ class AgentFirstClassMcpEnvelopeTest {
             val toServer = PipedOutputStream()
             val serverInput = PipedInputStream(toServer, 64 * 1024)
             val toClient = PipedOutputStream()
+            transport = toClient
             val clientInput = PipedInputStream(toClient, 64 * 1024)
             val alive = AtomicBoolean(true)
             val worker = AtomicReference<Thread?>()
@@ -95,8 +158,14 @@ class AgentFirstClassMcpEnvelopeTest {
                                     toolEntered.countDown()
                                 }
                                 val result = when (method) {
-                                    "initialize" -> """{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}"""
-                                    "tools/list" -> """{"tools":[{"name":"counter","inputSchema":{"type":"object"}}]}"""
+                                    "initialize" -> {
+                                        val capabilities = if (resourceOnly) """{"resources":{}}""" else """{"tools":{"listChanged":true}}"""
+                                        """{"protocolVersion":"2025-11-25","capabilities":$capabilities,"serverInfo":{"name":"fake","version":"1"}}"""
+                                    }
+                                    "tools/list" -> {
+                                        listCount.incrementAndGet()
+                                        """{"tools":[{"name":"counter","inputSchema":$schema}]}"""
+                                    }
                                     "tools/call" -> toolResult.toString()
                                     "resources/list" -> when (request["params"]?.jsonObject?.get("cursor")?.jsonPrimitive?.content) {
                                         "second-page" -> """{"resources":[{"uri":"fixture://two","name":"two"}]}"""

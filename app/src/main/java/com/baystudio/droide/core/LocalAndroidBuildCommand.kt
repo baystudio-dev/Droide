@@ -7,7 +7,8 @@ internal object LocalAndroidBuildCommand {
         snapshot: LocalAndroidToolchainDiscovery.Snapshot,
         workers: Int,
         useBuildCache: Boolean,
-        initScriptPath: String? = null,
+        evidence: LocalAndroidBuildEvidence.Session? = null,
+        legacyEvidence: Boolean = false,
     ): String {
         GradleTaskPath.parse(task)
         require(workers in 1..32)
@@ -25,12 +26,16 @@ internal object LocalAndroidBuildCommand {
             append("export ANDROID_SDK_ROOT=").append(q(snapshot.sdkRoot)).append("; ")
             append("export GRADLE_USER_HOME=/root/.gradle; export TMPDIR=/tmp; ")
             append("export PATH=").append(q(managedPathPrefix)).append(":\"\$PATH\"; ")
+            evidence?.let { session ->
+                val manifest = session.manifest.absolutePath
+                require(listOf(manifest, session.initScript.absolutePath).all { path -> path.none { it.code < 32 || it.code == 127 } }) { "Invalid Gradle evidence path" }
+                append("export DROIDE_BUILD_OUTPUT_MANIFEST=").append(q(manifest)).append("; ")
+            }
             append("sh ./gradlew ").append(q(task))
             append(" --console=plain --no-daemon --max-workers=").append(workers)
-            initScriptPath?.let { path ->
-                require(path.startsWith('/') && path.none { it.code < 0x20 || it.code == 0x7f }) { "Invalid Gradle evidence script path" }
-                append(" --init-script ").append(q(path))
-                append(" -Dorg.gradle.configuration-cache=false -Dorg.gradle.unsafe.configuration-cache=false")
+            evidence?.let { session ->
+                append(" --init-script ").append(q(session.initScript.absolutePath))
+                if (legacyEvidence) append(" -Dorg.gradle.configuration-cache=false -Dorg.gradle.unsafe.configuration-cache=false")
             }
             append(" -Dorg.gradle.vfs.watch=false")
             if (useBuildCache) append(" --build-cache") else append(" --no-build-cache")

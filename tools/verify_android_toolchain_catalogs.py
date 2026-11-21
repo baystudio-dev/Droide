@@ -155,7 +155,8 @@ def verify_local_catalog(document: dict) -> int:
         upstream_sha1 = entry.get("upstreamSha1")
         if not isinstance(upstream_sha1, str) or not HEX40.fullmatch(upstream_sha1):
             fail(f"invalid upstream SHA-1: {ident}")
-        if not isinstance(entry.get("maxFiles"), int) or not 1 <= entry["maxFiles"] <= 8192:
+        max_files = 32_768 if kind == "SDK_PLATFORM" else 8_192
+        if not isinstance(entry.get("maxFiles"), int) or not 1 <= entry["maxFiles"] <= max_files:
             fail(f"invalid maxFiles bound: {ident}")
         if not isinstance(entry.get("maxUnpackedBytes"), int) or not 1 <= entry["maxUnpackedBytes"] <= 1_073_741_824:
             fail(f"invalid maxUnpackedBytes bound: {ident}")
@@ -224,6 +225,7 @@ def verify_local_catalog(document: dict) -> int:
         "kind": "SDK_PLATFORM",
         "fileName": "platform-36_r02.zip",
         "sizeBytes": 65_878_410,
+        "maxFiles": 11_342,
         "sha256": "37607369a28c5b640b3a7998868d45898ebcb777565a0e85f9acf36f29631d2e",
         "upstreamSha1": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
     }

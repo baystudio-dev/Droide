@@ -1,10 +1,29 @@
 package com.baystudio.droide.core
 
+import kotlinx.serialization.json.jsonArray
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentIdeContextProjectionTest {
+    @Test fun windowPreservesUserTextImagesAndUnmarkedHistoricalMessages() {
+        val context = AgentIdeContextSnapshot(openFiles = listOf("src/A.kt"), capturedAtMs = 1)
+        val literal = "The text [IDE_CONTEXT_DATA is part of my question"
+        val ref = AgentImageRef("image.png", "0".repeat(64), "image/png", 12)
+        val entry = AgentIdeContextProjection.userMessage(literal, context, listOf(ref), 8_000)
+        val window = AgentIdeContextProjection.Window()
+        val first = window.project(entry)
+        val next = window.project(entry)
+        val firstParts = first.getValue("content").jsonArray
+        val nextParts = next.getValue("content").jsonArray
+        assertTrue(firstParts.first().toString().contains("src/A.kt"))
+        assertTrue(nextParts.first().toString().contains(literal))
+        assertFalse(nextParts.first().toString().contains("src/A.kt"))
+        assertTrue(firstParts.last() == nextParts.last())
+        val old = VisionSupport.userMessage(literal + "\n\n" + AgentIdeContextProjection.renderContext(context), emptyList(), 8_000)
+        assertTrue(window.project(old) === old)
+        assertTrue(AgentIdeContextProjection.Window().project(entry) == first)
+    }
     @Test fun modelProjectionKeepsTranscriptTextSeparateAndIncludesSendTimeContext() {
         val snapshot = AgentIdeContextSnapshot(
             activeDocument = AgentIdeDocumentContext(

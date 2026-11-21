@@ -43,6 +43,7 @@ class AgentManualCompactionConcurrencyTest {
     } }
 
     @Test(timeout = 30_000) fun clearingWhileCompactionProviderRunsCannotCommitItsOldSnapshotToDisk() = fixture { agent, http, root -> runBlocking {
+        http.ignoreExpectedClientDisconnect = true
         val history = listOf(message("user", "old historical constraints ".repeat(7_500)),
             message("assistant", "old answer"), message("user", "review only"))
         val session = agent.sessions.create().copy(apiHistory = history, forkHistory = history,

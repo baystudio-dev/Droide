@@ -220,7 +220,7 @@ internal class DroideNativeTerminalView(context: Context) : FrameLayout(context)
         val lease = imeOwner.connect(session, { currentSession }) {
             !released && isAttachedToWindow && isShown && isFocused && hasWindowFocus() && windowVisibility == VISIBLE
         }
-        val connection = NativeTerminalInputConnection(this, lease,
+        val connection = NativeTerminalInputConnection.create(this, lease,
             commitToTerminal = { upstream.commitText(it, 1) },
             dispatchToTerminal = { event ->
                 when (event.action) {

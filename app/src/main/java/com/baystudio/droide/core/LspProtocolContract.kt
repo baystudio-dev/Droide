@@ -360,7 +360,7 @@ internal object LspProtocolContract {
         var prefix = 0
         val common = minOf(oldText.length, newText.length)
         while (prefix < common && oldText[prefix] == newText[prefix]) prefix++
-        prefix = safeBoundary(oldText, newText, prefix)
+        while (insideCharacter(oldText, prefix) || insideCharacter(newText, prefix)) prefix--
 
         var suffix = 0
         val oldRemaining = oldText.length - prefix
@@ -369,14 +369,9 @@ internal object LspProtocolContract {
             oldText[oldText.length - 1 - suffix] == newText[newText.length - 1 - suffix]) {
             suffix++
         }
-        var oldEnd = oldText.length - suffix
-        var newEnd = newText.length - suffix
-        oldEnd = safeEndBoundary(oldText, oldEnd)
-        newEnd = safeEndBoundary(newText, newEnd)
-        
-        val adjustedSuffix = minOf(oldText.length - oldEnd, newText.length - newEnd)
-        oldEnd = oldText.length - adjustedSuffix
-        newEnd = newText.length - adjustedSuffix
+        while (insideCharacter(oldText, oldText.length - suffix) || insideCharacter(newText, newText.length - suffix)) suffix--
+        val oldEnd = oldText.length - suffix
+        val newEnd = newText.length - suffix
 
         val start = positionAt(oldText, prefix)
         val end = positionAt(oldText, oldEnd)
@@ -389,21 +384,9 @@ internal object LspProtocolContract {
         }
     }
 
-    private fun safeBoundary(a: String, b: String, initial: Int): Int {
-        var value = initial
-        if (value > 0 && value < a.length && a[value - 1] == '\r' && a[value] == '\n') value--
-        if (value > 0 && value < b.length && b[value - 1] == '\r' && b[value] == '\n') value--
-        if (value > 0 && value < a.length && a[value - 1].isHighSurrogate() && a[value].isLowSurrogate()) value--
-        if (value > 0 && value < b.length && b[value - 1].isHighSurrogate() && b[value].isLowSurrogate()) value--
-        return value
-    }
-
-    private fun safeEndBoundary(text: String, initial: Int): Int {
-        var value = initial
-        if (value > 0 && value < text.length && text[value - 1] == '\r' && text[value] == '\n') value--
-        if (value > 0 && value < text.length && text[value - 1].isHighSurrogate() && text[value].isLowSurrogate()) value--
-        return value
-    }
+    private fun insideCharacter(text: String, offset: Int): Boolean =
+        offset > 0 && offset < text.length && ((text[offset - 1] == '\r' && text[offset] == '\n') ||
+            (text[offset - 1].isHighSurrogate() && text[offset].isLowSurrogate()))
 
      
     private fun positionAt(text: String, offset: Int): Pair<Int, Int> {
@@ -411,8 +394,8 @@ internal object LspProtocolContract {
         var line = 0
         var lineStart = 0
         for (i in 0 until end) {
-            if (text[i] == '\n') {
-                line++
+            if (text[i] == '\r' || text[i] == '\n') {
+                if (text[i] == '\r' || i == 0 || text[i - 1] != '\r') line++
                 lineStart = i + 1
             }
         }

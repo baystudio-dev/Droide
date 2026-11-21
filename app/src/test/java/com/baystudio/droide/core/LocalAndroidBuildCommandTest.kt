@@ -27,16 +27,30 @@ class LocalAndroidBuildCommandTest {
         assertTrue(command.contains("--build-cache"))
         assertFalse(command.contains("adb"))
     }
-    @Test fun artifactEvidenceUsesAnInitScriptAndDisablesConfigurationCache() {
-        val command = LocalAndroidBuildCommand.create(":app:assembleDebug", snapshot, 2, true, "/workspace/.droide/build outputs.init.gradle")
-        assertTrue(command.contains("--init-script '/workspace/.droide/build outputs.init.gradle'"))
+    private fun session(dir: String): LocalAndroidBuildEvidence.Session {
+        val base = java.io.File(dir)
+        return LocalAndroidBuildEvidence.Session(base, base.resolve("outputs.gradle"), base.resolve("outputs.tsv"))
+    }
+
+    @Test fun modernEvidenceHonorsProjectConfigurationCacheAndUsesRunScopedOutput() {
+        val evidence = session("/workspace/gradle files")
+        val command = LocalAndroidBuildCommand.create(":app:assembleDebug", snapshot, 2, true, evidence)
+        assertTrue(command.contains("--init-script '/workspace/gradle files/outputs.gradle'"))
+        assertTrue(command.contains("export DROIDE_BUILD_OUTPUT_MANIFEST='/workspace/gradle files/outputs.tsv'"))
+        assertFalse(command.contains("configuration-cache"))
+        assertFalse(LocalAndroidBuildCommand.create("lint", snapshot, 1, false).contains("--init-script"))
+    }
+
+    @Test fun legacyWrapperCanStillCollectBuildOutputs() {
+        val command = LocalAndroidBuildCommand.create(":app:assembleDebug", snapshot, 2, true, session("/workspace/gradle files"), legacyEvidence = true)
+        assertTrue(command.contains("--init-script '/workspace/gradle files/outputs.gradle'"))
         assertTrue(command.contains("-Dorg.gradle.configuration-cache=false"))
         assertTrue(command.contains("-Dorg.gradle.unsafe.configuration-cache=false"))
     }
 
     @Test fun artifactEvidenceRejectsInvalidScriptPaths() {
         org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
-            LocalAndroidBuildCommand.create("assembleDebug", snapshot, 2, true, "/tmp/bad\nscript")
+            LocalAndroidBuildCommand.create("assembleDebug", snapshot, 2, true, session("/tmp/bad\nscript"))
         }
     }
 }

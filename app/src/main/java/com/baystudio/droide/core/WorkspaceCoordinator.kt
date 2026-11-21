@@ -53,6 +53,7 @@ data class WorkspaceRuntime(
     internal val providerConfiguration: ProviderRegistry.ConfiguredSnapshot =
         ProviderRegistry.prepareConfigured(emptyList()),
 ) {
+    internal val browsers = listOfNotNull(agentBrowser, agent.browserTabs?.user)
     val exports: ExportSourceAdmission = ExportSourceAdmission(
         project.id, files.root, documentAuthority,
         requireOwnerSafe = {
@@ -616,7 +617,8 @@ class WorkspaceCoordinator internal constructor(
         val agentCapabilities = AgentCapabilityActions(capabilityRegistry, execution)
         val agentTerminal = automatedExecutionTerminal
         val permissionEngine = PermissionEngine(policy = permissionPolicies.load(project.id))
-        val agentBrowser = AgentBrowserController(root, browserApplicationTimers)
+        val agentBrowser = AgentBrowserController(root, browserApplicationTimers, AgentBrowserViewport.Desktop)
+        val browserTabs = WorkspaceBrowserTabs(agentBrowser, AgentBrowserController(root, browserApplicationTimers))
         val agentToolchains = AgentToolchainActions.forWorkspace(extensions, terminals)
         val agent = step(WorkspaceStartupStep.AGENT) {
             AgentService(
@@ -626,6 +628,7 @@ class WorkspaceCoordinator internal constructor(
                 toolchainActions = agentToolchains,
                 capabilityActions = agentCapabilities,
                 browserController = agentBrowser,
+                browserTabs = browserTabs,
                 mcpProcessHost = remoteProcessHost,
                 appContext = context.applicationContext,
                 runtimeScope = scope,

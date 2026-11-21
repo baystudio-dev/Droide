@@ -18,6 +18,7 @@ internal class LocalAndroidBuildRunner(
         val diagnostics: List<BuildDiagnostic>,
     )
 
+    private val assets = context.applicationContext.assets
     private val governor = MobileBuildResourceGovernor(context.applicationContext)
 
     suspend fun build(
@@ -36,10 +37,14 @@ internal class LocalAndroidBuildRunner(
         val start = System.currentTimeMillis()
         val launch = LocalExecutionSubstrate.userToolchainLaunchSpec(root)
         val lease = RemoteProcessLease.createLocal("gradle-build")
-        val evidence = LocalAndroidBuildEvidence.prepare(root)
+        val modernEvents = LocalAndroidBuildEvidence.supportsBuildEvents(wrapper.declaredVersion)
+        val evidence = AndroidBuildArtifactPolicy.queryFor(task)?.let {
+            val asset = if (modernEvents) "build-outputs.gradle" else "build-outputs-legacy.gradle"
+            LocalAndroidBuildEvidence.prepare(root, assets.open("gradle/$asset").use { it.readBytes() })
+        }
         val lineBuffer = StringBuilder()
         return try {
-            val command = LocalAndroidBuildCommand.create(task, snapshot, workers, useBuildCache, evidence.initScript.absolutePath)
+            val command = LocalAndroidBuildCommand.create(task, snapshot, workers, useBuildCache, evidence, legacyEvidence = !modernEvents)
             onStatus("Local Ubuntu · Gradle $task · $workers worker${if (workers == 1) "" else "s"}")
             val guestArgv = launch.shellCommand(command, lease.environment)
             val targetCommand = guestArgv.joinToString(" ", transform = LocalExecutionSubstrate::shellQuote)
@@ -62,7 +67,7 @@ internal class LocalAndroidBuildRunner(
                 keepTail = true,
             )
             val output = exec.output
-            val artifacts = if (exec.exitCode == 0 && !exec.timedOut) LocalAndroidBuildArtifactCollector.collect(
+            val artifacts = if (evidence != null && exec.exitCode == 0 && !exec.timedOut) LocalAndroidBuildArtifactCollector.collect(
                 root, task, LocalAndroidBuildEvidence.readOutputRoots(root, evidence.manifest),
             ) else emptyList()
             Result(
@@ -76,7 +81,7 @@ internal class LocalAndroidBuildRunner(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } finally {
-            PathSecurity.deleteTreeNoFollow(evidence.directory)
+            evidence?.let { PathSecurity.deleteTreeNoFollow(it.directory) }
         }
     }
 

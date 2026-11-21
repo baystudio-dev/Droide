@@ -1,5 +1,6 @@
 package com.baystudio.droide.core
 
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -15,7 +16,6 @@ internal object McpAgentOperations {
     ): String {
         val server = args["server"]?.jsonPrimitive?.contentOrNull ?: return "ERROR: missing 'server'"
         val operation = args["operation"]?.jsonPrimitive?.contentOrNull
-        val toolName = args["tool"]?.jsonPrimitive?.contentOrNull
         val manager = McpManager(c.workDir, c.pluginSource, c.mcpProcessHost)
         val repair = McpRepairEngine(c.workDir, c.pluginSource, c.mcpProcessHost)
 
@@ -42,15 +42,18 @@ internal object McpAgentOperations {
             }
             "retry", "verify" -> approved { repair.verify(it, clearCatalog = false) }
             "refresh_catalog" -> approved { repair.verify(it, clearCatalog = true) }
-            null, "" -> approved(toolName) { selection ->
-                val legacy = args["input"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (toolName.isNullOrBlank()) manager.tool(selection, legacy)
-                else manager.callTool(selection, toolName, (args["arguments"] as? JsonObject) ?: buildJsonObject {})
-            }
             "list_tools" -> approved { manager.listTools(it) }
-            "call_tool" -> {
-                val selected = toolName ?: return "ERROR: MCP call_tool requires 'tool'"
-                approved(selected) { manager.callTool(it, selected, (args["arguments"] as? JsonObject) ?: buildJsonObject {}) }
+            null, "", "call_tool" -> {
+                val call = try {
+                    if (operation == "call_tool" || "tool" in args) McpManager.parseToolCall(args)
+                    else {
+                        val input = args["input"]
+                        require(input == null || input is JsonPrimitive && input.isString) { "MCP input must be a JSON string" }
+                        McpManager.parseToolInput(input?.jsonPrimitive?.content.orEmpty())
+                    }
+                } catch (failure: IllegalArgumentException) { return "ERROR: " + failure.message }
+                if (call == null) approved { manager.listTools(it) }
+                else approved(call.name) { manager.callTool(it, call.name, call.arguments) }
             }
             "list_resources", "list_resource_templates", "read_resource", "list_prompts", "get_prompt" -> {
                 val parameters = buildJsonObject {

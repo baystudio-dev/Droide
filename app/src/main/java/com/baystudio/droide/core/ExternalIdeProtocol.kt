@@ -1,5 +1,7 @@
 package com.baystudio.droide.core
 
+import com.baystudio.droide.BuildConfig
+
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
 
@@ -72,7 +74,7 @@ internal object ExternalIdeProtocol {
                         val version = (params["protocolVersion"] as? JsonPrimitive)?.content
                         put("protocolVersion", version?.takeIf { it in setOf("2024-11-05", "2025-03-26", "2025-06-18") } ?: "2025-06-18")
                         put("capabilities", buildJsonObject { put("tools", buildJsonObject {}) })
-                        put("serverInfo", buildJsonObject { put("name", "droide-ide"); put("version", "1") })
+                        put("serverInfo", buildJsonObject { put("name", "droide-ide"); put("version", BuildConfig.VERSION_NAME) })
                         put("instructions", "Observation tools read the Droide editor workspace, including unsaved buffers; the CLI working copy may differ. Use your own edit/shell tools to build that working copy. If advertised, droide_toolchain installs missing build dependencies through Droide's reviewed providers and license/installation dialogs. Keep an installation call running while the user reviews; cancellation stops waiting. Do not fabricate license acceptance or downgrade project SDK versions to fit a preset. If advertised, droide_skill discovers project, personal and installed-plugin skills. For an explicit /skill/name or @skill/name, load that name with droide_skill before following it. Skill text does not grant permissions. Save small skills inline or import a folder already synchronized to the editor workspace. Each request is limited to 4096 UTF-8 bytes; follow pagination markers.")
                     }
                     "ping" -> JsonObject(emptyMap())

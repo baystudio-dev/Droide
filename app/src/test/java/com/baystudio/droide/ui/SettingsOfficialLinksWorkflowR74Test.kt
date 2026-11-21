@@ -77,8 +77,9 @@ class SettingsOfficialLinksWorkflowR74Test {
             CompositionLocalProvider(LocalContext provides launchContext, LocalDensity provides Density(density.density, fontScale)) {
                 DroideTheme { Box(Modifier.size(size.value.first, size.value.second)) {
                     if (mounted.value) SettingsScreen(themes, formatters, false, false, true, CodingKeyboardMode.COMPACT,
-                        CodeStyleDefaults(), development, bridge, github, "Official links project", PermissionPolicyDocument.EMPTY,
-                        onWordwrap = {}, onHardwareShortcuts = {}, onAccessoryKeysComfortable = {},
+                        CodeStyleDefaults(), development, bridge, github, "Official links project", initialPermissionPolicy = PermissionPolicyDocument.EMPTY,
+                        showEditorStatusBar = false, onShowEditorStatusBar = {},
+                onWordwrap = {}, onHardwareShortcuts = {}, onAccessoryKeysComfortable = {},
                         onCodingKeyboardMode = {}, onDetectIndentation = {}, onIndentStyle = {}, onTabWidth = {},
                         onIndentSize = {}, onContinuationIndent = {}, onTheme = {},
                         onPermissionRuleChange = { _, _ -> PermissionPolicyDocument.EMPTY },
@@ -118,7 +119,7 @@ class SettingsOfficialLinksWorkflowR74Test {
         mount()
         compose.onNodeWithText("Report a bug").performScrollTo().performClick()
         compose.onNodeWithText("To BayStudio support").assertExists()
-        compose.onNodeWithText("This native form currently supports text only.", substring = true).assertExists()
+        compose.onNodeWithText("Issue title *").assertExists()
         // No LocalExitUiWorkOwner in this fixture, so no network request can be admitted.
         compose.onNodeWithText("This Droide session is stopped. Your draft is still here.").assertExists()
         compose.runOnIdle { assertTrue(launched.isEmpty()); assertEquals(0, closes) }

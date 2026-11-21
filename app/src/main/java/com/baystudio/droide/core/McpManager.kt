@@ -1,5 +1,7 @@
 package com.baystudio.droide.core
 
+import com.baystudio.droide.BuildConfig
+
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -225,17 +227,27 @@ class McpManager(
     suspend fun callTool(serverName: String, toolName: String, arguments: JsonObject = buildJsonObject {}): String =
         callTool(serverName, toolName, arguments, null)
 
-    internal suspend fun callTool(selection: ServerSelection, toolName: String, arguments: JsonObject = buildJsonObject {}): String =
-        callTool(selection.server.name, toolName, arguments, selection)
+    internal suspend fun callTool(selection: ServerSelection, toolName: String, arguments: JsonObject = buildJsonObject {},
+        advertisedSchema: JsonObject? = null): String =
+        callTool(selection.server.name, toolName, arguments, selection, advertisedSchema)
 
-    private suspend fun callTool(serverName: String, toolName: String, arguments: JsonObject, selection: ServerSelection?): String {
+    private suspend fun callTool(serverName: String, toolName: String, arguments: JsonObject, selection: ServerSelection?,
+        advertisedSchema: JsonObject? = null): String {
         require(TOOL_NAME.matches(toolName)) { "Invalid MCP tool name" }
         require(arguments.toString().length <= MAX_ARGUMENT_JSON_CHARS) { "MCP tool arguments are too large" }
-        return withServer(serverName, McpHealthPhase.TOOL_CALL, selection) { server, session, negotiated ->
+        val reviewed = selection ?: select(serverName)
+        return withServer(serverName, McpHealthPhase.TOOL_CALL, reviewed) { server, session, negotiated ->
             val available = session.listTools(negotiated)
-            require(available.any { it["name"]?.jsonPrimitive?.contentOrNull == toolName }) {
+            val currentTool = available.firstOrNull { it["name"] == JsonPrimitive(toolName) }
+            if (advertisedSchema != null && currentTool?.get("inputSchema") != advertisedSchema) {
+                McpToolRegistry.invalidate(workDir, serverName)
+                McpHealthRegistry.connected(workDir, server, available.size, negotiated.version)
+                return@withServer "ERROR: MCP tool definition changed; refresh the Agent tool catalog before calling it."
+            }
+            require(currentTool != null) {
                 "MCP tool is not advertised by server: $toolName"
             }
+            requireCurrent(reviewed)
             val result = session.callTool(negotiated, toolName, arguments)
             McpHealthRegistry.connected(workDir, server, available.size, negotiated.version)
             McpAgentResult.render(serverName, negotiated.version, "call_tool:$toolName", result)
@@ -245,22 +257,9 @@ class McpManager(
      
     suspend fun tool(serverName: String, input: String): String = tool(serverName, input, null)
 
-    internal suspend fun tool(selection: ServerSelection, input: String): String = tool(selection.server.name, input, selection)
-
     private suspend fun tool(serverName: String, input: String, selection: ServerSelection?): String {
-        if (input.isBlank()) return listTools(serverName, selection)
-        if (input.length > MAX_ARGUMENT_JSON_CHARS) return "ERROR: MCP input is too large"
-        val parsed = runCatching { json.parseToJsonElement(input).jsonObject }.getOrElse {
-            return "ERROR: MCP input must be JSON: {\"tool\":\"name\",\"arguments\":{...}}"
-        }
-        val name = parsed["tool"]?.jsonPrimitive?.contentOrNull
-            ?: return "ERROR: MCP input is missing string field 'tool'"
-        val arguments = when (val element = parsed["arguments"]) {
-            null, JsonNull -> buildJsonObject {}
-            is JsonObject -> element
-            else -> return "ERROR: MCP 'arguments' must be an object"
-        }
-        return callTool(serverName, name, arguments, selection)
+        val call = try { parseToolInput(input) } catch (failure: IllegalArgumentException) { return "ERROR: " + failure.message }
+        return if (call == null) listTools(serverName, selection) else callTool(serverName, call.name, call.arguments, selection)
     }
 
     suspend fun contextOperation(serverName: String, operation: String, parameters: JsonObject): String =
@@ -299,7 +298,7 @@ class McpManager(
         val requestedCommand = mapper?.toRemoteProtocolString(server.argv.first()) ?: server.argv.first()
         val executable = host.resolveExecutable(requestedCommand)
         if (executable == null) {
-            val failure = IllegalStateException("MCP executable not available in Device Workstation: ${server.argv.first()}")
+            val failure = IllegalStateException("MCP executable not found in the active execution environment: ${server.argv.first()}")
             McpHealthRegistry.failure(workDir, server, McpHealthPhase.ENVIRONMENT, failure)
             throw failure
         }
@@ -323,19 +322,7 @@ class McpManager(
                 }
                 val active = slot.active ?: run {
                     McpHealthRegistry.starting(workDir, server, McpHealthPhase.PROCESS, "Starting MCP session")
-                    val resolution = resolveProtocol(server, argv) { requireCurrent(selection) }
-                    val session = McpStdioSession(MCP_IO_POOL.start {
-                        requireCurrent(selection)
-                        host.start(argv, emptyMap(), null)
-                    }, resolution.preference, resolution.modernAlreadyProbed, json)
-                    try {
-                        McpHealthRegistry.starting(workDir, server, McpHealthPhase.PROTOCOL, "Negotiating MCP protocol")
-                        val negotiated = session.negotiate()
-                        PooledSession(session, negotiated, server.configFingerprint, identity, invocation).also { slot.active = it }
-                    } catch (failure: Throwable) {
-                        session.close()
-                        throw failure
-                    }
+                    connect(selection, host, argv, invocation).also { slot.active = it }
                 }
                 check(!slot.retired) { "MCP session was closed; retry the operation" }
                 requireCurrent(selection)
@@ -379,41 +366,50 @@ class McpManager(
         val invocation: String,
     )
 
-    private suspend fun resolveProtocol(server: McpServer, argv: List<String>, validate: () -> Unit): ProtocolResolution {
-        if (server.protocol != McpProtocolPreference.AUTO) {
-            return ProtocolResolution(server.protocol, modernAlreadyProbed = false)
-        }
-        val now = System.nanoTime()
-        ERA_CACHE[server.configFingerprint]?.takeIf { now - it.createdAtNanos <= ERA_CACHE_TTL_NANOS }?.let { cached ->
-            return ProtocolResolution(cached.preference, modernAlreadyProbed = cached.preference == McpProtocolPreference.MODERN_2026)
-        }
-
-        val modern = probeModernSibling(argv, validate)
-        val resolved = if (modern) McpProtocolPreference.MODERN_2026 else McpProtocolPreference.LEGACY_2025
-        putEraCache(server.configFingerprint, EraCacheEntry(resolved, now), now)
-        return ProtocolResolution(resolved, modernAlreadyProbed = modern)
+    internal fun hasPendingMessages(selection: ServerSelection): Boolean {
+        val host = selection.host ?: return false
+        val slot = synchronized(SESSION_SLOTS) { SESSION_SLOTS[SessionKey(selection.workspace, selection.server.name, host)] }
+        val active = slot?.active ?: return true
+        return active.identity != selection.runtimeIdentity || !active.session.isAlive || active.session.hasBufferedInput()
     }
 
+    private suspend fun connect(selection: ServerSelection, host: StdioProcessHost, argv: List<String>, invocation: String): PooledSession {
+        val server = selection.server
+        val key = EraKey(host, selection.runtimeIdentity)
+        val now = System.nanoTime()
+        val cached = if (server.protocol == McpProtocolPreference.AUTO)
+            ERA_CACHE[key]?.takeIf { now - it.createdAtNanos <= ERA_CACHE_TTL_NANOS } else null
+        val preference = cached?.preference ?: server.protocol
+        suspend fun start() = McpStdioSession(MCP_IO_POOL.start {
+            requireCurrent(selection)
+            host.start(argv, emptyMap(), null)
+        }, json) { McpToolRegistry.invalidate(workDir, server.name) }
 
-    private suspend fun probeModernSibling(argv: List<String>, validate: () -> Unit): Boolean {
-        val host = processHost ?: error("MCP execution host is not bound")
-        check(host.executionScope in setOf(ProcessExecutionScope.LOCAL_LINUX_ARM64, ProcessExecutionScope.DEVICE_ADB)) {
-            "MCP servers must execute in a bound Linux or Device Workstation backend"
-        }
-        val probe = McpStdioSession(
-            io = MCP_IO_POOL.start { validate(); host.start(argv, emptyMap(), null) },
-            preference = McpProtocolPreference.MODERN_2026,
-            modernAlreadyProbed = false,
-            json = json,
-        )
-        return try {
-            probe.discoverModern(strict = false) != null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            false
-        } finally {
-            probe.close()
+        var session = start()
+        try {
+            McpHealthRegistry.starting(workDir, server, McpHealthPhase.PROTOCOL, "Negotiating MCP protocol")
+            val negotiated = when (preference) {
+                McpProtocolPreference.MODERN_2026 -> requireNotNull(session.discoverModern(strict = true))
+                McpProtocolPreference.LEGACY_2025 -> session.initializeLegacy()
+                McpProtocolPreference.AUTO -> {
+                    val modern = runSuspendCatching { session.discoverModern(strict = false) }.getOrNull()
+                    modern ?: run {
+                        session.close()
+                        session = start()
+                        session.initializeLegacy()
+                    }
+                }
+            }
+            requireCurrent(selection)
+            if (server.protocol == McpProtocolPreference.AUTO) {
+                val era = if (negotiated.modern) McpProtocolPreference.MODERN_2026 else McpProtocolPreference.LEGACY_2025
+                putEraCache(key, EraCacheEntry(era, now), now)
+            }
+            return PooledSession(session, negotiated, server.configFingerprint, selection.runtimeIdentity, invocation)
+        } catch (failure: Throwable) {
+            if (cached != null && failure !is CancellationException) ERA_CACHE.remove(key, cached)
+            session.close()
+            throw failure
         }
     }
 
@@ -471,36 +467,30 @@ class McpManager(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private data class ProtocolResolution(
-        val preference: McpProtocolPreference,
-        val modernAlreadyProbed: Boolean,
-    )
+    private data class EraKey(val host: StdioProcessHost, val serverIdentity: String)
 
     private data class EraCacheEntry(
         val preference: McpProtocolPreference,
         val createdAtNanos: Long,
     )
 
-    private data class NegotiatedMcp(val version: String, val modern: Boolean)
+    private data class NegotiatedMcp(val version: String, val modern: Boolean, val toolsAvailable: Boolean)
 
     private class McpStdioSession(
         private val io: McpStdioIo,
-        private val preference: McpProtocolPreference,
-        private val modernAlreadyProbed: Boolean,
         private val json: Json,
+        private val toolsChanged: () -> Unit,
     ) {
         private val process: HostedStdioProcess get() = io.process
         private val stdout: InputStream = io.stdout
         private var nextId = 1L
         val isAlive: Boolean get() = !io.closed && process.isAlive
 
-        suspend fun negotiate(): NegotiatedMcp = when (preference) {
-            McpProtocolPreference.MODERN_2026 -> {
-                if (modernAlreadyProbed) NegotiatedMcp(MODERN_VERSION, modern = true)
-                else discoverModern(strict = true) ?: error("MCP server does not support $MODERN_VERSION")
-            }
-            McpProtocolPreference.LEGACY_2025 -> initializeLegacy()
-            McpProtocolPreference.AUTO -> error("AUTO must be resolved before opening an MCP operation session")
+        fun hasBufferedInput(): Boolean = try { stdout.available() > 0 } catch (_: java.io.IOException) { true }
+
+        private fun toolsAvailable(result: JsonObject): Boolean {
+            val capabilities = result["capabilities"] as? JsonObject ?: return true
+            return capabilities["tools"] is JsonObject
         }
 
         suspend fun discoverModern(strict: Boolean): NegotiatedMcp? {
@@ -531,10 +521,10 @@ class McpManager(
                 return null
             }
             validateModernCompleteResult(result, "server/discover")
-            return NegotiatedMcp(MODERN_VERSION, modern = true)
+            return NegotiatedMcp(MODERN_VERSION, modern = true, toolsAvailable = toolsAvailable(result))
         }
 
-        private suspend fun initializeLegacy(): NegotiatedMcp {
+        suspend fun initializeLegacy(): NegotiatedMcp {
             val response = request(
                 method = "initialize",
                 params = buildJsonObject {
@@ -553,10 +543,11 @@ class McpManager(
                 put("jsonrpc", "2.0")
                 put("method", "notifications/initialized")
             }, deadlineAfter(REQUEST_TIMEOUT_MS))
-            return NegotiatedMcp(negotiated, modern = false)
+            return NegotiatedMcp(negotiated, modern = false, toolsAvailable = toolsAvailable(result))
         }
 
         suspend fun listTools(protocol: NegotiatedMcp): List<JsonObject> {
+            if (!protocol.toolsAvailable) return emptyList()
             val all = mutableListOf<JsonObject>()
             val seenNames = mutableSetOf<String>()
             val seenCursors = mutableSetOf<String>()
@@ -605,7 +596,7 @@ class McpManager(
             if (operation == "get_prompt") {
                 val name = parameters["name"] as? JsonPrimitive
                 require(name?.isString == true && TOOL_NAME.matches(name.content)) { "Invalid MCP prompt name" }
-                val args = parameters["arguments"] as? JsonObject ?: buildJsonObject {}
+                val args = (parameters["arguments"] ?: JsonObject(emptyMap())) as? JsonObject ?: error("MCP prompt arguments must be an object")
                 require(args.size <= 64 && args.all { (_, value) -> value is JsonPrimitive && value.isString }) {
                     "MCP prompt arguments must be a bounded string-valued object"
                 }
@@ -677,7 +668,7 @@ class McpManager(
 
         private fun clientInfo(): JsonObject = buildJsonObject {
             put("name", "Droide")
-            put("version", "1.00")
+            put("version", BuildConfig.VERSION_NAME)
         }
 
         private suspend fun readResponse(id: Long, deadline: Long): JsonObject {
@@ -692,7 +683,8 @@ class McpManager(
                 require(message["jsonrpc"]?.jsonPrimitive?.contentOrNull == "2.0") { "Invalid MCP JSON-RPC version" }
                 val responseId = message["id"]?.jsonPrimitive?.longOrNull
                 if (responseId == id && ("result" in message || "error" in message)) return message
-                if (message["method"] != null && message["id"] != null) handleServerRequest(message, deadline)
+                if ("id" !in message && message["method"] == JsonPrimitive("notifications/tools/list_changed")) toolsChanged()
+                else if (message["method"] != null && message["id"] != null) handleServerRequest(message, deadline)
                 ignored += 1
                 require(ignored <= MAX_UNRELATED_MESSAGES) { "Too many unrelated MCP messages" }
             }
@@ -799,7 +791,29 @@ class McpManager(
         fun close() = io.close()
     }
 
+    internal data class ToolInvocation(val name: String, val arguments: JsonObject)
+
     companion object {
+        internal fun parseToolInput(input: String): ToolInvocation? {
+            if (input.isBlank()) return null
+            require(input.length <= MAX_ARGUMENT_JSON_CHARS) { "MCP input is too large" }
+            val fields = runCatching { Json.parseToJsonElement(input) as? JsonObject }.getOrNull()
+            requireNotNull(fields) { "MCP input must contain a JSON object with tool and arguments" }
+            return parseToolCall(fields)
+        }
+
+        internal fun parseToolCall(fields: JsonObject): ToolInvocation {
+            val name = (fields["tool"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            require(name != null && TOOL_NAME.matches(name)) { "Invalid or missing MCP tool name" }
+            val arguments = when (val value = fields["arguments"]) {
+                null, JsonNull -> JsonObject(emptyMap())
+                is JsonObject -> value
+                else -> throw IllegalArgumentException("MCP arguments must be an object")
+            }
+            require(arguments.toString().length <= MAX_ARGUMENT_JSON_CHARS) { "MCP tool arguments are too large" }
+            return ToolInvocation(name, arguments)
+        }
+
         private val SESSION_SLOTS = LinkedHashMap<SessionKey, SessionSlot>()
         private const val SESSION_IDLE_NANOS = 5L * 60L * 1_000_000_000L
         private const val MAX_SESSION_SLOTS = 64
@@ -874,9 +888,9 @@ class McpManager(
         private val SUPPORTED_LEGACY_VERSIONS = setOf("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25")
         private val SERVER_NAME = Regex("[A-Za-z0-9._-]{1,80}")
         private val TOOL_NAME = Regex("[A-Za-z0-9_.-]{1,128}")
-        private val ERA_CACHE = ConcurrentHashMap<String, EraCacheEntry>()
+        private val ERA_CACHE = ConcurrentHashMap<EraKey, EraCacheEntry>()
 
-        private fun putEraCache(key: String, value: EraCacheEntry, now: Long) = synchronized(ERA_CACHE) {
+        private fun putEraCache(key: EraKey, value: EraCacheEntry, now: Long) = synchronized(ERA_CACHE) {
             ERA_CACHE.entries.removeIf { now - it.value.createdAtNanos > ERA_CACHE_TTL_NANOS }
             if (ERA_CACHE.size >= MAX_ERA_CACHE_ENTRIES && !ERA_CACHE.containsKey(key)) {
                 ERA_CACHE.entries.minByOrNull { it.value.createdAtNanos }?.let { ERA_CACHE.remove(it.key, it.value) }

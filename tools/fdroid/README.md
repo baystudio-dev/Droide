@@ -12,16 +12,16 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/baystudio-dev/Droide-v1.-00/releases/tag/v1.02"><img src="https://img.shields.io/badge/release-1.02-076BFD?style=flat-square" alt="Release 1.02"></a>
+  <a href="https://github.com/baystudio-dev/Droide/releases/tag/v1.03"><img src="https://img.shields.io/badge/release-1.03-076BFD?style=flat-square" alt="Release 1.03"></a>
   <a href="#get-started"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?style=flat-square" alt="Android 10 or newer"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-LGPL--3.0--only-555555?style=flat-square" alt="License: LGPL-3.0-only"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/baystudio-dev/Droide-v1.-00/releases/tag/v1.02"><strong>Download 1.02</strong></a> ·
+  <a href="https://github.com/baystudio-dev/Droide/releases/tag/v1.03"><strong>Download 1.03</strong></a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="https://droide.rekacipta.biz.id">Website</a> ·
-  <a href="https://github.com/baystudio-dev/Droide-v1.-00/issues">Report a bug</a>
+  <a href="https://github.com/baystudio-dev/Droide/issues">Report a bug</a>
 </p>
 
 <p align="center">
@@ -65,7 +65,7 @@ Select a screenshot to view it at full size.
 
 ## Get started
 
-1. **Install Droide.** Download the production APK from [GitHub Releases](https://github.com/baystudio-dev/Droide-v1.-00/releases/tag/v1.02). Android 10 or newer is required; the Ubuntu environment requires ARM64.
+1. **Install Droide.** Download the production APK from [GitHub Releases](https://github.com/baystudio-dev/Droide/releases/tag/v1.03). Android 10 or newer is required; the Ubuntu environment requires ARM64.
 2. **Open a project.** Create or import a project. Choose **Install environment** when you need Linux tools, or **Not now** to start editing without setup.
 3. **Configure development tools.** Install language services and toolchains on demand. Configure an AI provider or external agent if needed.
 
@@ -73,7 +73,7 @@ The first Ubuntu download is approximately 30 MB and comes from Canonical after 
 
 For Android storage, see the [shared-file and Android Files guide](docs/releases/1.02.md#changes). Shared-file access requires Android 11 or newer and an explicit permission grant. Android 10 supports the file picker and export workflows.
 
-The GitHub 1.02 APK uses the original production signing identity. Install it over an existing GitHub production release to retain application data. Read the [upgrade guidance](docs/releases/1.02.md#download-and-upgrade) before switching from a test APK or another distribution.
+The GitHub 1.03 APK uses the original production signing identity. Install it over an existing GitHub production release to retain application data. Read the [upgrade guidance](docs/releases/1.03.md#download-and-upgrade) before switching from a test APK or another distribution.
 
 F-Droid packaging has been [requested](https://gitlab.com/fdroid/rfp/-/work_items/4776). Availability depends on its independent build and review process.
 
@@ -85,7 +85,7 @@ F-Droid packaging has been [requested](https://gitlab.com/fdroid/rfp/-/work_item
 | [Build from source](docs/distribution/fdroid.md) | Required tools, source export and the release build procedure |
 | [Architecture](docs/ARCHITECTURE.md) | Application structure and ownership boundaries |
 | [Testing](docs/TESTING.md) | Regression tests, dependency checks and verification scope |
-| [Release notes](docs/releases/1.02.md) | Changes, storage options and upgrade guidance |
+| [Release notes](docs/releases/1.03.md) | What changed in this release and how to upgrade |
 
 This repository contains the complete source distribution for the GitHub release and the [F-Droid packaging recipe](tools/fdroid/com.baystudio.droide.yml). Application and native components build from corresponding source with locked, checksum-verified dependencies. Version metadata is defined in `app/build.gradle.kts`.
 
@@ -95,7 +95,7 @@ Follow the source build procedure using `tools/build_fdroid_candidate.py` with `
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and review guidance. Include relevant tests with code changes, and retain dependency verification and original license notices.
 
-Use the [issue tracker](https://github.com/baystudio-dev/Droide-v1.-00/issues) for bugs and feature requests. Include your Droide version, Android version and steps to reproduce the problem. Remove credentials and private project content from attachments.
+Use the [issue tracker](https://github.com/baystudio-dev/Droide/issues) for bugs and feature requests. Include your Droide version, Android version and steps to reproduce the problem. Remove credentials and private project content from attachments.
 
 ## License and services
 

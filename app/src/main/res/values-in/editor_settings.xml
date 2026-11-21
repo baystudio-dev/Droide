@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="editor_show_android_status_bar">Tampilkan status bar Android</string>
+    <string name="editor_show_android_status_bar_summary">Sisakan ruang di atas editor untuk jam, baterai, dan notifikasi.</string>
+    <string name="editor_status_bar_save_failed">Pengaturan status bar gagal disimpan</string>
+</resources>

@@ -1,6 +1,5 @@
 package com.baystudio.droide.core
 
-import java.net.URI
 import java.util.Locale
 
 /** Session-only browser capabilities. Parsing never performs DNS or creates wildcard grants. */
@@ -10,7 +9,7 @@ internal object BrowserSessionApprovalScope {
     fun canonicalOrigin(raw: String): String? {
         if (raw.length !in 1..8_192 || raw.any { it.code < 32 || it.code == 127 }) return null
         return runCatching {
-            val uri = URI(raw)
+            val uri = BrowserWebAddress.authority(raw)
             val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return@runCatching null
             if (!uri.isAbsolute || uri.isOpaque || scheme !in setOf("http", "https") || uri.rawUserInfo != null) return@runCatching null
             val host = uri.host?.lowercase(Locale.ROOT) ?: return@runCatching null

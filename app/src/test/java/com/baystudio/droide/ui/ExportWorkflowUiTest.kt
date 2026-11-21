@@ -94,7 +94,8 @@ class ExportWorkflowUiTest {
         val github = GitHubAccountManager(app)
         compose.setContent { DroideTheme { Box(Modifier.size(360.dp, 640.dp)) {
             SettingsScreen(themes, formatter, false, false, true, CodingKeyboardMode.COMPACT,
-                CodeStyleDefaults(), development, bridge, github, "Export project", PermissionPolicyDocument.EMPTY,
+                CodeStyleDefaults(), development, bridge, github, "Export project", initialPermissionPolicy = PermissionPolicyDocument.EMPTY,
+                showEditorStatusBar = false, onShowEditorStatusBar = {},
                 onWordwrap = {}, onHardwareShortcuts = {}, onAccessoryKeysComfortable = {},
                 onCodingKeyboardMode = {}, onDetectIndentation = {}, onIndentStyle = {}, onTabWidth = {},
                 onIndentSize = {}, onContinuationIndent = {}, onTheme = {},

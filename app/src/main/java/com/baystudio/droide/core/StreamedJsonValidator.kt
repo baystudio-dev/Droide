@@ -19,7 +19,15 @@ internal object StreamedJsonValidator {
         Parser(reader, maxDepth, checkCancelled).document()
     }
 
-    private class Parser(private val reader: Reader, private val maxDepth: Int, private val checkCancelled: () -> Unit) {
+    internal class StringFields(val keys: Map<String, StringFields> = emptyMap(), val element: StringFields? = null, val label: String? = null)
+
+    fun visitStrings(input: InputStream, fields: StringFields, checkCancelled: () -> Unit, begin: (String) -> (Char) -> Unit) {
+        val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+        Parser(InputStreamReader(input, decoder), 128, checkCancelled, fields, begin).document()
+    }
+
+    private class Parser(private val reader: Reader, private val maxDepth: Int, private val checkCancelled: () -> Unit,
+        private val rootFields: StringFields? = null, private val begin: ((String) -> (Char) -> Unit)? = null) {
         private val buffer = CharArray(4096)
         private var position = 0
         private var limit = 0
@@ -44,11 +52,11 @@ internal object StreamedJsonValidator {
         fun document() {
             whitespace()
             if (peek() != '{'.code) fail()
-            value(1)
+            value(1, rootFields)
             whitespace()
             if (take() != -1) fail()
         }
-        private fun value(depth: Int) {
+        private fun value(depth: Int, fields: StringFields?) {
             whitespace()
             when (peek()) {
                 '{'.code -> {
@@ -56,7 +64,13 @@ internal object StreamedJsonValidator {
                     take(); whitespace()
                     if (peek() == '}'.code) { take(); return }
                     while (true) {
-                        whitespace(); string(); whitespace(); expect(':'); value(depth + 1); whitespace()
+                        whitespace()
+                        val selected = if (fields == null || fields.keys.isEmpty()) { string(); null } else {
+                            val key = StringBuilder()
+                            string { if (key.length <= 32) key.append(it) }
+                            fields.keys[key.toString()]
+                        }
+                        whitespace(); expect(':'); value(depth + 1, selected); whitespace()
                         when (take()) { '}'.code -> return; ','.code -> Unit; else -> fail() }
                     }
                 }
@@ -65,11 +79,11 @@ internal object StreamedJsonValidator {
                     take(); whitespace()
                     if (peek() == ']'.code) { take(); return }
                     while (true) {
-                        value(depth + 1); whitespace()
+                        value(depth + 1, fields?.element); whitespace()
                         when (take()) { ']'.code -> return; ','.code -> Unit; else -> fail() }
                     }
                 }
-                '"'.code -> string()
+                '"'.code -> string(fields?.label?.let { begin?.invoke(it) })
                 't'.code -> literal("true")
                 'f'.code -> literal("false")
                 'n'.code -> literal("null")
@@ -96,7 +110,7 @@ internal object StreamedJsonValidator {
             }
             return value
         }
-        private fun string() {
+        private fun string(emit: ((Char) -> Unit)? = null) {
             expect('"')
             var pendingHigh = false
             while (true) {
@@ -116,6 +130,7 @@ internal object StreamedJsonValidator {
                     in 0xD800..0xDBFF -> pendingHigh = true
                     in 0xDC00..0xDFFF -> fail()
                 }
+                emit?.invoke(c.toChar())
             }
         }
     }

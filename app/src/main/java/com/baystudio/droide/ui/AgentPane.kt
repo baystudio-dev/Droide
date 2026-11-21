@@ -92,10 +92,13 @@ fun AgentPane(
     var showAgentBackendMenu by remember { mutableStateOf(false) }
     val externalController = uiState.externalController
     val retainedRecoveryAllowed by rememberUpdatedState(!busy && !externalController.busy)
-    val retainedRecovery = remember(agentPlugins, agentBackendId) {
-        agentPlugins?.let { AgentRetainedRecoveryController(scope, it.retainedRecoveryActions()) { retainedRecoveryAllowed } }
+    var retainedRecovery by remember(agentPlugins, agentBackendId) { mutableStateOf<AgentRetainedRecoveryController?>(null) }
+    fun openRecovery(earlier: Int?) {
+        val host = agentPlugins ?: return
+        retainedRecovery = AgentRetainedRecoveryController(scope, host.retainedRecoveryActions(earlier)) { retainedRecoveryAllowed }
+            .also { it.open() }
     }
-    DisposableEffect(retainedRecovery) { onDispose { retainedRecovery?.close() } }
+    DisposableEffect(retainedRecovery) { val controller = retainedRecovery; onDispose { controller?.close() } }
     val pluginAvailability = rememberWorkspaceAgentAvailability(agentPlugins, showAgentBackendMenu) {
         agentPlugins?.availability().orEmpty()
     }
@@ -487,7 +490,7 @@ fun AgentPane(
             if (usingExternalAgent && workspaceSync != null && agentPlugins != null && selectedExternalSpec != null) {
                 AgentWorkspaceSyncNotice(workspaceSync, externalBusy || busy, onReview = {
                     externalController.reviewWorkspaceChanges(agentPlugins, selectedExternalSpec)
-                }, onRecovery = retainedRecovery?.let { recovery -> { recovery.open() } })
+                }, onRecovery = { openRecovery(null) }, onEarlier = ::openRecovery)
             }
         }
         Column(Modifier.fillMaxSize()) {

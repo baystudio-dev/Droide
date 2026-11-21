@@ -1,6 +1,6 @@
 {
   "schema": 2,
-  "revision": "2026-09-30-sdk36-buildtools36-arm64",
+  "revision": "2026-11-20-sdk36-r02-inventory",
   "entries": [
     {
       "id": "google-sdk-platform-36-r02",
@@ -14,7 +14,7 @@
       "upstreamSha1": "2c1a80dd4d9f7d0e6dd336ec603d9b5c55a6f576",
       "archiveRoot": "android-36",
       "guestTarget": "platforms/android-36",
-      "maxFiles": 2048,
+      "maxFiles": 11342,
       "maxUnpackedBytes": 268435456,
       "provenance": "Google Android SDK repository package platforms;android-36 revision 2. Upstream repository metadata publishes the exact archive name, byte size, and SHA-1; Droide additionally pins the byte-exact SHA-256.",
       "provenanceUrl": "https://dl.google.com/android/repository/repository2-3.xml"

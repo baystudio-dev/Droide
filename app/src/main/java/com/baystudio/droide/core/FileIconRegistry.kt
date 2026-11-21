@@ -169,6 +169,7 @@ object FileIconRegistry {
         "html" to "html", "htm" to "html", "xhtml" to "html",
         "css" to "css", "scss" to "sass", "sass" to "sass", "less" to "less",
         "json" to "json", "json5" to "json", "jsonc" to "json",
+        "eslintrc" to "json", "babelrc" to "json", "swcrc" to "json", "jshintrc" to "json",
         "yaml" to "yaml", "yml" to "yaml",
         "xml" to "xml", "xsd" to "xml", "xsl" to "xml", "xslt" to "xml", "rng" to "xml", "dtd" to "xml", "plist" to "xml",
         "md" to "markdown", "mdx" to "markdown", "markdown" to "markdown",

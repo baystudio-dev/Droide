@@ -1,6 +1,7 @@
 package com.baystudio.droide.core
 
 /** Last model request in this conversation, independent of the cumulative billing ledger. */
+@kotlinx.serialization.Serializable
 data class AgentContextUsage(
     val sessionId: String,
     val providerId: String,
@@ -21,6 +22,13 @@ data class AgentContextUsage(
             !sample.tokenOverflow && sample.prompt >= 0 && sample.completion >= 0)
             copy(reportedInputTokens = sample.prompt, reportedOutputTokens = sample.completion)
         else this
+
+    internal fun restoredFor(id: String): AgentContextUsage? = takeIf {
+        sessionId == id && providerId.isNotBlank() && model.isNotBlank() &&
+            estimate.approximateTokens >= 0 && estimate.serializedChars >= 0 &&
+            (reportedInputTokens == null) == (reportedOutputTokens == null) &&
+            (reportedInputTokens ?: 0) >= 0 && (reportedOutputTokens ?: 0) >= 0
+    }
 
     fun forSelection(providerId: String, model: String): AgentContextUsage? =
         takeIf { this.providerId == providerId && this.model == model }

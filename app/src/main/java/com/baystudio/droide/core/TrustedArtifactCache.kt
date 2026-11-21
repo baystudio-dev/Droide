@@ -10,18 +10,26 @@ internal object TrustedArtifactCache {
 
     private fun key(file: File): String = File(checkNotNull(file.parentFile).canonicalFile, file.name).path
 
-    suspend fun <T> withLease(file: File, block: suspend () -> T): T {
-        val key = key(file)
-        synchronized(leases) { leases[key] = Math.addExact(leases[key] ?: 0, 1) }
-        return try {
-            block()
+    suspend fun <T> withLease(file: File, block: suspend () -> T): T = withLeases(listOf(file), block)
+
+    suspend fun <T> withLeases(files: Collection<File>, block: suspend () -> T): T {
+        val keys = files.mapTo(linkedSetOf(), ::key)
+        require(keys.isNotEmpty()) { "Artifact group is empty" }
+        synchronized(leases) {
+            for (key in keys) check(leases[key] != Int.MAX_VALUE) { "Artifact lease count overflow" }
+            for (key in keys) leases[key] = (leases[key] ?: 0) + 1
+        }
+        try {
+            return block()
         } finally {
             synchronized(leases) {
-                val count = checkNotNull(leases[key])
-                if (count == 1) {
-                    leases.remove(key)
-                    pendingDiscards.remove(key)?.delete()
-                } else leases[key] = count - 1
+                for (key in keys) {
+                    val count = leases.getValue(key)
+                    if (count == 1) {
+                        leases.remove(key)
+                        pendingDiscards.remove(key)?.delete()
+                    } else leases[key] = count - 1
+                }
             }
         }
     }

@@ -6,6 +6,41 @@ import org.junit.Test
 
 /** Candidate contracts, not observed production results. Tiny injected limits only. */
 class RetainedEventChannelR30RegressionTest {
+    @Test fun burstOfDeltasPreservesToolAndThoughtBoundaries() = runBlocking {
+        val queue = RetainedEventChannel(128, 8_000_000, WorkspaceAgentTextBatcher)
+        val tool = WorkspaceAgentEvent.Tool("Read", "file.txt", null)
+        fun offer(event: WorkspaceAgentEvent) {
+            assertEquals(RetainedEventChannel.Admission.ACCEPTED, queue.tryOffer(event, event.retainedChars()))
+        }
+        repeat(500) { offer(WorkspaceAgentEvent.Text("a")) }
+        offer(tool)
+        offer(WorkspaceAgentEvent.Thought("thinking"))
+        repeat(500) { offer(WorkspaceAgentEvent.Text("b")) }
+        queue.close()
+        val received = mutableListOf<WorkspaceAgentEvent>()
+        queue.consume { received.add(it) }
+        val split = received.indexOf(tool)
+        assertTrue(split > 0)
+        assertEquals("a".repeat(500), received.take(split).joinToString("") { (it as WorkspaceAgentEvent.Text).text })
+        assertEquals(WorkspaceAgentEvent.Thought("thinking"), received[split + 1])
+        assertEquals("b".repeat(500), received.drop(split + 2).joinToString("") { (it as WorkspaceAgentEvent.Text).text })
+        assertEquals(0L, queue.retainedChars)
+    }
+
+    @Test(timeout = 10_000) fun stoppingWhileABatchIsDeliveredReleasesTheQueuedText() = runBlocking {
+        val queue = RetainedEventChannel(128, 8_000_000, WorkspaceAgentTextBatcher)
+        val delta = WorkspaceAgentEvent.Text("xy")
+        repeat(1_000) {
+            assertEquals(RetainedEventChannel.Admission.ACCEPTED, queue.tryOffer(delta, delta.retainedChars()))
+        }
+        val consumer = launch(start = CoroutineStart.UNDISPATCHED) { queue.consume { awaitCancellation() } }
+        assertTrue(queue.retainedCount > 1)
+        consumer.cancelAndJoin()
+        assertEquals(0L, queue.retainedChars)
+        assertEquals(0, queue.retainedCount)
+        assertEquals(RetainedEventChannel.Admission.CLOSED, queue.tryOffer(delta, delta.retainedChars()))
+    }
+
     @Test(timeout = 10_000) fun preConsumerEventsSurviveCloseAndDrainExactlyOnce() = runBlocking {
         val queue = RetainedEventChannel<String>(4, 12)
         assertEquals(RetainedEventChannel.Admission.ACCEPTED, queue.tryOffer("one", 3))

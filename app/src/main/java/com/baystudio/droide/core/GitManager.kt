@@ -35,6 +35,11 @@ data class GitCommitSummary(
 )
 
  
+class GitConflictPreview internal constructor(internal val workspace: File, val path: String, internal val text: String) {
+    val blocks = MergeConflictResolver.blocks(text)
+    internal val version = DiskFileVersion.fromText(text)
+}
+
 class GitManager(
     private val workDir: File,
     private val documentAuthority: WorkspaceDocumentAuthority? = null,
@@ -207,36 +212,29 @@ class GitManager(
         if (resolvedConflict) "Marked resolved and staged $repoPath" else "Staged $repoPath"
     }
 
-    suspend fun conflictBlocks(path: String): List<MergeConflictBlock> = gitIo {
+    suspend fun conflictPreview(path: String): GitConflictPreview = gitIo {
         val repoPath = validateRepoPath(path)
-        val g = openExisting() ?: return@gitIo emptyList()
-        g.use {
-            require(repoPath in it.status().call().conflicting) { "Path is not currently conflicted: $repoPath" }
+        val git = requireNotNull(openExisting()) { "Not a Git repository" }
+        git.use { require(repoPath in it.status().call().conflicting) { "Path is not currently conflicted: $repoPath" } }
+        val text = FileRepository(workDir).readTextForEdit(repoPath)
+        GitConflictPreview(workDir.canonicalFile, repoPath, text).also {
+            require(it.blocks.isNotEmpty() || !MergeConflictResolver.hasMarkers(text)) { "Malformed merge-conflict markers require manual editing" }
         }
-        val target = PathSecurity.resolveWithin(workDir, repoPath)
-        require(target.isFile && target.length() <= 2_000_000) { "Conflict file is unavailable or too large to resolve in-app" }
-        val text = target.readText()
-        val blocks = MergeConflictResolver.blocks(text)
-        require(blocks.isNotEmpty() || !MergeConflictResolver.hasMarkers(text)) { "Malformed merge-conflict markers require manual editing" }
-        blocks
     }
 
-    suspend fun resolveConflictBlock(path: String, blockIndex: Int, choice: ConflictChoice): String = mutatePersisted("Resolve conflict") { gitIo {
-        val repoPath = validateRepoPath(path)
-        val g = openExisting() ?: return@gitIo "git error: not a git repository"
-        g.use {
-            require(repoPath in it.status().call().conflicting) { "Path is not currently conflicted: $repoPath" }
-        }
-        val target = PathSecurity.resolveWithin(workDir, repoPath)
-        require(target.isFile && target.length() <= 2_000_000) { "Conflict file is unavailable or too large to resolve in-app" }
-        val before = target.readText()
-        val after = MergeConflictResolver.resolve(before, blockIndex, choice)
-        require(after != before) { "Conflict resolution produced no change" }
-        atomicWrite(target, after)
-        val remaining = MergeConflictResolver.blocks(after).size
-        if (remaining == 0) "Resolved final conflict block in $repoPath; review, then mark resolved & stage"
-        else "Resolved conflict block ${blockIndex + 1} in $repoPath ($remaining remaining)"
-    } }
+    suspend fun resolveConflictBlock(preview: GitConflictPreview, blockIndex: Int, choice: ConflictChoice): String =
+        mutatePersisted("Resolve conflict") { gitIo {
+            require(preview.workspace == workDir.canonicalFile) { "Conflict preview belongs to another workspace" }
+            val path = validateRepoPath(preview.path)
+            val git = requireNotNull(openExisting()) { "Not a Git repository" }
+            git.use { require(path in it.status().call().conflicting) { "Path is not currently conflicted: $path" } }
+            require(blockIndex in preview.blocks.indices) { "Choose a block from the current preview" }
+            val after = MergeConflictResolver.resolve(preview.text, blockIndex, choice)
+            FileRepository(workDir).writeTextIfUnchanged(path, after, preview.version, requireExistingParent = true)
+            val remaining = MergeConflictResolver.blocks(after).size
+            if (remaining == 0) "Resolved final conflict block in $path; review, then mark resolved & stage"
+            else "Resolved conflict block ${blockIndex + 1} in $path ($remaining remaining)"
+        } }
 
     suspend fun stageAll(): String = gitIo {
         val g = openExisting() ?: return@gitIo "git error: not a git repository"

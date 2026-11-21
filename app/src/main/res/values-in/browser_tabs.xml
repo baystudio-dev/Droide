@@ -1,0 +1,21 @@
+<resources>
+    <string name="browser_show_agent_tab">Lihat tab agent</string>
+    <string name="browser_show_user_tab">Kembali ke tab saya</string>
+    <string name="browser_end_handoff">Berhenti membagikan tab saya</string>
+    <string name="browser_agent_viewport">Agent · %1$s × %2$s</string>
+    <string name="browser_download_title">Simpan ke Unduhan?</string>
+    <string name="browser_download_save">Unduh</string>
+    <string name="browser_download_saved">Tersimpan di Unduhan · %1$s</string>
+    <string name="browser_download_timeout">Waktu unduh habis. Coba lagi.</string>
+    <string name="browser_download_failed">File gagal disimpan.</string>
+    <string name="browser_download_link_unavailable">Tautan unduhan ini tidak tersedia.</string>
+    <string name="browser_download_saving">Menyimpan ke Unduhan…</string>
+    <string name="browser_open_externally">Buka di aplikasi lain</string>
+    <string name="browser_no_external_app">Tidak ada aplikasi yang bisa membuka alamat ini.</string>
+    <string name="browser_preview_label">Pratinjau desktop</string>
+    <string name="browser_preview_zoom_out">Perkecil pratinjau</string>
+    <string name="browser_preview_zoom_in">Perbesar pratinjau</string>
+    <string name="browser_preview_fit">Pas ke layar</string>
+    <string name="browser_preview_interact">Interaksi dengan halaman</string>
+    <string name="browser_preview_observe">Kembali ke pratinjau</string>
+</resources>

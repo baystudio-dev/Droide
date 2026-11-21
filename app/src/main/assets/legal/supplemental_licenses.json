@@ -1060,6 +1060,18 @@
       "dependencyKeys": []
     },
     {
+      "id": "resolved:androidx.webkit:webkit:1.11.0",
+      "name": "webkit (androidx.webkit)",
+      "version": "1.11.0",
+      "licenseName": "Apache-2.0",
+      "spdx": "Apache-2.0",
+      "copyright": "See the retained upstream copyright notices below.",
+      "licenseTextAsset": "legal/licenses/AndroidX-Upstream-LICENSE.txt",
+      "source": "https://developer.android.com/jetpack/androidx",
+      "notice": "Resolved application dependency: androidx.webkit:webkit:1.11.0",
+      "dependencyKeys": []
+    },
+    {
       "id": "resolved:com.baystudio.compat:jgit-android-compat:6.10.1.202505221210-r-droide-reconstruction1",
       "name": "jgit-android-compat (com.baystudio.compat)",
       "version": "6.10.1.202505221210-r-droide-reconstruction1",

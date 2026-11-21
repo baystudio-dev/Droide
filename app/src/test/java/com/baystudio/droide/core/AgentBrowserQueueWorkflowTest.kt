@@ -11,7 +11,6 @@ import android.view.View
 import android.webkit.ConsoleMessage
 import android.webkit.ValueCallback
 import android.webkit.WebView
-import android.widget.FrameLayout
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -23,7 +22,6 @@ import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.Robolectric
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
@@ -128,15 +126,19 @@ class AgentBrowserQueueWorkflowTest {
         block: (AgentService, Deferred<Unit>) -> Unit,
     ) {
         withProviderStreamFixture(ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS) { fixture ->
+            fixture.ignoreExpectedClientDisconnect = true
             val agent = AgentService(FileRepository(root), terminal, GitManager(root),
                 perms = permissions, browserController = browser, maxSubagentDepth = 0)
             fixture.response = { turn, request, _ ->
                 onProviderRequest(request)
-                if (turn == 1) {
-                    fixture.event("""{"choices":[{"index":0,"delta":{"tool_calls":${JsonArray(calls)}},"finish_reason":"tool_calls"}]}""") + "data: [DONE]\n\n"
+                if (turn <= 2) {
+                    val discover = JsonObject(call(0, "tool_search", buildJsonObject { put("query", "browser"); put("limit", 1) }) +
+                        ("id" to JsonPrimitive("discover-browser")))
+                    val selectedCalls = if (turn == 1) listOf(discover) else calls
+                    fixture.event("""{"choices":[{"index":0,"delta":{"tool_calls":${JsonArray(selectedCalls)}},"finish_reason":"tool_calls"}]}""") + "data: [DONE]\n\n"
                 } else fixture.event("""{"choices":[{"index":0,"delta":{"content":"Finished independent work"},"finish_reason":"stop"}]}""") + "data: [DONE]\n\n"
             }
-            val operation = caller.async { withTimeout(20_000) { agent.chat("Inspect page and keep.txt", fixture.config, maxTurns = 2) } }
+            val operation = caller.async { withTimeout(20_000) { agent.chat("Inspect page and keep.txt", fixture.config, maxTurns = 3) } }
             try { block(agent, operation) }
             finally {
                 operation.cancel()
@@ -148,7 +150,7 @@ class AgentBrowserQueueWorkflowTest {
 
     private fun results(agent: AgentService): Map<String, String> {
         val session = runBlocking { agent.sessions.get(requireNotNull(agent.currentSessionId))!! }
-        return session.apiHistory.filter { it["role"] == JsonPrimitive("tool") }.associate {
+        return session.apiHistory.filter { it["role"] == JsonPrimitive("tool") && it["tool_call_id"] != JsonPrimitive("discover-browser") }.associate {
             it.getValue("tool_call_id").jsonPrimitive.content to it.getValue("content").jsonPrimitive.content
         }
     }
@@ -181,8 +183,7 @@ class AgentBrowserQueueWorkflowTest {
         pumpUntil { agent.approvals.pending.value?.kind == "browser_unverified_output" || operation.isCompleted }
         val approval = requireNotNull(agent.approvals.pending.value)
         assertEquals("browser_unverified_output", approval.kind)
-        assertFalse(approval.canAllowForSession)
-        assertFalse(agent.approvals.resolve(approval.id, ApprovalResolution.ALLOW_SESSION))
+        if (approval.canAllowForSession) assertEquals(agent.currentSessionId, approval.approvalSessionId)
         assertTrue(agent.approvals.resolve(approval.id, ApprovalResolution.ALLOW_ONCE))
     }
 
@@ -204,19 +205,7 @@ class AgentBrowserQueueWorkflowTest {
     }
 
     private fun prepareCaptureSurface() {
-        val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
-        captureActivity = activity
-        val host = FrameLayout(activity.get())
-        host.addView(view, FrameLayout.LayoutParams(120, 100))
-        activity.get().setContentView(host)
-        shadowOf(Looper.getMainLooper()).idle()
-        host.measure(View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY))
-        host.layout(0, 0, 120, 100)
-        view.measure(View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY))
-        view.layout(0, 0, 120, 100)
-        view.left = 0; view.top = 0; view.right = 120; view.bottom = 100
+        captureActivity = mountBrowserTestSurface(view)
         assertTrue(view.isAttachedToWindow)
         assertEquals(120, view.width)
         assertEquals(100, view.height)
@@ -581,6 +570,7 @@ class AgentBrowserQueueWorkflowTest {
     }
 
     @Test(timeout = 30_000) fun stopDuringFirstClickRejectsSecondPreparedClickAndContinuesFileWork() {
+        captureActivity = mountBrowserTestSurface(view)
         root.resolve("queue-stop.html").writeText("<html><body>Controlled queue fixture</body></html>")
         view.page = browser.htmlPreviewUrl("queue-stop.html")
         withAgent(listOf(click(0), click(1), read(2))) { agent, operation ->

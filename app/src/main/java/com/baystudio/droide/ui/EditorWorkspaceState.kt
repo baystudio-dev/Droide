@@ -853,6 +853,9 @@ class EditorWorkspaceState {
         check(sealedHandoffOwner == null) { "Editor workspace is being replaced" }
     }
 
+    internal val canCaptureExitImmediately: Boolean
+        get() = sealedHandoffOwner == null && documents.values.none { it.isSaveInProgress }
+
     // This state is retained by the application workspace across Activity recreation/closure.
     // Loading the disk checkpoint again would replace newer tabs/edits/selections.
     var recoveryInitialized by mutableStateOf(false)

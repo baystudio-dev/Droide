@@ -78,6 +78,9 @@ data class ExtensionFamily(
 )
 
 enum class ExtensionState {
+    CHECKING,
+    MANUAL,
+    PROJECT_DEPENDENCY,
     BUILT_IN,
     INSTALLED,
     EXTERNAL,

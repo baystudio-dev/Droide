@@ -56,9 +56,12 @@ class UpstreamApkVerificationTests(unittest.TestCase):
             raise unittest.SkipTest("Set real signed/normalized unsigned APKs and apksigner paths")
         cls.signed, cls.unsigned, cls.apksigner = (Path(os.environ[name]) for name in names)
         cls.metadata = Path(__file__).resolve().parents[1] / "fdroid/com.baystudio.droide.yml"
+        from fdroidserver import metadata
+        current = metadata.parse_metadata(cls.metadata)["CurrentVersionCode"]
+        cls.version_code = int(os.environ.get("DROIDE_UPSTREAM_VERSION_CODE", current))
 
     def test_real_rebuild_preserves_production_signature_and_every_byte(self):
-        receipt = verify(self.signed, self.unsigned, self.metadata, 46, self.apksigner)
+        receipt = verify(self.signed, self.unsigned, self.metadata, self.version_code, self.apksigner)
         self.assertTrue(receipt["byteIdenticalToUpstream"])
 
     def test_changed_rebuild_payload_is_rejected(self):
@@ -75,7 +78,7 @@ class UpstreamApkVerificationTests(unittest.TestCase):
                 stream.seek(-1, 1)
                 stream.write(bytes([original[0] ^ 1]))
             with self.assertRaisesRegex(ValueError, "signature verification failed"):
-                verify(self.signed, changed, self.metadata, 46, self.apksigner)
+                verify(self.signed, changed, self.metadata, self.version_code, self.apksigner)
 
     def test_different_certificate_allowlist_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -83,7 +86,7 @@ class UpstreamApkVerificationTests(unittest.TestCase):
             changed.write_text(self.metadata.read_text().replace(
                 "0cc1c5885fea5c5779eb4b3ddcce2a8518b7c207cab7dd7606e94c4d27ccb7ac", "a" * 64))
             with self.assertRaisesRegex(ValueError, "not in AllowedAPKSigningKeys"):
-                verify(self.signed, self.unsigned, changed, 46, self.apksigner)
+                verify(self.signed, self.unsigned, changed, self.version_code, self.apksigner)
 
 
 if __name__ == "__main__":

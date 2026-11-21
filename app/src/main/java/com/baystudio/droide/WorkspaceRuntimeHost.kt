@@ -12,7 +12,6 @@ import com.baystudio.droide.core.WorkspaceRuntime
 import com.baystudio.droide.core.WorkspaceStartupMode
 import com.baystudio.droide.core.WorkspaceStartupPhase
 import com.baystudio.droide.core.StartupRecoveryPolicy
-import com.baystudio.droide.core.BrowserApplicationVisibility
 import com.baystudio.droide.core.BrowserApplicationTimers
 import com.baystudio.droide.ui.EditorRecoveryDiscardController
 import com.baystudio.droide.ui.EditorWorkspaceState
@@ -47,6 +46,7 @@ import kotlinx.coroutines.launch
 
 internal class WorkspaceRuntimeHost(
     private val application: Application,
+    private val isApplicationVisible: () -> Boolean,
     coordinatorFactory: (Context, CoroutineScope, BrowserApplicationTimers) -> WorkspaceCoordinator = { context, scope, timers ->
         WorkspaceCoordinator(context, scope, browserApplicationTimers = timers)
     },
@@ -104,9 +104,9 @@ internal class WorkspaceRuntimeHost(
         activeExplorerRefresh?.close()
     }
     private var editorAuthorityBinding: com.baystudio.droide.core.WorkspaceDocumentAuthorityBridge.Binding? = null
-    private val browserVisibility = BrowserApplicationVisibility { visible ->
+    internal fun setBrowserApplicationVisible(visible: Boolean) {
         browserTimers.setApplicationVisible(visible)
-        coordinator.runtime.value?.agentBrowser?.setApplicationVisible(visible)
+        coordinator.runtime.value?.browsers?.forEach { it.setApplicationVisible(visible) }
     }
     private val memoryCallbacks = object : ComponentCallbacks2 {
         override fun onConfigurationChanged(newConfig: Configuration) = Unit
@@ -121,7 +121,7 @@ internal class WorkspaceRuntimeHost(
     }
 
     private fun trimBrowserMemory(level: Int) {
-        runtimeScope.launch { coordinator.runtime.value?.agentBrowser?.onMemoryPressure(level) }
+        runtimeScope.launch { coordinator.runtime.value?.browsers?.forEach { it.onMemoryPressure(level) } }
     }
 
     private fun trimEditorMemory() {
@@ -229,13 +229,12 @@ internal class WorkspaceRuntimeHost(
 
     init {
         application.registerComponentCallbacks(memoryCallbacks)
-        application.registerActivityLifecycleCallbacks(browserVisibility)
-        browserTimers.setApplicationVisible(browserVisibility.isVisible)
+        browserTimers.setApplicationVisible(isApplicationVisible())
         runtimeScope.launch(Dispatchers.IO) { runSuspendCatching { ModelsDevCatalog.initialize(application.applicationContext) } }
         runtimeScope.launch(Dispatchers.IO) { runSuspendCatching { com.baystudio.droide.core.ChatMediaCleanup.resume(application.applicationContext) } }
         runtimeScope.launch {
             coordinator.runtime.collect { runtime ->
-                runtime?.agentBrowser?.setApplicationVisible(browserVisibility.isVisible)
+                runtime?.browsers?.forEach { it.setApplicationVisible(isApplicationVisible()) }
                 // Fence before replacement; the shared lane remains held until old IO really drains.
                 if (explorerRuntime != null && explorerRuntime !== runtime) {
                     closeExplorerRefresh()
@@ -295,6 +294,7 @@ internal class WorkspaceRuntimeHost(
         beforeCloseUi: List<ApplicationExitSequence.Step> = emptyList(),
     ): List<ApplicationExitSequence.Step> {
         var owned: WorkspaceRuntime? = null
+        var preservedEditor: WorkspaceRuntime? = null
         var stops: ExitOwnerBarrier? = null
         var history: ExitOwnerBarrier? = null
         fun nativeDrafts() = owned?.agent?.let { agent ->
@@ -312,7 +312,7 @@ internal class WorkspaceRuntimeHost(
                 ApplicationExitSequence.Step("Imports") { rt.imports.closeAndJoin() },
                 ApplicationExitSequence.Step("Build and tasks") { rt.execution.stopAndJoinForExit() },
                 ApplicationExitSequence.Step("Extensions") { rt.extensions.closeAndJoinForExit() },
-                ApplicationExitSequence.Step("Browser") { rt.agentBrowser.stopForExit() },
+                ApplicationExitSequence.Step("Browser") { rt.browsers.forEach { it.stopForExit() } },
                 ApplicationExitSequence.Step("Virtual machine") { rt.qemuVm.shutdownForExit() },
                 ApplicationExitSequence.Step("Debugger") { rt.debugger.shutdown() },
                 ApplicationExitSequence.Step("Language servers") { rt.lsp.shutdown() },
@@ -328,19 +328,29 @@ internal class WorkspaceRuntimeHost(
                 retainedAgentUiState?.externalController?.stopAndCheckpointForExit(owned?.agentPlugins)
             },
         )).also { history = it }
+        suspend fun preserveEditor(runtime: WorkspaceRuntime) {
+            check(exitNativeRetirementFailure == null) { "Editor capture during Activity retirement was not confirmed" }
+            if (exitEditorCheckpoint == null) exitEditorCheckpoint = com.baystudio.droide.ui.prepareEditorExitCheckpoint(
+                retainedEditorState, checkNotNull(retainedEditorRecoveryStore))
+            checkNotNull(exitEditorCheckpoint).saveAndVerify()
+            preservedEditor = runtime
+        }
         return listOf(
+            ApplicationExitSequence.Step("Preserving unsaved editor drafts") {
+                initJob?.cancel()
+                val active = editorRuntime
+                if (active != null && active === coordinator.runtime.value &&
+                    (exitEditorCheckpoint != null || retainedEditorState.canCaptureExitImmediately)) {
+                    preserveEditor(active)
+                }
+            },
             ApplicationExitSequence.Step("Freezing workspace admission") {
-                initJob?.cancelAndJoin()
+                initJob?.join()
                 owned = coordinator.freezeTransitionsForExit()
                 closeExplorerRefresh()
-            },
-            ApplicationExitSequence.Step("Preserving unsaved editor drafts") {
-                if (editorRuntime != null) {
-                    check(editorRuntime === owned) { "Editor owner changed before Exit" }
-                    check(exitNativeRetirementFailure == null) { "Editor capture during Activity retirement was not confirmed; Exit remains paused with recovery data retained" }
-                    if (exitEditorCheckpoint == null) exitEditorCheckpoint = com.baystudio.droide.ui.prepareEditorExitCheckpoint(
-                        retainedEditorState, checkNotNull(retainedEditorRecoveryStore))
-                    exitEditorCheckpoint?.saveAndVerify()
+                editorRuntime?.let { editor ->
+                    check(editor === owned) { "Editor owner changed before Exit" }
+                    if (preservedEditor !== editor) preserveEditor(editor)
                 }
             },
             ApplicationExitSequence.Step("Preserving unsent chat drafts") {
@@ -355,7 +365,7 @@ internal class WorkspaceRuntimeHost(
                 check(exitNativeRetirementFailure == null) { "Editor capture during Activity retirement was not confirmed; Exit remains paused" }
                 exitEditorCheckpoint?.saveAndVerify()
                 exitEditorCheckpoint?.commitForRelease()
-                owned?.agentBrowser?.requestStopForExit()
+                owned?.browsers?.forEach { it.requestStopForExit() }
                 releaseUi()
                 // A stopped Activity cannot provide the Compose frame that releases this sealed view.
                 (exitEditorCheckpoint?.nativeOwnerToRelease as? com.baystudio.droide.ui.DroideCodeEditor)?.release()
@@ -384,13 +394,12 @@ internal class WorkspaceRuntimeHost(
             },
         ) + beforeCloseUi + listOf(
             ApplicationExitSequence.Step("Confirming browser surfaces shutdown") {
-                owned?.agentBrowser?.releaseNativeSurfacesForExit()
-                owned?.agentBrowser?.awaitNativeSurfacesReleasedForExit()
+                owned?.browsers?.forEach { it.releaseNativeSurfacesForExit() }
+                owned?.browsers?.forEach { it.awaitNativeSurfacesReleasedForExit() }
             },
             ApplicationExitSequence.Step("Releasing workspace resources") {
                 editorAuthorityBinding?.close(); editorAuthorityBinding = null
                 application.unregisterComponentCallbacks(memoryCallbacks)
-                application.unregisterActivityLifecycleCallbacks(browserVisibility)
                 browserTimers.close()
                 coordinator.finishExitOwnership(owned)
             },
@@ -403,7 +412,6 @@ internal class WorkspaceRuntimeHost(
     override fun close() {
         com.baystudio.droide.core.OwnedResourceCleanup.run(
             { application.unregisterComponentCallbacks(memoryCallbacks) },
-            { application.unregisterActivityLifecycleCallbacks(browserVisibility) },
             { browserTimers.close() },
             { retainedAgentUiState?.close() },
             { closeExplorerRefresh() },

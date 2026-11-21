@@ -8,7 +8,7 @@ import org.junit.Test
 class SettingsOfficialLinksR74Test {
     private val expected = linkedMapOf(
         SettingsOfficialLink.WEBSITE to "https://droide.rekacipta.biz.id/",
-        SettingsOfficialLink.SOURCE to "https://github.com/baystudio-dev/Droide-v1.-00",
+        SettingsOfficialLink.SOURCE to "https://github.com/baystudio-dev/Droide",
         SettingsOfficialLink.TECHNOLOGY to "https://droide.rekacipta.biz.id/technology.html",
         SettingsOfficialLink.GITHUB to "https://github.com/baystudio-dev",
         SettingsOfficialLink.BLUESKY to "https://bsky.app/profile/droideapp.bsky.social",
@@ -110,8 +110,8 @@ class SettingsOfficialLinksR74Test {
     }
 
     @Test fun noGuessedDownloadDocsOrRepositoryPathsAreAccepted() {
-        listOf("https://github.com/baystudio-dev/Droide-v1.-00/releases", "https://droide.rekacipta.biz.id/download",
-            "https://droide.rekacipta.biz.id/docs", "https://github.com/baystudio-dev/Droide-v1.-00/issues").forEach {
+        listOf("https://github.com/baystudio-dev/Droide/releases", "https://droide.rekacipta.biz.id/download",
+            "https://droide.rekacipta.biz.id/docs", "https://github.com/baystudio-dev/Droide/issues").forEach {
             assertFalse(it, SettingsOfficialLinks.isAllowedTarget(it))
         }
     }

@@ -40,7 +40,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
     var identityEditing by remember(git) { mutableStateOf(false) }
     var pendingDiscard by remember(git) { mutableStateOf<GitChange?>(null) }
     var pendingResolve by remember(git) { mutableStateOf<GitChange?>(null) }
-    var conflictBlocks by remember(git) { mutableStateOf<List<MergeConflictBlock>>(emptyList()) }
+    var conflictPreview by remember(git) { mutableStateOf<GitConflictPreview?>(null) }
     var conflictBusy by remember(git) { mutableStateOf(false) }
     var conflictError by remember(git) { mutableStateOf<String?>(null) }
     var diffTitle by remember(git) { mutableStateOf<String?>(null) }
@@ -252,11 +252,11 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
                     if (change.kind == GitChangeKind.CONFLICT) {
                         pendingResolve = change
                         conflictError = null
-                        conflictBlocks = emptyList()
+                        conflictPreview = null
                         scope.launch {
                             conflictBusy = true
-                            conflictBlocks = runSuspendCatching { git.conflictBlocks(change.path) }
-                                .getOrElse { conflictError = it.message ?: "Unable to parse conflict"; emptyList() }
+                            conflictPreview = runSuspendCatching { git.conflictPreview(change.path) }
+                                .getOrElse { conflictError = it.message ?: "Unable to parse conflict"; null }
                             conflictBusy = false
                         }
                     } else runOperation { git.stage(change.path) }
@@ -396,6 +396,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
     }
 
     pendingResolve?.let { change ->
+        val preview = conflictPreview?.takeIf { it.path == change.path }
         AlertDialog(
             onDismissRequest = { if (!conflictBusy) pendingResolve = null },
             title = { Text("Resolve merge conflict", maxLines = 2) },
@@ -407,10 +408,10 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
                     FileIdentityLabel(change.path, change.path, iconSize = 16.dp, monospaced = true)
                     conflictError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     if (conflictBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    if (!conflictBusy && conflictBlocks.isEmpty() && conflictError == null) {
+                    if (!conflictBusy && preview?.blocks?.isEmpty() == true && conflictError == null) {
                         Text("No conflict markers remain. Review the file, then mark it resolved and stage it.")
                     }
-                    conflictBlocks.forEach { block ->
+                    if (preview != null) preview.blocks.forEach { block ->
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text("Conflict ${block.index + 1}", style = MaterialTheme.typography.titleSmall)
@@ -430,11 +431,15 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
                                             enabled = !conflictBusy,
                                             onClick = {
                                                 scope.launch {
+                                                    if (conflictBusy) return@launch
                                                     conflictBusy = true
                                                     conflictError = null
-                                                    val result = runSuspendCatching { git.resolveConflictBlock(change.path, block.index, choice) }
-                                                    if (result.isFailure) conflictError = result.exceptionOrNull()?.message
-                                                    conflictBlocks = runSuspendCatching { git.conflictBlocks(change.path) }.getOrDefault(emptyList())
+                                                    val result = runSuspendCatching { git.resolveConflictBlock(preview, block.index, choice) }
+                                                    conflictError = result.exceptionOrNull()?.message ?: result.getOrNull()?.takeIf { it.startsWith("git error:") }
+                                                    conflictPreview = runSuspendCatching { git.conflictPreview(change.path) }.getOrElse { error ->
+                                                        conflictError = conflictError ?: error.message ?: "Unable to refresh conflict"
+                                                        null
+                                                    }
                                                     conflictBusy = false
                                                     refreshState()
                                                 }
@@ -449,7 +454,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
             },
             confirmButton = {
                 Button(
-                    enabled = !conflictBusy && conflictBlocks.isEmpty() && conflictError == null,
+                    enabled = !conflictBusy && preview?.blocks?.isEmpty() == true && conflictError == null,
                     onClick = {
                         pendingResolve = null
                         runOperation { git.stage(change.path, allowConflictResolution = true) }

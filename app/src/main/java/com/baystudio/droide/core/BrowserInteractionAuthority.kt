@@ -6,7 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 
 /** Display limits must never shorten a policy resource or merge two session capabilities. */
 internal object BrowserInteractionAuthority {
-    private val operations = setOf("click", "type", "check", "key", "hover", "swipe", "drag", "dialog_respond")
+    val operations = setOf("click", "type", "check", "key", "hover", "swipe", "drag", "double_click", "hold", "dialog_respond")
 
     fun policyResource(url: String, operation: String, target: String): String {
         require(operation in operations) { "Unsupported browser interaction" }

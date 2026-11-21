@@ -67,9 +67,13 @@ object LanguageServerRegistry {
         val leaf = originalLeaf.lowercase()
         val ext = leaf.substringAfterLast('.', "")
         val language = LanguageRegistry.forFile(path)?.id
+        val contributedLanguage = language != null && !LanguageRegistry.isBuiltIn(language)
         return (extra + builtIns).distinctBy(LanguageServerSpec::id).filter {
             // MDX retains Markdown editor syntax, but Marksman does not parse MDX.
-            if (it.source == "built-in" && it.id == LspSolidityProfile.ID) LspSolidityProfile.supportsPath(path)
+            if (it.source != "built-in") language in it.languageIds || it.filenames.any { name -> name.equals(leaf, true) } ||
+                it.extensions.any { suffix -> leaf.endsWith("." + suffix.removePrefix("."), true) }
+            else if (contributedLanguage && language !in it.languageIds) false
+            else if (it.source == "built-in" && it.id == LspSolidityProfile.ID) LspSolidityProfile.supportsPath(path)
             else if (it.source == "built-in" && it.id == LspScalaProfile.ID) LspScalaProfile.supportsPath(path)
             else if (it.source == "built-in" && it.id == LspAsmProfile.ID) LspAsmProfile.supportsPath(path)
             else if (it.source == "built-in" && it.id == LspElixirProfile.ID) LspElixirProfile.supportsPath(path)
@@ -100,6 +104,8 @@ object LanguageServerRegistry {
     fun protocolLanguageId(path: String): String {
         val leaf = path.replace('\\', '/').substringAfterLast('/')
         val extension = leaf.substringAfterLast('.', "")
+        val language = LanguageRegistry.forFile(path)?.id
+        if (language != null && !LanguageRegistry.isBuiltIn(language)) return language
         if (extension == "C" || extension == "H") return "cpp"
         return when (extension.lowercase()) {
             "mdx" -> "mdx"
@@ -116,7 +122,7 @@ object LanguageServerRegistry {
             "zon" -> "zig"
             "dtd" -> "dtd"
             "ps1", "psm1", "psd1" -> "powershell"
-            else -> LanguageRegistry.forFile(path)?.id ?: extension.lowercase().ifBlank { "plaintext" }
+            else -> language ?: extension.lowercase().ifBlank { "plaintext" }
         }
     }
 

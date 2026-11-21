@@ -216,12 +216,16 @@ class BrowserSurfaceOwnershipTest {
         assertSingleLiveBrowser("sidebar")
         compose.onNodeWithText("Project editor").assertExists()
 
-        // This medium window cannot fit a Web sidebar alongside the editor and chat.
         compose.runOnIdle { surface = surface.copy(width = 640) }
+        assertSingleLiveBrowser("sidebar")
+        compose.onNodeWithText("Project editor").assertExists()
+        compose.onNodeWithText("Agent chat").assertExists()
+
+        compose.runOnIdle { surface = surface.copy(height = 960) }
         assertSingleLiveBrowser("main")
         compose.onNodeWithText("Project editor").assertDoesNotExist()
 
-        compose.runOnIdle { surface = surface.copy(width = 820, sidebarTool = DroideRailTool.Files) }
+        compose.runOnIdle { surface = surface.copy(width = 820, height = 360, sidebarTool = DroideRailTool.Files) }
         assertSingleLiveBrowser("main")
         compose.onNodeWithText("Files sidebar").assertExists()
 

@@ -55,6 +55,7 @@ data class DroideSession(
     val mode: AgentMode = AgentMode.BUILD,
     val pendingInputs: List<AgentPendingInput> = emptyList(),
     val titleGenerationAttempted: Boolean = false,
+    val lastRequestUsage: AgentContextUsage? = null,
 )
 
 data class SessionSummary(
@@ -165,8 +166,14 @@ class SessionManager(
 
     private val dir = PathSecurity.resolveWithin(workDir, ".droide/sessions")
     internal val historyLedger = SessionHistoryLedger(workDir)
-    // Production AgentService installs this; legacy/test managers remain unchanged.
-    internal var toolOutputStore: (() -> AgentToolOutputStore)? = null
+    internal var toolOutputStore: () -> AgentToolOutputStore = { AgentToolOutputStore.forWorkspace(workDir) }
+
+    internal fun retainToolOutput(id: String, output: String): AgentToolOutputStore.Retained {
+        val file = File(dir, "${PathSecurity.safeLeafName(id)}.json")
+        return toolOutputStore().retain(id, output) {
+            !writes.deleted(id) && Files.isRegularFile(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        }
+    }
     private val publicAdmission = AgentPublicContentAdmissionCache()
     internal var publicContentRegistryOverride: AgentPublicContentRegistry? = null
         set(value) { field = value; publicAdmission.clear() }
@@ -185,7 +192,7 @@ class SessionManager(
         expectedRevision: SessionWriteRevision? = null): DroideSession = update(id,expectedRevision) { current ->
         val existing=checkNotNull(current)
         typedChatResources().history.verify(checkpoint,id)
-        existing.copy(typedChat=checkpoint)
+        existing.copy(typedChat=checkpoint, lastRequestUsage=null)
     }
     internal suspend fun commitTypedCompaction(id:String,candidate:TypedChatCompactor.Candidate,
         expectedRevision:SessionWriteRevision,commitAdmission:((()->Unit)->Unit)={ it() }):DroideSession =
@@ -194,7 +201,7 @@ class SessionManager(
             require(existing.typedChat==candidate.original) { "Typed conversation changed during compaction" }
             val task=kotlinx.coroutines.currentCoroutineContext()
             typedChatResources { task.ensureActive() }.history.validateCompleteRequest(candidate.checkpoint,id,candidate.checkpoint.target.runtime()) { task.ensureActive() }
-            existing.copy(typedChat=candidate.checkpoint)
+            existing.copy(typedChat=candidate.checkpoint, lastRequestUsage=null)
         }
     private val writes = SessionWriteTransactions.forWorkspace(workDir.canonicalPath)
     internal var textEditIoProbe: ((TextEditIo, Long) -> Unit)? = null
@@ -346,7 +353,19 @@ class SessionManager(
             if (expectedRevision != null && (entry !== expectedRevision.entry || entry.conversationRevision != expectedRevision.value)) throw StaleSessionWriteException()
             val current = readForUpdate(id)
             check(!requireExisting || current != null) { "The target conversation was removed; the prompt draft was kept" }
-            val next = transform(current)
+            val transformed = transform(current)
+            val typed = transformed.typedChat
+            val next = if (current != null && current.typedChat == null && typed != null) {
+                if (current.forkHistoryPages.isNotEmpty() || current.forkHistory.isNotEmpty()) {
+                    require(current.forkHistoryVersion == SessionForkHistory.SCHEMA_VERSION)
+                    val previous = historyLedger.snapshot(current.forkHistoryPages, current.forkHistory)
+                    require(previous.size <= typed.exact.size && previous.indices.all { index ->
+                        currentCoroutineContext().ensureActive()
+                        (typed.exact[index] as? TypedChatEntry.Legacy)?.message == previous[index]
+                    }) { "The archived conversation no longer matches its saved history" }
+                }
+                transformed.copy(forkHistory = emptyList(), forkHistoryPages = emptyList(), forkHistoryVersion = 0)
+            } else transformed
             require(next.id == id) { "Session update cannot change conversation identity" }
             require(current?.typedChat == null || next.typedChat != null) {
                 "Source-backed conversation cannot be silently downgraded to a legacy projection"
@@ -537,14 +556,14 @@ class SessionManager(
         val safeId = PathSecurity.safeLeafName(id)
         val entry = writes.entry(safeId)
         entry.mutex.withLock {
-        // A failed session deletion must not remove media from a conversation that still exists.
-        Files.deleteIfExists(File(dir, "$safeId.json").toPath())
-        writes.markDeleted(safeId)
-        entry.conversationRevision++
-        // Sidecar/GC failure cannot resurrect a deleted conversation in the caller.
-        runCatching { Files.deleteIfExists(File(dir, "$safeId.meta").toPath()) }
-        runCatching { ChatMediaStore(workDir).releaseDeletedOwner(safeId) }
-        Unit
+            Files.deleteIfExists(File(dir, "$safeId.json").toPath())
+            writes.markDeleted(safeId)
+            entry.conversationRevision++
+            // Retryable sidecar cleanup follows publication of the session deletion.
+            runCatching { Files.deleteIfExists(File(dir, "$safeId.meta").toPath()) }
+            runCatching { ChatMediaStore(workDir).releaseDeletedOwner(safeId) }
+            runCatching { toolOutputStore().releaseDeletedOwner(safeId) }
+            Unit
         }
     }
 
@@ -559,11 +578,15 @@ class SessionManager(
         null
     }
 
-    private suspend fun forkInternal(id: String, atIndex: Int = -1): DroideSession? = sessionWriterIo("forkInternal") withContext@ {
-        val src = get(id) ?: return@withContext null
-        if (src.messages.isEmpty()) return@withContext null
+    private suspend fun forkInternal(id: String, atIndex: Int): DroideSession? = sessionWriterIo("forkInternal") {
+        writes.entry(PathSecurity.safeLeafName(id)).mutex.withLock {
+            if (writes.deleted(id)) null else get(id)?.let { forkSnapshot(it, atIndex) }
+        }
+    }
 
-        if(src.typedChat!=null) return@withContext forkTypedChat(src,atIndex)
+    private suspend fun forkSnapshot(src: DroideSession, atIndex: Int): DroideSession? {
+        if (src.messages.isEmpty()) return null
+        if (src.typedChat != null) return forkTypedChat(src, atIndex)
         val exact = when {
             src.forkHistoryVersion == SessionForkHistory.SCHEMA_VERSION && SessionForkHistory.isExact(src.forkHistory) -> src.forkHistory
             src.forkHistoryVersion == 0 -> SessionForkHistory.migrateLegacy(src.messages, src.apiHistory)
@@ -576,8 +599,8 @@ class SessionManager(
         val forkExact: List<JsonObject>?
         if (explicit) {
             // Historical forks never reconstruct tool state from presentation text.
-            val exactSource = exact ?: return@withContext null
-            forkApi = SessionForkHistory.slice(src.messages, exactSource, idx) ?: return@withContext null
+            val exactSource = exact ?: return null
+            forkApi = SessionForkHistory.slice(src.messages, exactSource, idx) ?: return null
             forkExact = forkApi
         } else if (exact != null) {
             
@@ -589,7 +612,7 @@ class SessionManager(
             
 
             val active = AgentHistory.completeGroups(src.apiHistory).flatten()
-            if (active.size != src.apiHistory.size) return@withContext null
+            if (active.size != src.apiHistory.size) return null
             forkApi = active
             forkExact = null
         }
@@ -616,18 +639,14 @@ class SessionManager(
         )
         val media = ChatMediaStore(workDir)
         media.copyOwner(src.id, forked.id)
-        try {
-            toolOutputStore?.invoke()?.let { outputStore ->
-                // Text mentions are not authority: intersect selected-prefix refs
-                // with immutable artifacts actually owned by the source session.
-                val outputRefs = (forkExact ?: forkApi).asSequence()
-                    .filter { it["role"]?.jsonPrimitive?.contentOrNull == "tool" }
-                    .flatMap { AgentToolOutputStore.references(it["content"]?.jsonPrimitive?.contentOrNull.orEmpty()).asSequence() }
-                    .filter { outputStore.owns(src.id, it) }
-                    .toSet()
-                outputStore.copyOwner(src.id, forked.id, outputRefs)
-            }
-            save(forked)
+        return try {
+            val outputStore = toolOutputStore()
+            val outputRefs = (forkExact ?: forkApi).asSequence()
+                .filter { it["role"]?.jsonPrimitive?.contentOrNull == "tool" }
+                .flatMap { AgentToolOutputStore.references(it["content"]?.jsonPrimitive?.contentOrNull.orEmpty()).asSequence() }
+                .filter { outputStore.owns(src.id, it) }
+                .toSet()
+            outputStore.publishFork(src.id, forked.id, outputRefs) { save(forked) }
             forked
         } catch (failure: Throwable) {
             try { media.releaseOwner(forked.id) } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
@@ -650,14 +669,13 @@ class SessionManager(
             apiHistory=emptyList(),typedChat=copied,todos=src.todos,mode=src.mode)
         val media=ChatMediaStore(workDir);media.copyOwner(src.id,forkId)
         try {
-            toolOutputStore?.invoke()?.let { outputs ->
-                val refs=copied.exact.filterIsInstance<TypedChatEntry.Legacy>().asSequence().map { it.message }
-                    .filter { it["role"]?.jsonPrimitive?.contentOrNull=="tool" }
-                    .flatMap { AgentToolOutputStore.references(it["content"]?.jsonPrimitive?.contentOrNull.orEmpty()).asSequence() }
-                    .filter { outputs.owns(src.id,it) }.toSet()
-                outputs.copyOwner(src.id,child.id,refs)
-            }
-            save(child);return child
+            val outputs = toolOutputStore()
+            val refs = copied.exact.filterIsInstance<TypedChatEntry.Legacy>().asSequence().map { it.message }
+                .filter { it["role"]?.jsonPrimitive?.contentOrNull == "tool" }
+                .flatMap { AgentToolOutputStore.references(it["content"]?.jsonPrimitive?.contentOrNull.orEmpty()).asSequence() }
+                .filter { outputs.owns(src.id, it) }.toSet()
+            outputs.publishFork(src.id, child.id, refs) { save(child) }
+            return child
         } catch(failure:Throwable) {
             try { media.releaseOwner(forkId) } catch(cleanup:Throwable) { failure.addSuppressed(cleanup) };throw failure
         }
@@ -750,6 +768,7 @@ class SessionManager(
             
             messages = s.messages,
             apiHistory = compactApi,
+            lastRequestUsage = null,
         )
         val committed = update(s.id, expectedRevision = revision, commitAdmission = commitAdmission) { current ->
             compacted.copy(pendingInputs = checkNotNull(current).pendingInputs,
@@ -840,7 +859,7 @@ class SessionManager(
             if (!overflow || transcript.length <= MIN_ADAPTIVE_COMPACTION_CHARS) throw t
             
 
-            val split = transcript.length / 2
+            val split = unicodeBoundary(transcript, transcript.length / 2)
             val left = summarizeChunk(config, transcript.substring(0, split), "$label / adaptive A", exchanges, requestBudget, workBudget, onUsage, depth + 1)
             val right = summarizeChunk(config, transcript.substring(split), "$label / adaptive B", exchanges, requestBudget, workBudget, onUsage, depth + 1)
             val combined = "--- checkpoint A ---\n$left\n--- checkpoint B ---\n$right"
@@ -873,7 +892,8 @@ class SessionManager(
     }
 
     internal fun chunkRenderedHistory(groups: List<List<JsonObject>>, chunkChars: Int): List<String> {
-        val rendered = groups.mapIndexed { index, group -> renderGroupForCompaction(group, index + 1) }
+        val window = AgentIdeContextProjection.Window()
+        val rendered = groups.mapIndexed { index, group -> renderGroupForCompaction(group.map(window::project), index + 1) }
         return packLosslessly(rendered, chunkChars)
     }
 
@@ -892,7 +912,8 @@ class SessionManager(
             while (offset < item.length) {
                 val room = chunkChars - current.length
                 if (room <= 0) { flush(); continue }
-                val end = (offset + room).coerceAtMost(item.length)
+                val end = unicodeBoundary(item, offset + minOf(room, item.length - offset))
+                if (end == offset) { flush(); continue }
                 current.append(item, offset, end)
                 offset = end
                 if (current.length >= chunkChars) flush()
@@ -901,6 +922,9 @@ class SessionManager(
         flush()
         return out
     }
+
+    private fun unicodeBoundary(text: String, end: Int): Int =
+        if (end > 0 && end < text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end - 1 else end
 
     internal fun renderGroupForCompaction(group: List<JsonObject>, number: Int): String = buildString {
         append("\n=== conversation group ").append(number).append(" ===\n")

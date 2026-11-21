@@ -5,10 +5,7 @@ import android.os.Build
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
-import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ensureActive
-import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -61,7 +58,7 @@ class LocalAndroidSdkComponentInstaller(
         val nativeSpecs = entry.nativeTools.associateWith { it.toArtifactSpec(entry.id) }
         downloader.withArtifacts(listOf(primarySpec) + nativeSpecs.values) { artifacts ->
             val artifact = artifacts.getValue(primarySpec)
-            verifyPrimaryArtifact(entry, artifact)
+            AndroidSdkComponentArchive.verify(entry, artifact)
             val nativeArtifacts = if (entry.kind == AndroidLocalComponentKind.BUILD_TOOLS_ARM64) {
                 entry.nativeTools.associateWith { tool ->
                     artifacts.getValue(nativeSpecs.getValue(tool)).also { downloaded ->
@@ -72,12 +69,6 @@ class LocalAndroidSdkComponentInstaller(
             } else {
                 emptyMap()
             }
-
-            val downloadBytes = entry.nativeTools.fold(entry.sizeBytes) { total, tool -> Math.addExact(total, tool.sizeBytes) }
-            DeviceWorkstationStorageGuard.requireHeadroom(
-                additionalBytes = Math.addExact(Math.addExact(downloadBytes, entry.maxUnpackedBytes), 128L * 1024L * 1024L),
-                purpose = "install ${entry.familyId} ${entry.version} in local Ubuntu",
-            )
 
             val transaction = LocalPackageInstallJournal.paths(
                 root,
@@ -99,13 +90,17 @@ class LocalAndroidSdkComponentInstaller(
                     val activationId = LocalPackageInstallJournal.prepare(stageDir)
                     val componentRoot = File(stageDir, "payload/component")
                     check(componentRoot.mkdirs()) { "Could not prepare Android SDK component payload directory" }
+                    val overlayBytes = entry.nativeTools.sumOf { it.sizeBytes }
+                    AndroidSdkComponentArchive.extract(entry, artifact, componentRoot) { expandedBytes ->
+                        DeviceWorkstationStorageGuard.requireHeadroom(
+                            additionalBytes = expandedBytes + overlayBytes + 128L * 1024 * 1024,
+                            purpose = "install ${entry.familyId} ${entry.version} in local Ubuntu",
+                        )
+                    }
                     when (entry.kind) {
-                        AndroidLocalComponentKind.SDK_PLATFORM -> {
-                            extractSdkPlatform(entry, artifact, componentRoot)
-                            verifyPlatformPayload(entry, componentRoot)
-                        }
+                        AndroidLocalComponentKind.SDK_PLATFORM -> verifyPlatformPayload(entry, componentRoot)
                         AndroidLocalComponentKind.BUILD_TOOLS_ARM64 -> {
-                            extractBuildToolsPayload(entry, artifact, componentRoot)
+                            AndroidBuildToolsPayload.requireGoogleFiles(componentRoot)
                             installNativeBuildTools(entry, nativeArtifacts, componentRoot)
                             activateBuildToolsScripts(componentRoot)
                             verifyBuildToolsPayload(entry, componentRoot)
@@ -128,7 +123,9 @@ class LocalAndroidSdkComponentInstaller(
                         installedAtEpochMs = System.currentTimeMillis(),
                     )
                     File(stageDir, "COMPONENT_LOCK.json").writeText(json.encodeToString(lock), Charsets.UTF_8)
-                    writeChecksumManifest(stageDir)
+                    // The transaction adds one activation marker and one component lock to the payload.
+                    LocalPackageIntegrity.seal(stageDir, maxFiles = entry.maxFiles + nativeArtifacts.size + 2,
+                        maxBytes = entry.maxUnpackedBytes + overlayBytes + 128 * 1024)
 
                     activation = LocalPackageInstallJournal.activate(stageDir, finalDir, previousDir)
                     val record = ManagedPackageRecord(
@@ -169,97 +166,6 @@ class LocalAndroidSdkComponentInstaller(
         }
     }
 
-    private fun verifyPrimaryArtifact(entry: AndroidLocalComponentCatalogEntry, artifact: File) {
-        check(artifact.length() == entry.sizeBytes) { "Android SDK component size changed after verified download" }
-        check(digest(artifact, "SHA-256") == entry.sha256) { "Android SDK component SHA-256 changed after verified download" }
-        check(digest(artifact, "SHA-1") == entry.upstreamSha1) {
-            "Android SDK component does not match the upstream Google repository SHA-1"
-        }
-    }
-
-    private suspend fun extractSdkPlatform(
-        entry: AndroidLocalComponentCatalogEntry,
-        archive: File,
-        destinationRoot: File,
-    ) {
-        extractZipRoot(entry, archive, destinationRoot, allow = null)
-    }
-
-    private suspend fun extractBuildToolsPayload(
-        entry: AndroidLocalComponentCatalogEntry,
-        archive: File,
-        destinationRoot: File,
-    ) {
-        extractZipRoot(entry, archive, destinationRoot, AndroidBuildToolsPayload.archiveFiles)
-        AndroidBuildToolsPayload.requireGoogleFiles(destinationRoot)
-    }
-
-    private suspend fun extractZipRoot(
-        entry: AndroidLocalComponentCatalogEntry,
-        archive: File,
-        destinationRoot: File,
-        allow: Set<String>?,
-    ) {
-        val prefix = "${entry.archiveRoot}/"
-        val seen = linkedSetOf<String>()
-        var files = 0
-        var total = 0L
-        ZipFile(archive).use { zip ->
-            val entries = zip.entries()
-            var rawEntries = 0
-            while (entries.hasMoreElements()) {
-                coroutineContext.ensureActive()
-                val member = entries.nextElement()
-                rawEntries++
-                require(rawEntries <= entry.maxFiles * 2) { "Android SDK component ZIP has too many entries" }
-                val raw = member.name
-                require('\\' !in raw && '\u0000' !in raw && '\n' !in raw && '\r' !in raw && !raw.startsWith('/')) {
-                    "Unsafe Android SDK component ZIP path"
-                }
-                if (raw == entry.archiveRoot || raw == prefix) continue
-                require(raw.startsWith(prefix)) { "Android SDK component ZIP escaped its pinned archive root" }
-                val relative = raw.removePrefix(prefix).trimEnd('/')
-                requireSafeRelativePath(relative)
-                require(seen.add(relative)) { "Android SDK component ZIP contains duplicate paths" }
-                if (member.isDirectory || (allow != null && relative !in allow)) continue
-                files++
-                require(files <= entry.maxFiles) { "Android SDK component ZIP has too many extracted files" }
-                val declared = member.size
-                require(declared < 0L || declared <= entry.maxUnpackedBytes) { "Android SDK component ZIP member is too large" }
-                if (declared > 0L && member.compressedSize > 0L) {
-                    require(declared <= Math.multiplyExact(member.compressedSize, 250L)) { "Android SDK component ZIP has an unsafe compression ratio" }
-                }
-                val output = File(destinationRoot, relative)
-                val canonicalRoot = destinationRoot.canonicalFile
-                val canonicalOutput = output.canonicalFile
-                require(canonicalOutput.path.startsWith(canonicalRoot.path + File.separator)) { "Android SDK component ZIP escaped staging" }
-                check(output.parentFile?.mkdirs() == true || output.parentFile?.isDirectory == true) {
-                    "Could not prepare Android SDK component directory"
-                }
-                zip.getInputStream(member).use { input ->
-                    FileOutputStream(output).use { out ->
-                        val buffer = ByteArray(64 * 1024)
-                        var fileBytes = 0L
-                        while (true) {
-                            coroutineContext.ensureActive()
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            fileBytes = Math.addExact(fileBytes, read.toLong())
-                            total = Math.addExact(total, read.toLong())
-                            require(fileBytes <= entry.maxUnpackedBytes && total <= entry.maxUnpackedBytes) {
-                                "Android SDK component ZIP exceeded its expanded-byte bound"
-                            }
-                            out.write(buffer, 0, read)
-                        }
-                        out.fd.sync()
-                        if (declared >= 0L) require(fileBytes == declared) { "Android SDK component ZIP member size changed while extracting" }
-                    }
-                }
-            }
-        }
-        require(files > 0) { "Android SDK component ZIP contains no admitted files" }
-    }
-
     private fun installNativeBuildTools(
         entry: AndroidLocalComponentCatalogEntry,
         artifacts: Map<AndroidLocalNativeTool, File>,
@@ -269,7 +175,7 @@ class LocalAndroidSdkComponentInstaller(
         entry.nativeTools.forEach { tool ->
             val input = artifacts[tool] ?: error("Missing downloaded Android Build Tools native overlay ${tool.name}")
             val output = File(componentRoot, tool.name)
-            requireSafeRelativePath(tool.name)
+            require(tool.name in AndroidLocalNativeTool.REQUIRED_BUILD_TOOLS_NATIVE_NAMES) { "Invalid native Build Tools filename" }
             FileOutputStream(output).use { out ->
                 input.inputStream().buffered().use { stream -> stream.copyTo(out) }
                 out.fd.sync()
@@ -326,31 +232,9 @@ class LocalAndroidSdkComponentInstaller(
         if (split <= 0) null else line.substring(0, split).trim() to line.substring(split + 1).trim()
     }.toMap()
 
-    private fun writeChecksumManifest(root: File) {
-        val files = root.walkTopDown().filter { it.isFile && it.name != "SHA256SUMS" }.toList()
-        require(files.size in 1..8_192) { "Android SDK component staging tree has an invalid file count" }
-        val canonicalRoot = root.canonicalFile
-        val lines = files.sortedBy { it.relativeTo(root).invariantSeparatorsPath }.map { file ->
-            require(!PathSecurity.isSymbolicLink(file)) { "Android SDK component staging tree contains a symbolic link" }
-            val canonical = file.canonicalFile
-            require(canonical.path.startsWith(canonicalRoot.path + File.separator)) { "Android SDK component staging tree escaped package root" }
-            "${digest(file, "SHA-256")}  ${file.relativeTo(root).invariantSeparatorsPath}"
-        }
-        File(root, "SHA256SUMS").writeText(lines.joinToString("\n", postfix = "\n"), Charsets.UTF_8)
-    }
-
     private fun encodeNativeToolManifest(values: Map<String, String>): String = values.entries
         .sortedBy { it.key }
         .joinToString(";") { (name, sha) -> "$name=$sha" }
-
-    private fun requireSafeRelativePath(value: String) {
-        require(value.length in 1..500 && !value.startsWith('/')) { "Invalid Android SDK component path" }
-        val segments = value.split('/')
-        require(segments.size in 1..32 && segments.all { segment ->
-            segment.isNotBlank() && segment != "." && segment != ".." && segment.length <= 180 &&
-                '\u0000' !in segment && '\n' !in segment && '\r' !in segment
-        }) { "Unsafe Android SDK component path" }
-    }
 
     private fun digest(file: File, algorithm: String): String {
         val digest = MessageDigest.getInstance(algorithm)

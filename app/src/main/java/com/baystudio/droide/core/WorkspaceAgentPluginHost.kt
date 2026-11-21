@@ -195,14 +195,14 @@ class WorkspaceAgentPluginHost internal constructor(
     private val syncState = kotlinx.coroutines.flow.MutableStateFlow(WorkspaceAgentSyncState(sourceRoot = projectRoot.absolutePath))
     override val workspaceSyncState: kotlinx.coroutines.flow.StateFlow<WorkspaceAgentSyncState> = syncState
 
-    internal suspend fun retainedWorkspaceVersions(cursor: MirrorRetainedRecovery.Cursor? = null): MirrorRetainedRecovery.Page =
-        withRetainedRecovery { recovery, _ -> recovery.list(cursor) }
+    internal suspend fun retainedWorkspaceVersions(cursor: MirrorRetainedRecovery.Cursor? = null, earlier: Int? = null): MirrorRetainedRecovery.Page =
+        withRetainedRecovery(earlier = earlier) { recovery, _ -> recovery.list(cursor) }
 
-    internal suspend fun inspectRetainedWorkspaceVersion(item: MirrorRetainedRecovery.Item): MirrorRetainedRecovery.Inspection =
-        withRetainedRecovery { recovery, _ -> recovery.inspect(item) }
+    internal suspend fun inspectRetainedWorkspaceVersion(item: MirrorRetainedRecovery.Item, earlier: Int? = null): MirrorRetainedRecovery.Inspection =
+        withRetainedRecovery(earlier = earlier) { recovery, _ -> recovery.inspect(item) }
 
-    internal suspend fun saveRetainedWorkspaceCopy(inspection: MirrorRetainedRecovery.Inspection, path: String): Long =
-        withRetainedRecovery { recovery, admission -> recovery.copy(inspection, files, path, admission) }
+    internal suspend fun saveRetainedWorkspaceCopy(inspection: MirrorRetainedRecovery.Inspection, path: String, earlier: Int? = null): Long =
+        withRetainedRecovery(earlier = earlier) { recovery, admission -> recovery.copy(inspection, files, path, admission) }
 
     internal suspend fun captureSqliteRollbackEvidence(): MirrorSqliteRollbackRecovery.Review =
         withRetainedRecovery(quiescent = true) { recovery, admission ->
@@ -221,8 +221,11 @@ class WorkspaceAgentPluginHost internal constructor(
         withRetainedRecovery(quiescent = true) { recovery, admission -> recovery.interrupted.finish(review, complete, admission) }
     }
 
-    internal suspend fun archiveRetainedWorkspaceFolder(item: MirrorRetainedRecovery.Item, path: String): Long =
-        withRetainedRecovery { recovery, admission -> recovery.archive(item, files, path, cacheDir, admission) }
+    internal suspend fun archiveRetainedWorkspaceFolder(item: MirrorRetainedRecovery.Item, path: String, earlier: Int? = null): Long =
+        withRetainedRecovery(earlier = earlier) { recovery, admission -> recovery.archive(item, files, path, cacheDir, admission) }
+
+    internal suspend fun archiveEarlierWorkspace(earlier: Int, path: String): Long =
+        withRetainedRecovery(earlier = earlier) { recovery, admission -> recovery.archiveWorkingCopy(files, path, cacheDir, admission) }
 
     internal suspend fun reviewRetainedVersionRetention(item: MirrorRetainedRecovery.Item): MirrorRetainedRecovery.RetentionReview =
         withRetainedRecovery { recovery, admission -> recovery.reviewRetention(item, recoveryDocuments, admission) }
@@ -243,7 +246,7 @@ class WorkspaceAgentPluginHost internal constructor(
         withRetainedRecovery(quiescent = true) { recovery, admission -> recovery.conflicts.resolve(review, admission) }
     }
 
-    private suspend fun <T> withRetainedRecovery(quiescent: Boolean = false, action: suspend (MirrorRetainedRecovery, () -> Unit) -> T): T {
+    private suspend fun <T> withRetainedRecovery(quiescent: Boolean = false, earlier: Int? = null, action: suspend (MirrorRetainedRecovery, () -> Unit) -> T): T {
         val epoch = ApplicationWorkAdmission.requireOpen()
         val caller = currentCoroutineContext()
         fun requireCurrent() {
@@ -266,21 +269,31 @@ class WorkspaceAgentPluginHost internal constructor(
                 }
                 requireCurrent()
             }
-            action(host.retainedRecovery, ::requireCurrent).also { requireCurrent() }
+            action(host.recoveryForReview(earlier), ::requireCurrent).also { requireCurrent() }
         }
     }
 
     private fun syncPhase(phase: WorkspaceAgentSyncPhase, mapper: WorkspacePathMapper? = null,
                           pending: List<String>? = null, notice: String? = null) {
+        val local = processHost as? LocalAgentWorkspaceProcessHost
+        val previous = syncState.value
+        val copy = local?.activeCopy ?: 0
+        val paths = pending ?: if (copy != previous.earlierCopies) emptyList() else null
         syncState.value = WorkspaceAgentSyncState(phase, projectRoot.absolutePath,
-            mapper?.remoteRoot ?: syncState.value.executionRoot, pending?.take(128) ?: syncState.value.pendingPaths,
-            pending?.size ?: syncState.value.pendingCount,
-            listOfNotNull(notice, workspaceIo.synchronizationNotice()).distinct().joinToString("\n").take(2_000).ifBlank { null })
+            mapper?.remoteRoot ?: local?.takeIf { copy > 0 }?.selectedWorkingPath ?: previous.executionRoot,
+            paths?.take(128) ?: previous.pendingPaths, paths?.size ?: previous.pendingCount,
+            listOfNotNull(notice, workspaceIo.synchronizationNotice()).distinct().joinToString("\n").take(2_000).ifBlank { null },
+            earlierCopies = copy)
+    }
+
+    private fun publishRecoveredCopy() {
+        val local = processHost as? LocalAgentWorkspaceProcessHost ?: return
+        if (local.activeCopy != syncState.value.earlierCopies) syncPhase(WorkspaceAgentSyncPhase.ISOLATED)
     }
 
     private suspend fun refreshForAdmission() {
         scope.ensureActive()
-        try { workspaceIo.refresh() }
+        try { workspaceIo.refresh(); publishRecoveredCopy() }
         catch (failure: Throwable) {
             syncPhase(WorkspaceAgentSyncPhase.INTERRUPTED, notice = failure.message ?: "Workspace is unavailable; existing files were retained")
             throw failure
@@ -764,9 +777,10 @@ class WorkspaceAgentPluginHost internal constructor(
                     }
                 })
                 sessions[agentId] = live
-                if (syncState.value.executionRoot.isBlank()) syncPhase(WorkspaceAgentSyncPhase.ISOLATED, live.mapper)
+                if (syncState.value.executionRoot != live.mapper.remoteRoot) syncPhase(WorkspaceAgentSyncPhase.ISOLATED, live.mapper)
             }
         } catch (failure: Throwable) {
+            publishRecoveredCopy()
             try { retireSessionLocked(agentId) }
             catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
             throw failure

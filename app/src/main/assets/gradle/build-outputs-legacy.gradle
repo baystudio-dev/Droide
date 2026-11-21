@@ -1,0 +1,27 @@
+def droideManifest = new File(System.getenv('DROIDE_BUILD_OUTPUT_MANIFEST'))
+def droideRoot = gradle.startParameter.currentDir.canonicalFile.toPath()
+def droideOutputLock = new Object()
+def droideSeenOutputs = new HashSet<String>()
+gradle.taskGraph.afterTask { task, state ->
+    if (!state.executed || state.failure != null || state.noSource) return
+    def outcome = state.upToDate ? 'UP-TO-DATE' : (state.skipMessage == 'FROM-CACHE' ? 'FROM-CACHE' : 'EXECUTED')
+    if (state.skipped && outcome == 'EXECUTED') return
+    task.outputs.files.files.each { output ->
+        def canonical = output.canonicalFile
+        def outputPath = canonical.toPath()
+        if (!outputPath.startsWith(droideRoot) || !canonical.exists()) return
+        def relative = droideRoot.relativize(outputPath).toString().replace('\\', '/')
+        if (!(relative == 'build/outputs' || relative.startsWith('build/outputs/') || relative.endsWith('/build/outputs') || relative.contains('/build/outputs/'))) return
+        def path = canonical.path
+        if (path.length() > 4096 || path.toCharArray().any { c -> ((int) c) < 32 || ((int) c) == 127 }) throw new GradleException('Unsafe Droide output path')
+        synchronized (droideOutputLock) {
+            def row = outcome + '\t' + path + '\n'
+            if (droideSeenOutputs.add(row)) {
+                if (droideSeenOutputs.size() > 2048 || droideManifest.length() + row.getBytes('UTF-8').length > 524288) {
+                    throw new GradleException('Droide artifact evidence exceeded its limit')
+                }
+                droideManifest.append(row, 'UTF-8')
+            }
+        }
+    }
+}

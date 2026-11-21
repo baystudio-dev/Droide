@@ -39,7 +39,7 @@ The [workbench audit](verification/workbench-actions-20261114/AUDIT.md) and [mac
 
 Test the exact APK hash on supported Android versions and representative phones/tablets. Include:
 
-- Startup, last-file restoration, binary input rejection, drafts, process death and the 15-second Exit deadline.
+- Startup, last-file restoration, binary input rejection, drafts, process death and the 5-second Exit deadline.
 - Portrait/landscape navigation, editor selection/IME/zoom, restored expansion and rapid panel reversals.
 - Kotlin/Java file Run inside an Android Gradle project must use the language compiler/runtime. Verify the explicit local Android app action with no wireless bridge, install permission denial/cancellation/update, connected-device Run and debug attach.
 - Explorer rename/move/delete/undo/export, dirty conflicts and document-provider grant loss.

@@ -76,10 +76,33 @@ internal class LocalAgentWorkspaceProcessHost private constructor(
         .digest(source.canonicalPath.toByteArray()).joinToString("") { "%02x".format(it) }
     private val storage = AgentWorkspaceStorage(source, File(cacheDir, "agent-workspaces/$identity"),
         File(persistentWorkspaceStore ?: File(cacheDir, "agent-workspaces"), identity))
-    internal val retainedRecovery by lazy { MirrorRetainedRecovery(source, storage.directory) }
+    private val copies = AgentWorkspaceCopies(storage.directory)
+    @Volatile var activeCopy = 0
+        private set
+    private val recoveryCopies = java.util.concurrent.ConcurrentHashMap<Int, MirrorRetainedRecovery>()
+    internal val retainedRecovery get() = recoveryFor(null)
+
+    internal suspend fun recoveryForReview(earlier: Int?): MirrorRetainedRecovery = withContext(Dispatchers.IO) {
+        if (retainedPrepared || !retainedOnDemand || !checkNotNull(storage.directory.parentFile).exists()) {
+            return@withContext recoveryFor(earlier)
+        }
+        val current = copies.latest()
+        require(earlier == null || earlier in 0 until current)
+        recoveryAt(earlier ?: current)
+    }
+
+    internal fun recoveryFor(earlier: Int?): MirrorRetainedRecovery {
+        val index = earlier ?: activeCopy
+        require(earlier == null || index in 0 until activeCopy) { "Select an earlier CLI copy for this project" }
+        return recoveryAt(index)
+    }
+
+    private fun recoveryAt(index: Int): MirrorRetainedRecovery =
+        recoveryCopies.computeIfAbsent(index) { MirrorRetainedRecovery(source, copies.working(it)) }
     @Volatile private var mirror = LocalAgentWorkspaceMirror(source, storage.directory)
+    internal val selectedWorkingPath: String get() = mirror.directory.absolutePath
     private val preparationMutex = Mutex()
-    private var retainedPrepared = false
+    @Volatile private var retainedPrepared = false
     private val delegate get() = LocalLinuxProcessHost(mirror.directory, scope, toolchainWorkspaceRoot = source,
         storagePurpose = com.baystudio.droide.core.storage.StorageLaunchPurpose.AGENT_CLI)
     override val executionScope = ProcessExecutionScope.LOCAL_LINUX_ARM64
@@ -305,7 +328,13 @@ internal class LocalAgentWorkspaceProcessHost private constructor(
         if (retainedOnDemand) prepareRetainedMirror() else storage.prepare()
     }
 
-    private suspend fun prepareRetainedMirror() {
+    internal suspend fun recoverBeforeTransportStart(previousRoot: String): WorkspacePathMapper {
+        check(retainedOnDemand) { "CLI working-copy recovery is unavailable for this host" }
+        prepareRetainedMirror(recheckRoot = previousRoot)
+        return pathMapper()
+    }
+
+    private suspend fun prepareRetainedMirror(recheckRoot: String? = null) {
         val epoch = ApplicationWorkAdmission.requireOpen()
         val caller = currentCoroutineContext()
         fun requireEnrollment() {
@@ -318,19 +347,36 @@ internal class LocalAgentWorkspaceProcessHost private constructor(
         requireEnrollment()
         preparationMutex.withLock {
             requireEnrollment()
-            if (retainedPrepared) return@withLock
+            if (retainedPrepared && (recheckRoot == null || mirror.directory.canonicalPath != recheckRoot)) return@withLock
             val persistent = requireNotNull(persistentWorkspaceStore) { "Retained CLI workspace requires persistent storage" }
             require(!PathSecurity.contains(cacheDir, persistent)) {
                 "Persistent CLI workspace storage must be outside the application cache; existing work was preserved"
             }
             storage.prepare()
             requireEnrollment()
-            LocalMirrorAuthorityBootstrap(source, storage.directory).prepare()
-            requireEnrollment()
-            val prepared = LocalAgentWorkspaceMirror.openRetained(source, storage.directory)
-            requireEnrollment()
-            mirror = prepared
-            retainedPrepared = true
+            withContext(Dispatchers.IO) {
+                var index = copies.latest()
+                suspend fun select(index: Int): LocalAgentWorkspaceMirror? {
+                    requireEnrollment()
+                    val working = copies.working(index)
+                    val authority = LocalMirrorAuthorityBootstrap(source, working).prepare()
+                    val view = LocalAgentWorkspaceMirror.openRetained(source, working)
+                    return if (authority.needsSeparateWorkingCopy()) null else view
+                }
+                val selected = select(index) ?: run {
+                    requireEnrollment()
+                    index = copies.next(index) { working ->
+                        LocalMirrorAuthorityBootstrap(source, working).prepare()
+                        requireEnrollment()
+                    }
+                    select(index) ?: error("Another CLI session claimed the new copy. Reopen the panel to reconnect.")
+                }
+                requireEnrollment()
+                if (mirror.directory != selected.directory) hasCompletedRefresh = false
+                mirror = selected
+                activeCopy = index
+                retainedPrepared = true
+            }
         }
     }
 

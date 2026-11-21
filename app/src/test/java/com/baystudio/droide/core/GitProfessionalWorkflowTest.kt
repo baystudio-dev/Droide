@@ -71,14 +71,71 @@ class GitProfessionalWorkflowTest {
                 }
             }
             val git = GitManager(root, authority)
+            val preview = git.conflictPreview("Main.txt")
             val before = root.resolve("Main.txt").readText()
-            assertTrue(git.resolveConflictBlock("Main.txt", 0, ConflictChoice.CURRENT).startsWith("git error:"))
+            assertTrue(git.resolveConflictBlock(preview, 0, ConflictChoice.CURRENT).startsWith("git error:"))
             assertEquals(before, root.resolve("Main.txt").readText()); assertFalse(authority.reconciled)
             authority.dirty = false
-            assertFalse(git.resolveConflictBlock("Main.txt", 0, ConflictChoice.CURRENT).startsWith("git error:"))
+            assertFalse(git.resolveConflictBlock(preview, 0, ConflictChoice.CURRENT).startsWith("git error:"))
             assertTrue(authority.reconciled); assertFalse(MergeConflictResolver.hasMarkers(root.resolve("Main.txt").readText()))
             assertTrue(git.stage("Main.txt", allowConflictResolution = true).contains("Marked resolved"))
         } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
+
+    @Test fun staleConflictChoiceCannotResolveTheNewFirstBlock() = runBlocking {
+        val root = Files.createTempDirectory("git-preview-").toFile()
+        try {
+            conflicted(root)
+            val file = root.resolve("Main.txt")
+            val original = file.readText()
+            file.writeText(original + "between\n" + original.replace("feature\n", "second feature\n"))
+            val git = GitManager(root)
+            val preview = git.conflictPreview(file.name)
+            assertEquals(2, preview.blocks.size)
+            val external = MergeConflictResolver.resolve(file.readText(), 0, ConflictChoice.CURRENT)
+            file.writeText(external)
+            assertTrue(git.resolveConflictBlock(preview, 0, ConflictChoice.INCOMING).startsWith("git error:"))
+            assertEquals(external, file.readText())
+            val fresh = git.conflictPreview(file.name)
+            assertEquals(1, fresh.blocks.size)
+            assertFalse(git.resolveConflictBlock(fresh, 0, ConflictChoice.INCOMING).startsWith("git error:"))
+            assertTrue("second feature" in file.readText())
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
+
+    @Test fun conflictPublicationPreservesAllOrdinaryModeBits() = runBlocking {
+        for (mode in listOf("rwxr-x---", "rw-r-----")) {
+            val root = Files.createTempDirectory("git-mode-").toFile()
+            try {
+                conflicted(root)
+                val path = root.resolve("Main.txt").toPath()
+                val permissions = java.nio.file.attribute.PosixFilePermissions.fromString(mode)
+                Files.setPosixFilePermissions(path, permissions)
+                val git = GitManager(root)
+                val result = git.resolveConflictBlock(git.conflictPreview("Main.txt"), 0, ConflictChoice.CURRENT)
+                assertFalse(result, result.startsWith("git error:"))
+                assertEquals(permissions, Files.getPosixFilePermissions(path))
+            } finally { PathSecurity.deleteTreeNoFollow(root) }
+        }
+    }
+
+    @Test fun conflictResolutionPreservesExactLineEndingsAndBlankSides() {
+        for (eol in listOf("\n", "\r\n")) {
+            for (count in 0..2) {
+                val blanks = eol.repeat(count)
+                val prefix = "before\r\n"
+                val suffix = "after\n"
+                val source = prefix + "<<<<<<< A" + eol + blanks + "||||||| base" + eol + "base" + eol +
+                    "=======" + eol + "other" + eol + ">>>>>>> B" + eol + suffix
+                assertEquals(prefix + blanks + suffix, MergeConflictResolver.resolve(source, 0, ConflictChoice.CURRENT))
+                assertEquals(prefix + "other" + eol + suffix, MergeConflictResolver.resolve(source, 0, ConflictChoice.INCOMING))
+                assertEquals(prefix + blanks + "other" + eol + suffix, MergeConflictResolver.resolve(source, 0, ConflictChoice.BOTH))
+                val reversed = "<<<<<<< A" + eol + "first" + eol + "=======" + eol + blanks + ">>>>>>> B" + eol
+                assertEquals(blanks, MergeConflictResolver.resolve(reversed, 0, ConflictChoice.INCOMING))
+            }
+            val final = "<<<<<<< A" + eol + "one" + eol + "=======" + eol + "two" + eol + ">>>>>>> B"
+            assertEquals("one" + eol + "two", MergeConflictResolver.resolve(final, 0, ConflictChoice.BOTH))
+        }
     }
 
     @Test fun firstCommitCanBeUnstagedWithoutDeletingWorkspaceFiles() = runBlocking {

@@ -2,7 +2,6 @@ package com.baystudio.droide.core.storage
 
 import android.database.Cursor
 import android.database.MatrixCursor
-import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract.Document
@@ -21,10 +20,10 @@ class DroideDocumentsProvider : DocumentsProvider() {
     private val store get() = SharedWorkspaceStore(requireNotNull(context))
     override fun onCreate() = true
 
-    override fun queryRoots(projection: Array<out String>?): Cursor = MatrixCursor(projection ?: ROOT_COLUMNS).apply {
+    override fun queryRoots(projection: Array<out String>?): Cursor = filledCursor(projection ?: ROOT_COLUMNS) { cursor ->
         store.entries().forEach { entry ->
-            val row = newRow()
-            for (column in columnNames) row.add(column, when (column) {
+            val row = cursor.newRow()
+            for (column in cursor.columnNames) row.add(column, when (column) {
                 Root.COLUMN_ROOT_ID -> entry.id
                 Root.COLUMN_DOCUMENT_ID -> SharedDocumentIds.encode(entry.id, "")
                 Root.COLUMN_TITLE -> "Droide · ${entry.label}"
@@ -39,25 +38,29 @@ class DroideDocumentsProvider : DocumentsProvider() {
 
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = guarded {
         val (entry, doc) = resolve(documentId)
-        MatrixCursor(projection ?: DOCUMENT_COLUMNS).also { cursor ->
-            AnchoredWorkspaceFiles(entry.root).use { append(cursor, entry, doc.relative, it) }
+        filledCursor(projection ?: DOCUMENT_COLUMNS) { cursor ->
+            AnchoredWorkspaceFiles(entry.root).use { anchor ->
+                documentRow(cursor.columnNames, entry, doc.relative, anchor)?.let { cursor.addRow(it) }
+            }
         }
     }
 
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = guarded {
         val (entry, doc) = resolve(parentDocumentId)
-        MatrixCursor(projection ?: DOCUMENT_COLUMNS).also { cursor ->
+        filledCursor(projection ?: DOCUMENT_COLUMNS) { cursor ->
             AnchoredWorkspaceFiles(entry.root).use { anchor ->
-                var visited = 0
-                try {
-                    anchor.forEachChild(doc.relative) { name ->
-                        if (visited++ >= 2000) throw DirectoryLimit()
-                        val relative = listOf(doc.relative, name).filter { it.isNotEmpty() }.joinToString("/")
-                        if (SharedDocumentIds.visible(relative)) append(cursor, entry, relative, anchor)
+                val columns = cursor.columnNames
+                var remaining = LISTING_BUDGET_BYTES
+                anchor.forEachChild(doc.relative) { name ->
+                    val relative = if (doc.relative.isEmpty()) name else "${doc.relative}/$name"
+                    if (SharedDocumentIds.visible(relative)) {
+                        val row = documentRow(columns, entry, relative, anchor) ?: return@forEachChild
+                        remaining -= 64L + row.sumOf { if (it is String) 48L + it.length * 2L else 32L }
+                        if (remaining < 0) throw FileNotFoundException(
+                            "This folder is too large to list completely in Android Files. Use Export folder in Droide Explorer."
+                        )
+                        cursor.addRow(row)
                     }
-                } catch (_: DirectoryLimit) {
-                    cursor.extras = Bundle().apply { putString(android.provider.DocumentsContract.EXTRA_INFO,
-                        "Showing the first 2000 entries. Use Droide Explorer to export this large folder.") }
                 }
             }
         }
@@ -138,20 +141,33 @@ class DroideDocumentsProvider : DocumentsProvider() {
         return entry to document
     }
 
-    private fun append(cursor: MatrixCursor, entry: SharedWorkspaceStore.Entry, relative: String, anchor: AnchoredWorkspaceFiles) {
+    private fun documentRow(columns: Array<out String>, entry: SharedWorkspaceStore.Entry, relative: String, anchor: AnchoredWorkspaceFiles): Array<Any?>? {
         val kind = if (relative.isEmpty()) AnchoredWorkspaceFiles.Kind.DIRECTORY else anchor.kind(relative)
-        if (kind !in setOf(AnchoredWorkspaceFiles.Kind.FILE, AnchoredWorkspaceFiles.Kind.DIRECTORY)) return
-        val metadata = if (kind == AnchoredWorkspaceFiles.Kind.FILE) anchor.openRead(relative).use { it.observe().attributes } else null
-        val row = cursor.newRow()
-        for (column in cursor.columnNames) row.add(column, when (column) {
-            Document.COLUMN_DOCUMENT_ID -> SharedDocumentIds.encode(entry.id, relative)
-            Document.COLUMN_DISPLAY_NAME -> if (relative.isEmpty()) entry.label else relative.substringAfterLast('/')
-            Document.COLUMN_MIME_TYPE -> if (kind == AnchoredWorkspaceFiles.Kind.DIRECTORY) Document.MIME_TYPE_DIR else mime(relative)
-            Document.COLUMN_FLAGS -> 0
-            Document.COLUMN_SIZE -> metadata?.size()
-            Document.COLUMN_LAST_MODIFIED -> metadata?.lastModifiedTime()?.toMillis()
-            else -> null
-        })
+        if (kind != AnchoredWorkspaceFiles.Kind.FILE && kind != AnchoredWorkspaceFiles.Kind.DIRECTORY) return null
+        val needsMetadata = Document.COLUMN_SIZE in columns || Document.COLUMN_LAST_MODIFIED in columns
+        val metadata = if (kind == AnchoredWorkspaceFiles.Kind.FILE && needsMetadata) anchor.openRead(relative).use { it.observe().attributes } else null
+        return Array(columns.size) { index ->
+            when (columns[index]) {
+                Document.COLUMN_DOCUMENT_ID -> SharedDocumentIds.encode(entry.id, relative)
+                Document.COLUMN_DISPLAY_NAME -> if (relative.isEmpty()) entry.label else relative.substringAfterLast('/')
+                Document.COLUMN_MIME_TYPE -> if (kind == AnchoredWorkspaceFiles.Kind.DIRECTORY) Document.MIME_TYPE_DIR else mime(relative)
+                Document.COLUMN_FLAGS -> 0
+                Document.COLUMN_SIZE -> metadata?.size()
+                Document.COLUMN_LAST_MODIFIED -> metadata?.lastModifiedTime()?.toMillis()
+                else -> null
+            }
+        }
+    }
+
+    private inline fun filledCursor(columns: Array<out String>, fill: (MatrixCursor) -> Unit): Cursor {
+        val cursor = MatrixCursor(columns)
+        try {
+            fill(cursor)
+            return cursor
+        } catch (failure: Throwable) {
+            cursor.close()
+            throw failure
+        }
     }
 
     private fun mime(path: String) = MimeTypeMap.getSingleton().getMimeTypeFromExtension(path.substringAfterLast('.', "").lowercase()) ?: "application/octet-stream"
@@ -159,8 +175,9 @@ class DroideDocumentsProvider : DocumentsProvider() {
     catch (cancelled: android.os.OperationCanceledException) { throw cancelled }
     catch (failure: Exception) { throw FileNotFoundException(failure.message ?: "Shared project unavailable").apply { initCause(failure) } }
 
-    private class DirectoryLimit : RuntimeException()
     companion object {
+        // Android's recursive copier treats any returned cursor as the complete directory.
+        private const val LISTING_BUDGET_BYTES = 8L * 1024 * 1024
         private val readers = Semaphore(2)
         private val executor = (Executors.newFixedThreadPool(2) { task ->
             Thread(task, "shared-project-read").apply { isDaemon = true }

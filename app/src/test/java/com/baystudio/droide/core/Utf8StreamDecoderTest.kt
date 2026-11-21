@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class Utf8StreamDecoderTest {
+    @Test fun boundedSlicesCanShareAPacketAndACodePoint() {
+        val bytes = "x😀漢z".toByteArray()
+        val actual = StringBuilder()
+        val decoder = Utf8StreamDecoder(actual::append)
+        decoder.accept(bytes, 1, 2)
+        assertThrows(IllegalArgumentException::class.java) { decoder.accept(bytes, 3, Int.MAX_VALUE) }
+        assertThrows(IllegalArgumentException::class.java) { decoder.accept(bytes, -1, 1) }
+        decoder.accept(bytes, 3, 5)
+        decoder.accept(bytes, bytes.size, 0)
+        decoder.finish()
+        assertEquals("😀漢", actual.toString())
+    }
+
     @Test fun preservesMultibyteCharactersAcrossEveryByteBoundary() {
         val expected = "Build 日本語 selesai ✅ 😀 é\n"
         val actual = StringBuilder()

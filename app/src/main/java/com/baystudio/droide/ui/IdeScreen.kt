@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
+import com.baystudio.droide.EditorStatusBarRequest
 import com.baystudio.droide.core.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +51,7 @@ internal fun FocusedWorkbenchBrowser(
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class) @Composable
-fun IdeScreen(
+internal fun IdeScreen(
     files: FileRepository,
     imports: WorkspaceImportController,
     exports: ExportSourceAdmission,
@@ -78,7 +79,7 @@ fun IdeScreen(
     explorerState: ExplorerWorkspaceState,
     explorerRefresh: ExplorerRefreshController,
     startupRecovery: StartupRecoveryPolicy = StartupRecoveryPolicy.NORMAL,
-    onPortraitEditorStatusBarHiddenChanged: (Boolean) -> Unit,
+    onEditorStatusBarChange: (EditorStatusBarRequest) -> Unit,
     onPickSaf: () -> Unit, safLinked: Boolean, onReconcileSaf: suspend () -> String?,
     onProjectSwitch: (String) -> Unit, onProjectCreate: suspend (String, String) -> Pair<DroideProject, String?>,
     onPermissionRuleChange: suspend (String, PermEffect) -> PermissionPolicyDocument,
@@ -87,6 +88,10 @@ fun IdeScreen(
     val workspaceKey = files.root.absolutePath
     val uiStarted = rememberUiStarted()
     val uiResumed = rememberUiResumed()
+    val reportStatusBar by rememberUpdatedState(onEditorStatusBarChange)
+    DisposableEffect(Unit) {
+        onDispose { reportStatusBar(EditorStatusBarRequest.FOLLOW_ORIENTATION) }
+    }
     val initialFile = remember(workspaceKey) {
         if (!startupRecovery.deferEditorReopen && runCatching { files.resolveChecked("README.md").isFile }.getOrDefault(false)) "README.md" else ""
     }
@@ -116,9 +121,14 @@ fun IdeScreen(
     var approvalReviewSequence by remember(workspaceKey) { mutableLongStateOf(0L) }
     val pendingWorkspaceApproval by approvals.pending.collectAsState()
     var browserUrl by rememberSaveable(workspaceKey) { mutableStateOf("https://github.com") }
+    var agentBrowserUrl by rememberSaveable(workspaceKey) { mutableStateOf("") }
+    var viewingAgentTab by rememberSaveable(workspaceKey) { mutableStateOf(false) }
+    val browserTabs = agent.browserTabs
+    val userBrowser = browserTabs?.user ?: agentBrowser
+    val tabHandoff = browserTabs?.handoff?.collectAsState()?.value
     var browserExpanded by rememberSaveable(workspaceKey) { mutableStateOf(false) }
     val browserPlacement = remember(agentBrowser, workspaceKey) { WorkspaceBrowserPlacement() }
-    val browserRetention by agentBrowser.retention.collectAsState()
+    val browserRetention by (if (viewingAgentTab) agentBrowser else userBrowser).retention.collectAsState()
     var runnerMsg by remember(workspaceKey) { mutableStateOf<String?>(null) }
     var runnerPath by remember(workspaceKey) { mutableStateOf<String?>(null) }
     var androidBuildDiagnostics by remember(workspaceKey) { mutableStateOf<List<BuildDiagnostic>>(emptyList()) }
@@ -143,6 +153,7 @@ fun IdeScreen(
     var expandedWorkbench by remember { mutableStateOf(false) }
     var sidePanelsCanShare by remember(workspaceKey) { mutableStateOf(true) }
     fun openSidebarTool(tool: DroideRailTool, selectForApproval: Boolean = true) {
+        if (tool == DroideRailTool.Web && selectForApproval) viewingAgentTab = false
         if (selectForApproval) approvalAttention = if (tool == DroideRailTool.Web) WorkspaceApprovalSurface.BROWSER else WorkspaceApprovalSurface.OTHER
         if (!sidePanelsCanShare) {
             isChatVisible = false
@@ -232,7 +243,7 @@ fun IdeScreen(
     val terminalSnapshot by terminalManager.snapshot.collectAsState()
     val activeSession = terminalSnapshot.activeTab?.session
     val mode by agent.mode.collectAsState(); val mcpHealth by agent.mcpHealth.collectAsState()
-    val browserDialog by agentBrowser.pendingDialog.collectAsState()
+    val browserDialog by (if (viewingAgentTab) agentBrowser else userBrowser).pendingDialog.collectAsState()
     val tokenWarning by agent.tokens.warning.collectAsState()
     val diagnostics by lsp.diagnostics.collectAsState()
     val deviceBridgeState by deviceBridge.state.collectAsState()
@@ -242,7 +253,10 @@ fun IdeScreen(
     val userTaskState by execution.projectTasks.state.collectAsState()
     fun cancelUserOperation(): Boolean = if (userTaskState.busy) execution.projectTasks.stop() else execution.cancelActive()
     val workspaceEnvironment = remember(workspaceKey, activeFile) { WorkspaceEnvironmentDetector.detect(files.root, activeFile) }
-    val activeLanguageName = remember(activeFile) { LanguageRegistry.forFile(activeFile)?.name ?: if (activeFile.isBlank()) "No file" else "Plain Text" }
+    val syntaxRevision by LanguageRegistry.syntaxRevision.collectAsState()
+    val activeLanguageName = remember(activeFile, syntaxRevision) {
+        LanguageRegistry.forFile(activeFile)?.name ?: if (activeFile.isBlank()) "No file" else "Plain Text"
+    }
     val themes = remember(workspaceKey) { ThemeManager(files.root) }
     var themeTick by remember(workspaceKey) { mutableIntStateOf(0) }; val formatters = remember(workspaceKey, terminalManager) { FormatterManager(files.root, terminalManager) }; val commands = remember(workspaceKey) { CommandManager(files.root) }
     val taskManager = remember(workspaceKey, activeFile) {
@@ -250,7 +264,12 @@ fun IdeScreen(
         TaskManager(files.root, terminalManager, activeFile = { selectedPath })
     }; val worktreeManager = remember(workspaceKey) { WorktreeManager(files.root) }
     val archivedRecoveryIssues by recoveryStore.archivedEvidenceIssues.collectAsState()
-    var recoveryReady by remember(recoveryStore) { mutableStateOf(editorState.recoveryInitialized) }
+    var recoveryAvailability by remember(recoveryStore) {
+        mutableStateOf(if (editorState.recoveryInitialized) EditorRecoveryAvailability.READY else EditorRecoveryAvailability.LOADING)
+    }
+    val recoveryReady by remember(recoveryStore) { derivedStateOf { recoveryAvailability == EditorRecoveryAvailability.READY } }
+    var recoveryAttempt by remember(recoveryStore) { mutableIntStateOf(0) }
+    var recoveryAdmission by remember(recoveryStore, workspaceKey) { mutableStateOf<EditorWorkspaceState.RecoveryAdmission?>(null) }
     val themeSnapshot = remember(workspaceKey, themeTick) { themes.snapshot() }
     SideEffect {
         DroideColors.install(themeSnapshot.ui)
@@ -267,9 +286,6 @@ fun IdeScreen(
         }
     }
     val hasTransientUi = drawer || showEditorRecoveryCopies || showPalette || showQuickOpen || showWorkspaceSymbols || showGoToLine || showSessions || showSettings || showAndroidDevelopment || workspaceSearchConsumesBack(browserExpanded, showSearch) || showConnect || showModels || showBilling || showProblems || professionalSheet != null
-    val portraitEditorOwnsStatusBar = !browserExpanded && workspaceTab == 1 && !isChatVisible && !hasTransientUi
-    SideEffect { onPortraitEditorStatusBarHiddenChanged(portraitEditorOwnsStatusBar) }
-    DisposableEffect(Unit) { onDispose { onPortraitEditorStatusBarHiddenChanged(false) } }
     fun captureActiveForLsp() {
         editorBridge.capture()
         val path = activeFile
@@ -437,16 +453,19 @@ fun IdeScreen(
         recoveryStore.save(snapshot)
     }
     suspend fun saveAllDirty(): Pair<String, Throwable>? {
+        if (!recoveryReady) return "editor recovery" to IllegalStateException("Editor recovery is not ready")
         // The coordinator rechecks native/editor changes after recovery persistence
         // suspends, immediately before Build/Run/Debug/close or project handoff.
         return saves.saveAllBefore { persistEditorState() }.continuationFailure()
     }
+    suspend fun prepareExecution(): Pair<String, Throwable>? =
+        saves.prepareExecution(recoveryAvailability) { persistEditorState() }.continuationFailure()
     suspend fun workstationSupported(): Boolean { if (deviceBridgeState.supported) return true; snackbarHostState.showSnackbar("Wireless Debugging requires Android 11 or newer. Local Linux Run and Tasks remain available on supported ARM64 devices."); return false }
     suspend fun runAndroidTask(
         title: String,
         action: suspend () -> AndroidDevelopmentManager.BuildResult,
     ): AndroidDevelopmentManager.BuildResult? {
-        val saveFailure = saveAllDirty()
+        val saveFailure = prepareExecution()
         if (saveFailure != null) {
             snackbarHostState.showSnackbar("Build cancelled: save needs attention for ${saveFailure.first}: ${saveFailure.second.message}")
             return null
@@ -477,8 +496,6 @@ fun IdeScreen(
     }
     suspend fun runCurrentFile(runPath: String, presentAsSheet: Boolean = true) {
         if (runPath.isBlank()) { snackbarHostState.showSnackbar("Open a file first"); return }
-        val failure = saveAllDirty()
-        if (failure != null) { snackbarHostState.showSnackbar("Cannot run: save needs attention for ${failure.first}"); return }
         if (isMarkdownPreviewPath(runPath)) {
             markdownModes[runPath] = MarkdownPreviewMode.PREVIEW
             workspaceTab = 1
@@ -486,28 +503,39 @@ fun IdeScreen(
             keyboardController?.hide()
             return
         }
+        val failure = prepareExecution()
+        if (failure != null) {
+            snackbarHostState.showSnackbar("Cannot run: save needs attention for ${failure.first}")
+            return
+        }
         if (WorkspaceHtmlPreview.isHtml(runPath)) {
             runSuspendCatching {
-                val url = withContext(Dispatchers.IO) { agentBrowser.htmlPreviewUrl(runPath) }
+                val url = withContext(Dispatchers.IO) { userBrowser.htmlPreviewUrl(runPath) }
+                viewingAgentTab = false
                 browserUrl = url
                 runnerMsg = null
-                agentBrowser.execute("open", url = url)
+                userBrowser.execute("open", url = url)
             }
                 .onFailure { snackbarHostState.showSnackbar("Preview failed: ${it.message}") }
             return
         }
-        runSuspendCatching { execution.runFile(runPath) }
-            .onSuccess { output ->
-                runnerMsg = output
+        runSuspendCatching { execution.runFileResult(runPath) }
+            .onSuccess { result ->
+                runnerMsg = result.output
                 runnerPath = runPath
-                androidOutputTitle = "Run: ${runPath.substringAfterLast('/')}"
-                androidOutputText = output
+                val status = when {
+                    result.timedOut -> "Timed out"
+                    result.exitCode != null -> "Exit ${result.exitCode}"
+                    else -> "Could not start"
+                }
+                androidOutputTitle = "Run: ${runPath.substringAfterLast('/')} · $status"
+                androidOutputText = result.output
                 if (presentAsSheet) showAndroidOutput = true else { bottomToolName = DroideBottomTool.Output.name; bottomPanelVisible = true }
             }
             .onFailure { snackbarHostState.showSnackbar("Run failed: ${it.message}") }
     }
     suspend fun debugAndroidApp() { if (!workstationSupported()) return
-        val failure = saveAllDirty()
+        val failure = prepareExecution()
         if (failure != null) {
             snackbarHostState.showSnackbar("Debug cancelled: save needs attention for ${failure.first}: ${failure.second.message}")
             return
@@ -525,7 +553,7 @@ fun IdeScreen(
     }
     suspend fun installAndRunAndroid(onConnectedDevice: Boolean = false) {
         if (onConnectedDevice && !workstationSupported()) return
-        val failure = saveAllDirty()
+        val failure = prepareExecution()
         if (failure != null) {
             snackbarHostState.showSnackbar("Install/Run cancelled: save needs attention for ${failure.first}: ${failure.second.message}")
             return
@@ -595,13 +623,15 @@ fun IdeScreen(
         }
         onDispose { recoveryBridge.uninstall(owner) }
     }
-    LaunchedEffect(recoveryStore, workspaceKey) {
+    LaunchedEffect(recoveryStore, workspaceKey, recoveryAttempt) {
         if (editorState.recoveryInitialized) {
-            recoveryReady = true
+            recoveryAvailability = EditorRecoveryAvailability.READY
             return@LaunchedEffect
         }
         editorState.retainNavigation(openFiles, activeFile, workspaceTab)
-        val admission = editorState.beginRecovery(EditorWorkspaceState.Navigation(openFiles, activeFile, workspaceTab))
+        recoveryAvailability = EditorRecoveryAvailability.LOADING
+        val admission = recoveryAdmission ?: editorState.beginRecovery(EditorWorkspaceState.Navigation(openFiles, activeFile, workspaceTab))
+            .also { recoveryAdmission = it }
         val outcome = runSuspendCatching {
             recoveryStore.load()?.let { recovered ->
                 val visible = EditorTabRetention.restoreDocuments(recovered, files, editorState, admission)
@@ -624,9 +654,15 @@ fun IdeScreen(
         }
         if (outcome.isSuccess && editorState.isRecoveryCurrent(admission)) {
             editorState.completeRecovery()
-            recoveryReady = true
+            recoveryAvailability = EditorRecoveryAvailability.READY
         }
-        else launchUserAction { snackbarHostState.showSnackbar("Editor recovery unavailable; saved data was kept: ${outcome.exceptionOrNull()?.message}") }
+        else if (outcome.isFailure && editorState.isRecoveryCurrent(admission)) {
+            recoveryAvailability = EditorRecoveryAvailability.READ_FAILED
+            if (snackbarHostState.showSnackbar("Editor recovery could not be read. Saved drafts were kept.",
+                    actionLabel = "Retry", withDismissAction = true, duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
+                recoveryAttempt++
+            }
+        }
     }
     LaunchedEffect(recoveryStore, archivedRecoveryIssues) {
         if (archivedRecoveryIssues.isNotEmpty()) snackbarHostState.showSnackbar(
@@ -635,21 +671,27 @@ fun IdeScreen(
     }
     LaunchedEffect(recoveryStore, workspaceKey, uiStarted) {
         if (!uiStarted) return@LaunchedEffect
-        var persistedSignature = ""; var observedSignature = ""; var quietTicks = 0
+        val schedule = EditorRecoverySchedule()
+        var lastWarning: String? = null
         while (true) {
             kotlinx.coroutines.delay(2_000)
             if (!recoveryReady) continue
             editorState.trimInactiveCleanDocuments().forEach { path -> runSuspendCatching { lsp.didClose(path) } }
             val dirty = editorState.dirtyDocuments()
             val signature = editorState.recoveryCheckpointSignature(openFiles, activeFile)
-            quietTicks = if (signature == observedSignature) quietTicks + 1 else 0; observedSignature = signature
-            val hasDirtyLargeFile = dirty.any { it.largeFileOptimized }
-            val idleEnoughForLargeSnapshot = !hasDirtyLargeFile || quietTicks >= 2
-            if (signature != persistedSignature && idleEnoughForLargeSnapshot) {
-                runSuspendCatching { persistEditorState() }.onSuccess { persistedSignature = signature }.onFailure {
-                    // A superseded/pending recovery checkpoint retries on the next tick; real IO errors remain visible.
-                    if (it !is com.baystudio.droide.core.EditorRecoveryCheckpointDeferredException)
-                        snackbarHostState.showSnackbar("Editor recovery save failed: ${it.message ?: "unknown error"}")
+            val (largeFiles, smallFiles) = dirty.partition { it.largeFileOptimized }
+            val small = smallFiles.associate { it.documentId to it.changeVersion }
+            val large = largeFiles.associate { it.documentId to it.changeVersion }
+            if (schedule.due(android.os.SystemClock.elapsedRealtime(), signature, small, large)) {
+                runSuspendCatching { persistEditorState() }.onSuccess {
+                    schedule.saved(android.os.SystemClock.elapsedRealtime(), signature, small)
+                    lastWarning = null
+                }.onFailure {
+                    val warning = "Editor recovery save failed: ${it.message ?: "unknown error"}"
+                    if (it !is EditorRecoveryCheckpointDeferredException && warning != lastWarning) {
+                        lastWarning = warning
+                        launchUserAction { snackbarHostState.showSnackbar(warning) }
+                    }
                 }
             }
         }
@@ -776,7 +818,7 @@ fun IdeScreen(
                                     DebugState.RUNNING, DebugState.STARTING -> Unit
                                     else -> {
                                         check(activeFile.isNotBlank()) { "Open a file to debug" }
-                                        val failure = saveAllDirty()
+                                        val failure = prepareExecution()
                                         check(failure == null) { "Save needs attention for ${failure?.first}" }
                                         execution.debugFile(activeFile)
                                     }
@@ -861,9 +903,13 @@ fun IdeScreen(
                     }
                 }
             })
-            DisposableEffect(agentBrowser, workspaceKey) {
-                val binding = agentBrowser.bindOpenRequest { revealBrowser() }
-                onDispose { agentBrowser.unbindOpenRequest(binding) }
+            DisposableEffect(agentBrowser, userBrowser, workspaceKey) {
+                val personal = userBrowser.bindOpenRequest { viewingAgentTab = false; revealBrowser() }
+                val automation = browserTabs?.agent?.bindOpenRequest { viewingAgentTab = true; revealBrowser() }
+                onDispose {
+                    userBrowser.unbindOpenRequest(personal)
+                    if (automation != null) agentBrowser.unbindOpenRequest(automation)
+                }
             }
             val openBrowserFromUser: () -> Unit = { approvalAttention = WorkspaceApprovalSurface.BROWSER; revealBrowser() }
             val activeApprovalSurface = workspaceApprovalSurface(
@@ -877,9 +923,17 @@ fun IdeScreen(
             val workspaceContentVisible = !browserExpanded && !agentFullscreen
             val visibleEditor = workspaceContentVisible && !inputExpansion.terminalExpanded && (expanded || workspaceTab == 1 ||
                 (workspaceTab == 4 && sidebarOwnsBrowser) || workspaceTab !in 0..6)
+            val editorStatusBar = when {
+                browserExpanded || hasTransientUi -> EditorStatusBarRequest.FOLLOW_ORIENTATION
+                workbenchPrefs.showEditorStatusBar && visibleEditor -> EditorStatusBarRequest.SHOW_IN_EDITOR
+                workspaceTab == 1 && !isChatVisible && (workbenchRead.state.ready || workbenchRead.state.failed) ->
+                    EditorStatusBarRequest.IMMERSIVE_EDITOR
+                else -> EditorStatusBarRequest.FOLLOW_ORIENTATION
+            }
             val visibleExplorer = !browserExpanded && ((sidebarRendered && sidebarTool == DroideRailTool.Files) ||
                 (workspaceContentVisible && !expanded && workspaceTab == 0 && !showSearch))
             SideEffect {
+                reportStatusBar(editorStatusBar)
                 explorerRefresh.updateVisibility(explorerLease, uiResumed && recoveryReady,
                     visibleExplorer, explorerTreeMode(explorerState.query))
                 visibleFiles.update(WorkspaceVisibilityReconciler.Visibility(
@@ -1064,7 +1118,7 @@ fun IdeScreen(
                     debugger = debugger,
                     activeFile = activeFile,
                     onEnsureSaved = {
-                        val failure = saveAllDirty()
+                        val failure = prepareExecution()
                         if (failure == null) { true }
                         else { snackbarHostState.showSnackbar("Save needs attention for ${failure.first}: ${failure.second.message}"); false }
                     },
@@ -1109,7 +1163,8 @@ fun IdeScreen(
                             editor = { EditorSurface() },
                         )
                         5 -> DebugSurface()
-                        6 -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision) { agentExtensionFamilyId = null }
+                        6 -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision,
+                            onOpenTerminal = { openBottomTool(DroideBottomTool.Terminal) }) { agentExtensionFamilyId = null }
                         else -> EditorSurface()
                     }
                 }
@@ -1153,7 +1208,8 @@ fun IdeScreen(
                             DroideRailTool.Git -> GitPanel(git, onOpen = { open(it) }, onWorkspaceChanged = explorerState::requestRefresh)
                             DroideRailTool.Run -> DebugSurface()
                             DroideRailTool.Web -> WorkspaceBrowserPlaceholder(browserPlacement, WorkspaceBrowserSlot.SIDEBAR)
-                            DroideRailTool.Extensions -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision) { agentExtensionFamilyId = null }
+                            DroideRailTool.Extensions -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision,
+                            onOpenTerminal = { openBottomTool(DroideBottomTool.Terminal) }) { agentExtensionFamilyId = null }
                         }
                     }
                 }
@@ -1209,7 +1265,7 @@ fun IdeScreen(
                     DroideRailTool.Search -> { showSearch = true; workspaceTab = 0 }
                     DroideRailTool.Git -> workspaceTab = 3
                     DroideRailTool.Run -> workspaceTab = 5
-                    DroideRailTool.Web -> workspaceTab = 4
+                    DroideRailTool.Web -> { viewingAgentTab = false; workspaceTab = 4 }
                     DroideRailTool.Extensions -> workspaceTab = 6
                 }
             }
@@ -1416,7 +1472,7 @@ fun IdeScreen(
                                 typingTarget = accessoryInputFocus.activeTarget.keyProfile() != null,
                                 inputEnabled = !navigationTypingImeActive,
                             ) {
-                                DroideCompactNavigation(workspaceTab, enabled = !navigationTypingImeActive) { id -> showSearch = false; workspaceTab = id; approvalAttention = if (id == 4) WorkspaceApprovalSurface.BROWSER else WorkspaceApprovalSurface.OTHER }
+                                DroideCompactNavigation(workspaceTab, enabled = !navigationTypingImeActive) { id -> if (id == 4) viewingAgentTab = false; showSearch = false; workspaceTab = id; approvalAttention = if (id == 4) WorkspaceApprovalSurface.BROWSER else WorkspaceApprovalSurface.OTHER }
                             }
                         }
                     }
@@ -1431,11 +1487,18 @@ fun IdeScreen(
                 }
                 }
             }
-            WorkspaceBrowserHost(browserPlacement, selectedBrowserSlot, browserRetention.keepActive, browserRetention.stopping) { presented, captureReady ->
-                Box(Modifier.fillMaxSize().workspaceApprovalAttention(WorkspaceApprovalSurface.BROWSER) { if (presented) approvalAttention = it }) {
-                    BrowserPane(browserUrl, onUrlChange = { browserUrl = it }, agentBrowser = agentBrowser,
-                        presented = presented, captureReady = captureReady,
-                        expanded = browserExpanded, onExpandedChange = ::changeBrowserExpanded,
+            WorkspaceBrowserTabHosts(browserPlacement, selectedBrowserSlot, userBrowser, agentBrowser,
+                viewingAgentTab, isChatVisible, tabHandoff != null) { pane, presented, captureReady, active ->
+                val automation = browserTabs != null && pane === agentBrowser
+                Box(Modifier.fillMaxSize().workspaceApprovalAttention(WorkspaceApprovalSurface.BROWSER) {
+                    if (presented) approvalAttention = it
+                }) {
+                    BrowserPane(if (automation) agentBrowserUrl else browserUrl,
+                        onUrlChange = { if (automation) agentBrowserUrl = it else browserUrl = it },
+                        agentBrowser = pane, presented = presented, captureReady = captureReady,
+                        expanded = browserExpanded, onExpandedChange = ::changeBrowserExpanded, tabActive = active,
+                        onSwitchTab = browserTabs?.let { { viewingAgentTab = !automation } },
+                        onEndHandoff = if (tabHandoff != null) browserTabs::revoke else null,
                         onUserFocus = { if (presented) approvalAttention = WorkspaceApprovalSurface.BROWSER },
                         onReviewAgentApproval = pendingWorkspaceApproval?.let { request -> {
                             if (approvals.pending.value?.id == request.id) {
@@ -1504,7 +1567,7 @@ fun IdeScreen(
             )
         }
         ProfessionalSheetHost(professionalSheet, taskManager, git, worktreeManager, androidDevelopment, deviceBridge, debugger, extensions, activeFile, lastAndroidApk, onOpenSourceControl = { professionalSheet = null; workspaceTab = 3; if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Git) } },
-            beforeTaskRun = { saveAllDirty()?.let { throw IllegalStateException("Save needs attention for ${it.first}: ${it.second.message}", it.second) } }, taskController = execution.projectTasks, onDismiss = { professionalSheet = null })
+            beforeTaskRun = { prepareExecution()?.let { throw IllegalStateException("Save needs attention for ${it.first}: ${it.second.message}", it.second) } }, taskController = execution.projectTasks, onDismiss = { professionalSheet = null })
         if (showQuickOpen) QuickOpenDialog(
             files = files,
             onOpen = { path -> open(path) },
@@ -1532,6 +1595,7 @@ fun IdeScreen(
             onDismiss = { showEditorRecoveryCopies = false },
             archivedIssues = archivedRecoveryIssues,
             discardActions = editorState.recoveryDiscardActions,
+            retryRecovery = if (recoveryAvailability == EditorRecoveryAvailability.READ_FAILED) ({ recoveryAttempt++ }) else null,
         )
         if (showPalette) CommandPalette(files, commands, onPick = { cmd ->
             val clean = cmd.removePrefix("/").trim().substringBefore(" ")
@@ -1664,6 +1728,8 @@ fun IdeScreen(
             codingKeyboardMode = workbenchPrefs.codingKeyboardMode,
             deviceBridge = deviceBridge, githubAccount = githubAccount, projectName = projectName, initialPermissionPolicy = agent.perms.policySnapshot(),
             sharedWorkspace = files.root,
+            showEditorStatusBar = workbenchPrefs.showEditorStatusBar,
+            onShowEditorStatusBar = { enabled -> WorkbenchPreferences.setShowEditorStatusBar(ctx, enabled) },
             onWordwrap = { enabled -> WorkbenchPreferences.setWordWrap(ctx, enabled) },
             onHardwareShortcuts = { enabled -> WorkbenchPreferences.setHardwareShortcuts(ctx, enabled) },
             onAccessoryKeysComfortable = { enabled -> WorkbenchPreferences.setAccessoryKeysComfortable(ctx, enabled) },
@@ -1694,6 +1760,7 @@ fun IdeScreen(
                 showSettings = false
             },
             initialCategoryName = settingsInitialCategoryName,
+            workspaceTheme = themeSnapshot,
             onDismiss = { showSettings = false; settingsInitialCategoryName = null },
         )
         }

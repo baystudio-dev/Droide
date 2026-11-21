@@ -46,4 +46,18 @@ class ExternalCliFilesControlTest {
   compose.runOnIdle { busy=false }
   compose.onNodeWithText("CLI workspace synchronization").assertExists()
  }
+ @Test fun oneEarlierCopyOpensDirectlyAndSeveralCopiesCanBeSelected() {
+  var count by mutableIntStateOf(1)
+  var selected = -1
+  compose.setContent { DroideTheme {
+   AgentWorkspaceSyncNotice(WorkspaceAgentSyncState(sourceRoot="/project", earlierCopies=count), false, {}, {}, { selected = it })
+  } }
+  compose.onNodeWithText("Files").performClick()
+  compose.onNodeWithText("Earlier CLI copies").performScrollTo().performClick()
+  compose.runOnIdle { assertEquals(0, selected); count = 3 }
+  compose.onNodeWithText("Files").performClick()
+  compose.onNodeWithText("Earlier CLI copies").performScrollTo().performClick()
+  compose.onNodeWithText("CLI copy 2").performClick()
+  compose.runOnIdle { assertEquals(1, selected) }
+ }
 }

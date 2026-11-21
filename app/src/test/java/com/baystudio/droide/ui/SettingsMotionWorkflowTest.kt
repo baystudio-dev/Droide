@@ -64,7 +64,8 @@ class SettingsMotionWorkflowTest {
         val github = GitHubAccountManager(app)
         compose.setContent { androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalContext provides (launchContext ?: app)) { DroideTheme { Box(Modifier.size(size.value.first, size.value.second)) {
             if (mounted.value) SettingsScreen(themes, formatter, wrap.value, false, true, CodingKeyboardMode.COMPACT,
-                CodeStyleDefaults(), development, bridge, github, "Motion project", PermissionPolicyDocument.EMPTY,
+                CodeStyleDefaults(), development, bridge, github, "Motion project", initialPermissionPolicy = PermissionPolicyDocument.EMPTY,
+                showEditorStatusBar = false, onShowEditorStatusBar = {},
                 onWordwrap = wordwrapAction, onHardwareShortcuts = {}, onAccessoryKeysComfortable = {},
                 onCodingKeyboardMode = {}, onDetectIndentation = {}, onIndentStyle = {}, onTabWidth = {},
                 onIndentSize = {}, onContinuationIndent = {}, onTheme = themeAction, onPermissionRuleChange = permissionAction,
@@ -102,9 +103,10 @@ class SettingsMotionWorkflowTest {
         val manager = ThemeManager(root); val old = manager.current().name; val next = manager.list().first { it.name != old }.name
         mount(themeAction = { error("disk unavailable") }, category = "APPEARANCE")
         compose.onNodeWithText("Workspace", useUnmergedTree = true).performClick()
-        compose.onNodeWithText(next).performScrollTo().performClick()
+        compose.waitUntil { compose.onAllNodesWithText(settingsThemeLabel(next)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(settingsThemeLabel(next)).performScrollTo().performClick()
         compose.onNodeWithText("Could not save theme: disk unavailable").assertIsDisplayed()
-        compose.onNodeWithText(old).performScrollTo().assertIsSelected()
+        compose.onNodeWithText(settingsThemeLabel(old)).performScrollTo().assertIsSelected()
     }
 
     @Test fun permissionFailureKeepsOldChipAndShowsError() {
@@ -162,14 +164,14 @@ class SettingsMotionWorkflowTest {
         val item = McpHealthSnapshot("fixture", McpHealthState.CONFIGURED, McpHealthPhase.CONFIGURATION, "Configured")
         mount(category = "TOOLS", health = listOf(item), retryAction = { "fixture: approval required" })
         compose.onNodeWithText("fixture").performClick()
-        compose.onNodeWithText("Retry check").performScrollTo().performClick()
+        compose.onNodeWithText("Connect").performScrollTo().performClick()
         compose.onNodeWithText("fixture: approval required").assertIsDisplayed()
         compose.runOnIdle { assertEquals(0, closes) }
     }
 
     @Test fun mcpConfigOpenFailureStaysVisibleInSettings() {
         mount(category = "TOOLS", configAction = { error("editor cannot open config") })
-        compose.onNodeWithText("Open .droide/mcp.json").performScrollTo().performClick()
+        compose.onNodeWithText("Open config").performScrollTo().performClick()
         compose.onNodeWithText("Could not open MCP configuration: editor cannot open config").assertIsDisplayed()
         compose.runOnIdle { assertEquals(0, closes) }
     }

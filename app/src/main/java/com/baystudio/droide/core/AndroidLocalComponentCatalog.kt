@@ -78,7 +78,8 @@ data class AndroidLocalComponentCatalogEntry(
         require(sizeBytes in 1L..TrustedArtifactSpec.MAX_TRUSTED_ARTIFACT_BYTES) { "Invalid local Android component size" }
         require(sha256.matches(Regex("[0-9a-f]{64}"))) { "Invalid local Android component SHA-256" }
         require(upstreamSha1.matches(Regex("[0-9a-f]{40}"))) { "Invalid upstream Android component SHA-1" }
-        require(maxFiles in 1..8_192) { "Invalid local Android component file bound" }
+        val fileCeiling = if (kind == AndroidLocalComponentKind.SDK_PLATFORM) 32_768 else 8_192
+        require(maxFiles in 1..fileCeiling) { "Invalid local Android component file bound" }
         require(maxUnpackedBytes in 1L..1_073_741_824L) { "Invalid local Android component expanded-byte bound" }
         require(provenance.isNotBlank() && provenance.length <= 500) { "Invalid local Android component provenance" }
         validateHttps(downloadUrl, "download URL")
@@ -129,7 +130,7 @@ data class AndroidLocalComponentCatalogEntry(
 
 object AndroidLocalComponentCatalog {
     private const val ASSET_NAME = "android-local-component-catalog.json"
-    const val PINNED_ASSET_SHA256 = "a81cbfb37060335d4dd31c58af9290b61d04c2587b8925ed63dc416a3b53c55e"
+    const val PINNED_ASSET_SHA256 = "6e5e608b1ac733d5209f329040c65ff115b09b0d84444ef47734c23b092f923e"
     private val json = Json { ignoreUnknownKeys = false }
 
     fun load(context: Context): AndroidLocalComponentCatalogDocument {

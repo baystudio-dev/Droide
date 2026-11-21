@@ -17,6 +17,8 @@ class TypedChatCompactorTest {
         val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
         val requests=AtomicInteger()
         var received=""
+        val bodies = java.util.concurrent.CopyOnWriteArrayList<String>()
+        var requestLimit: Int? = null
         var reply="""{"choices":[{"delta":{"content":"Historical task investigated; no edit authorization was granted."},"finish_reason":"stop"}]}"""
         val provider=AiProvider("compact-test-${server.address.port}","Compact","http://127.0.0.1:${server.address.port}/v1","model",false,false,"","",authScheme=ProviderAuthScheme.NONE,networkScope=ProviderNetworkScope.LOOPBACK_ONLY)
         val target=TypedChatTarget(provider.id,"model",OwnedChatEndpointIdentity.fromValidatedUrl(provider.baseUrl+"/chat/completions"))
@@ -29,6 +31,13 @@ class TypedChatCompactorTest {
         init {
             server.createContext("/v1/chat/completions") { exchange ->
                 requests.incrementAndGet();received=exchange.requestBody.bufferedReader().readText()
+                bodies += received
+                if (received.length > (requestLimit ?: Int.MAX_VALUE)) {
+                    val message = """{"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}}""".toByteArray()
+                    exchange.sendResponseHeaders(400, message.size.toLong())
+                    exchange.responseBody.use { it.write(message) }
+                    return@createContext
+                }
                 exchange.responseHeaders.add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0)
                 exchange.responseBody.use { it.write(("data: $reply\n\ndata: [DONE]\n\n").toByteArray()) }
             };server.start()
@@ -114,25 +123,55 @@ class TypedChatCompactorTest {
             assertEquals(setOf("a","b"),messages.filter { it["role"]==JsonPrimitive("tool") }.map { it["tool_call_id"]!!.jsonPrimitive.content }.toSet())
         }
     }
-    @Test fun oversizedNativeSmallGroupCannotBeSplitForCompaction()=runBlocking {
+    @Test fun oversizedNativeGroupSummarizesOnlyPublicCallAndResultEvidence()=runBlocking {
         Fixture().use { f ->
             ModelContextRegistry.remember(f.provider.id,"model",4096)
             val entries=nativeSmallHistory(f).filterIndexed { index,_ -> index!=1 }
             val original=TypedChatCheckpoint(target=f.target,live=entries,exact=entries)
-            assertNotNull(runCatching { f.compact(original) }.exceptionOrNull())
-            assertEquals(0,f.requests.get());assertEquals(entries,original.exact)
+            val result = f.compact(original)
+            assertEquals(entries, result.checkpoint.exact)
+            val sent = f.bodies.joinToString()
+            for (publicText in listOf("result a", "result b", "read_file")) assertTrue(sent.contains(publicText))
+            assertFalse(sent.contains("private continuation"))
+            assertFalse(sent.contains("reasoning_content"))
+            assertTrue(f.bodies.all { Json.parseToJsonElement(it).jsonObject["tools"] == null })
         }
     }
 
-    @Test fun oversizedIndivisibleHistoricalGroupBlocksBeforeNetwork()=runBlocking {
+    @Test fun oversizedHistoricalUserTextIsSummarizedAcrossBoundedRequests()=runBlocking {
         Fixture().use { f ->
             ModelContextRegistry.remember(f.provider.id,"model",4096)
             val entries=listOf(entry("user","x".repeat(100_000)),entry("assistant","older response"),entry("user","new request"))
             val original=TypedChatCheckpoint(target=f.target,live=entries,exact=entries)
-            val error=runCatching { f.compact(original) }.exceptionOrNull()
-            assertNotNull(error);assertTrue(error!!.message.orEmpty().contains("complete historical"));assertEquals(0,f.requests.get());assertEquals(entries,original.live)
+            val result = f.compact(original)
+            assertTrue(result.changed)
+            assertTrue(result.requests in 2..32)
+            assertEquals(entries, result.checkpoint.exact)
+            assertEquals(entries.last(), result.checkpoint.live.last())
         }
     }
+    @Test fun providerOverflowWithUnknownWindowShrinksOnlyHistoricalEvidence() = runBlocking {
+        Fixture().use { f ->
+            ModelContextRegistry.forget(f.provider.id)
+            f.requestLimit = 4_500
+            val originalText = "start_🧪" + "abc".repeat(2_500) + "_end_🌳"
+            val entries = listOf(entry("user", originalText), entry("assistant", "confirmed"), entry("user", "keep exact"))
+            val checkpoint = TypedChatCheckpoint(target = f.target, live = entries, exact = entries)
+            val result = f.compact(checkpoint)
+            assertTrue(result.changed)
+            assertEquals(entries, result.checkpoint.exact)
+            assertTrue(f.bodies.any { it.length > f.requestLimit!! })
+            val acceptedParts = f.bodies.filter { it.length <= f.requestLimit!! }.flatMap {
+                Json.parseToJsonElement(it).jsonObject.getValue("messages").jsonArray
+            }.mapNotNull {
+                val content = it.jsonObject["content"]?.jsonPrimitive?.content.orEmpty()
+                content.takeIf { it.startsWith("[Historical transcript · group ") }?.substringAfter('\n')
+            }
+            assertTrue(acceptedParts.joinToString("").contains(originalText))
+            assertEquals(f.requests.get(), result.requests)
+        }
+    }
+
     @Test fun latestUserTooLargeNeverGetsSummarizedAway()=runBlocking {
         Fixture().use { f ->
             ModelContextRegistry.remember(f.provider.id,"model",4096)

@@ -41,10 +41,8 @@ class AgentServiceOwnedChatTest {
         val root=Files.createTempDirectory("service-owned-").toFile()
         try { withProviderStreamFixture(ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS) { fixture ->
             val text="exact field content\n".repeat(120000)
-            var secondRequest=""
-            fixture.response={ index,body,_ ->
+            fixture.response={ index,_,_ ->
                 if(index==1)response(fixture,text) else {
-                    secondRequest=body.toString()
                     fixture.event("""{"choices":[{"delta":{"content":"Done exactly"},"finish_reason":"stop"}]}""")+"data: [DONE]\n\n"
                 }
             }
@@ -57,12 +55,29 @@ class AgentServiceOwnedChatTest {
                 val saved=runBlocking { checkNotNull(agent.sessions.get(checkNotNull(agent.currentSessionId))) }
                 assertNotNull(saved.typedChat);assertTrue(saved.apiHistory.isEmpty())
                 assertTrue(saved.typedChat!!.exact.any { it is TypedChatEntry.OwnedAssistant && it.callIds==listOf("large-call") })
-                val messages=Json.parseToJsonElement(secondRequest).jsonObject.getValue("messages").jsonArray
+                val messages = fixture.requests.map { it.getValue("messages").jsonArray }.first { history ->
+                    history.any { it.jsonObject["role"] == JsonPrimitive("tool") }
+                }
                 val call=messages.map { it.jsonObject }.first { it["tool_calls"] != null }.getValue("tool_calls").jsonArray.single().jsonObject
                 assertEquals(text,Json.parseToJsonElement(call.getValue("function").jsonObject.getValue("arguments").jsonPrimitive.content).jsonObject.getValue("content").jsonPrimitive.content)
                 assertTrue(messages.any { it.jsonObject["role"]==JsonPrimitive("tool") })
+                val previousRequests = fixture.requests.size
                 runBlocking { agent.loadSession(saved);withTimeout(30000) { agent.chat("Confirm the result",fixture.config,maxTurns=1) } }
-                assertTrue(secondRequest.contains("large-call"))
+                val continued = fixture.requests.drop(previousRequests)
+                assertTrue(continued.count { it["tool_choice"] == JsonPrimitive("none") } <= 2)
+                assertTrue(continued.any { request ->
+                    val history = request.getValue("messages").jsonArray
+                    request["tool_choice"] != JsonPrimitive("none") &&
+                        history.any { it.jsonObject["content"] == JsonPrimitive("Confirm the result") } &&
+                        history.any { it.jsonObject["tool_call_id"] == JsonPrimitive("large-call") }
+                })
+                assertEquals("Done exactly", agent.messages.value.last().content)
+                val continuedCheckpoint = checkNotNull(runBlocking { agent.sessions.get(saved.id) }?.typedChat)
+                val beforeManual = fixture.requests.size
+                val manual = runBlocking { agent.compactCurrent(fixture.config) }
+                assertTrue(manual, manual.contains("work budget exhausted"))
+                assertEquals(continuedCheckpoint, runBlocking { agent.sessions.get(saved.id) }?.typedChat)
+                assertTrue(fixture.requests.size - beforeManual <= 2)
             } finally { agent.shutdown() }
         } } finally { PathSecurity.deleteTreeNoFollow(root) }
     }

@@ -7,17 +7,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.baystudio.droide.core.LspManager
+import com.baystudio.droide.core.LanguageServerRegistry
 import com.baystudio.droide.core.runSuspendCatching
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 /** Pane disposal leaves workspace documents open. Only an ineligible document closes LSP sync. */
 @Composable
-internal fun EditorLspDocumentEffect(document: EditorDocument, path: String, lsp: LspManager) {
+internal fun EditorLspDocumentEffect(document: EditorDocument, path: String, lsp: LspManager,
+    wireLanguage: String = LanguageServerRegistry.protocolLanguageId(path)) {
     var lastVersion by remember(document, path, lsp) { mutableStateOf<Pair<Int, Int>?>(null) }
     var mayBeOpen by remember(document, path, lsp) { mutableStateOf(false) }
+    var trackedLanguage by remember(document, path, lsp) { mutableStateOf(wireLanguage) }
     LaunchedEffect(document, document.revision, document.changeVersion, document.loaded,
-        document.kind, document.performanceMode, lsp, path) {
+        document.kind, document.performanceMode, lsp, path, wireLanguage) {
+        if (wireLanguage != trackedLanguage) {
+            if (mayBeOpen) runSuspendCatching { lsp.didClose(path) }.getOrElse { return@LaunchedEffect }
+            mayBeOpen = false
+            lastVersion = null
+            trackedLanguage = wireLanguage
+        }
         val enabled = document.fullIntelligence
         val version = document.revision to document.changeVersion
         if (enabled && lastVersion == version) return@LaunchedEffect

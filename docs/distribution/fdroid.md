@@ -97,7 +97,7 @@ python3 tools/build_fdroid_candidate.py \
 ```
 
 The storage flag enables the optional Android shared-file integration used by the
-1.02 recipe. Users still enable the preference and grant Android file access.
+1.03 recipe. Users still enable the preference and grant Android file access.
 Omit it only when intentionally building without that capability.
 
 Compilation must run in F-Droid's **build** phase, after source scanning, not its prebuild
@@ -129,7 +129,7 @@ never provide a private keystore or password to the build repository.
 
 ### Packaging metadata
 
-`tools/fdroid/com.baystudio.droide.yml` enables 1.02 (46), targeting the immutable `v1.02-fdroid` source tag. The historical 1.01 entry is disabled for initial inclusion; its tags, release assets and previous evidence remain unchanged. The enabled entry builds shared-file support explicitly. The current recipe is maintained separately from the frozen application tag.
+`tools/fdroid/com.baystudio.droide.yml` targets 1.03 (47) at `v1.03-fdroid` and retains the 1.02 (46) recipe at its original tag. The historical 1.01 entry is disabled for initial inclusion; its tags, release assets and previous evidence remain unchanged. The enabled entry builds shared-file support explicitly. The current recipe is maintained separately from the frozen application tag.
 
 The recipe builds after source scanning, uses the pinned buildserver Gradle, and declares optional proprietary services, add-ons and third-party marks. It uses neither `scanignore` nor `scandelete`. `Binaries` supplies the versioned upstream APK for verification, and `AllowedAPKSigningKeys` pins the production certificate. The upstream APK does not replace compilation or source review.
 

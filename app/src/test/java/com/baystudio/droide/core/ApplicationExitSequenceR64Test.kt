@@ -2,6 +2,7 @@ package com.baystudio.droide.core
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -13,6 +14,31 @@ class ApplicationExitSequenceR64Test {
         val first = sequence.request(); assertSame(first, sequence.request()); assertEquals(1, calls)
         release.complete(Unit); first.join(); assertTrue(sequence.state.value.completed); assertSame(first, sequence.request()); scope.cancel()
     }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun slowCheckpointReportsProgressAndCanFinishWithinFiveSeconds() = runTest {
+        val saved = CompletableDeferred<Unit>()
+        var calls = 0
+        val sequence = ApplicationExitSequence(this, listOf(ApplicationExitSequence.Step("Save") {
+            calls++
+            saved.await()
+        }))
+        sequence.request()
+        testScheduler.advanceTimeBy(2_499)
+        testScheduler.runCurrent()
+        assertTrue(sequence.state.value.running)
+        testScheduler.advanceTimeBy(1)
+        testScheduler.runCurrent()
+        assertFalse(sequence.state.value.running)
+        assertTrue(sequence.state.value.stage.contains("still finishing"))
+
+        sequence.request()
+        testScheduler.advanceTimeBy(2_499)
+        saved.complete(Unit)
+        testScheduler.runCurrent()
+        assertTrue(sequence.state.value.completed)
+        assertEquals(1, calls)
+    }
+
     @Test fun failedSaveNeverStartsStopAndRetryDoesNotReplayAdmission() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         var admitted = 0; var saves = 0; var stopped = 0

@@ -7,9 +7,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.provider.Settings
 import com.baystudio.droide.core.ApplicationWorkAdmission
+import com.baystudio.droide.core.ApplicationExitDeadline
 import com.baystudio.droide.core.ApplicationExitSequence
 import com.baystudio.droide.core.DevelopmentForegroundService
-import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -31,6 +31,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,7 +48,6 @@ import com.baystudio.droide.ui.DroideWindowInsetsHost
 import com.baystudio.droide.ui.ProjectCatalogRecoveryEntry
 import com.baystudio.droide.ui.WorkspaceLoadingScreen
 import com.baystudio.droide.ui.WorkspaceStoppedScreen
-import androidx.compose.ui.platform.LocalConfiguration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
     private val editorRecoveryBridge = EditorRecoveryBridge()
     private val folderImportProgress = MutableStateFlow<SafMirrorProgress?>(null)
     private var folderImportJob: Job? = null
-    private var hidePortraitEditorStatusBar by mutableStateOf(false)
+    private var editorStatusBarRequest by mutableStateOf(EditorStatusBarRequest.FOLLOW_ORIENTATION)
     private var reviewExitDrafts by mutableStateOf(false)
     private val appOwner get() = application as DroideApplication
 
@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
         appOwner.attachUserInterface(this)
         if (ApplicationWorkAdmission.isOpen) lifecycleScope.coroutineContext[Job]?.let { appOwner.uiWorkOwner?.register(it) }
         workspaceModel = ViewModelProvider(this)[WorkspaceViewModel::class.java]
-        applyDroideOrientationStatusBar(window, resources.configuration.orientation, hidePortraitEditorStatusBar)
+        applyDroideOrientationStatusBar(window, resources.configuration.orientation, editorStatusBarRequest)
         handleGitHubOAuthCallback(intent)
         handleExitIntent(intent)
         handleExplorerExportIntent(intent)
@@ -219,9 +219,7 @@ class MainActivity : ComponentActivity() {
             }
             if (epoch == null) {
                 DroideTheme { Surface(Modifier.fillMaxSize()) {
-                    DroideWindowInsetsHost(
-                        statusBarRequestedHidden = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE,
-                    ) {
+                    DroideWindowInsetsHost {
                         WorkspaceStoppedScreen(
                             canOpen = (!exit.started || exit.completed) && !(exit.completed && finishWhenExitCompletes),
                             failure = startFailure,
@@ -258,12 +256,7 @@ class MainActivity : ComponentActivity() {
             val importingFolder by folderImportProgress.collectAsState()
             DroideTheme {
                 Surface(Modifier.fillMaxSize()) {
-                    val orientation = LocalConfiguration.current.orientation
-                    DroideWindowInsetsHost(
-                        statusBarRequestedHidden = orientation == Configuration.ORIENTATION_LANDSCAPE ||
-                            (orientation == Configuration.ORIENTATION_PORTRAIT && hidePortraitEditorStatusBar),
-                        reclaimTopCutout = orientation == Configuration.ORIENTATION_PORTRAIT && hidePortraitEditorStatusBar,
-                    ) {
+                    DroideWindowInsetsHost(editorStatusBarRequest) {
                     com.baystudio.droide.ui.EnvironmentSetupHost(workspaceModel.environmentSetup,
                         allowed = !exit.started && !releaseUi && appOwner.mayPresentWorkspace(this@MainActivity)) {
                     val rt = runtime
@@ -336,12 +329,7 @@ class MainActivity : ComponentActivity() {
                                 explorerRefresh = workspaceModel.explorerRefreshFor(rt),
                                 startupRecovery = workspaceModel.startupRecovery,
                                 onNotificationSettings = ::openNotificationSettings,
-                                onPortraitEditorStatusBarHiddenChanged = { hidden ->
-                                    if (hidePortraitEditorStatusBar != hidden) {
-                                        hidePortraitEditorStatusBar = hidden
-                                        applyDroideOrientationStatusBar(window, resources.configuration.orientation, hidden)
-                                    }
-                                },
+                                onEditorStatusBarChange = ::updateEditorStatusBar,
                                 onPickSaf = {
                                     runCatching { pickTree.launch(null) }.onFailure { failure ->
                                         Toast.makeText(this@MainActivity, "Cannot open folder picker: ${failure.message ?: "unavailable"}", Toast.LENGTH_LONG).show()
@@ -445,12 +433,18 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { workspaceModel.coordinator.githubAccount.handleCallback(callback) }
     }
 
+    private fun updateEditorStatusBar(request: EditorStatusBarRequest) {
+        if (editorStatusBarRequest == request) return
+        editorStatusBarRequest = request
+        applyDroideOrientationStatusBar(window, resources.configuration.orientation, request)
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             
 
-            applyDroideOrientationStatusBar(window, resources.configuration.orientation, hidePortraitEditorStatusBar)
+            applyDroideOrientationStatusBar(window, resources.configuration.orientation, editorStatusBarRequest)
         }
     }
 
@@ -553,7 +547,7 @@ private fun ExitStatusContent(state: ApplicationExitSequence.State, retry: () ->
     Column(Modifier.padding(16.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)) {
         Text(state.stage.ifBlank { "Preserving drafts and stopping work" }, style = MaterialTheme.typography.titleMedium)
         if (state.running) LinearProgressIndicator(Modifier.fillMaxWidth())
-        Text("Saving drafts and stopping work. Droide will close within 15 seconds.")
+        Text(stringResource(R.string.session_exit_time_limit, ApplicationExitDeadline.TIMEOUT_SECONDS))
         state.failure?.let { Text(it) }
         if (!state.running && !state.completed) {
             Button(onClick = retry) { Text("Retry Exit") }

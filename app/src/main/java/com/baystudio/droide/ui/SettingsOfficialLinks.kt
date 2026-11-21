@@ -3,7 +3,7 @@ package com.baystudio.droide.ui
 /** Fixed destinations published by Droide's website; never populated from project or remote input. */
 internal enum class SettingsOfficialLink(val title: String, val url: String) {
     WEBSITE("Official website", "https://droide.rekacipta.biz.id/"),
-    SOURCE("Source repository", "https://github.com/baystudio-dev/Droide-v1.-00"),
+    SOURCE("Source repository", "https://github.com/baystudio-dev/Droide"),
     TECHNOLOGY("How Droide works", "https://droide.rekacipta.biz.id/technology.html"),
     GITHUB("BayStudio on GitHub", "https://github.com/baystudio-dev"),
     BLUESKY("Bluesky", "https://bsky.app/profile/droideapp.bsky.social"),

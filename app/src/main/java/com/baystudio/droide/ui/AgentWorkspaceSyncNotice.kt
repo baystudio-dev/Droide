@@ -1,11 +1,14 @@
 package com.baystudio.droide.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.baystudio.droide.R
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.baystudio.droide.core.WorkspaceAgentSyncPhase
@@ -20,8 +23,9 @@ internal fun AgentWorkspaceSyncNotice(state: WorkspaceAgentSyncState, busy: Bool
 
 @Composable
 internal fun AgentWorkspaceSyncNotice(state: WorkspaceAgentSyncState, busy: Boolean, onReview: () -> Unit,
-                                     onRecovery: (() -> Unit)?) {
+                                     onRecovery: (() -> Unit)?, onEarlier: ((Int) -> Unit)? = null) {
     var details by remember(state.sourceRoot) { mutableStateOf(false) }
+    var chooseEarlier by remember(state.sourceRoot) { mutableStateOf(false) }
     var reviewRequested by remember(state.sourceRoot) { mutableStateOf(false) }
     LaunchedEffect(busy) { if (!busy) reviewRequested = false }
     val needsAttention = state.pendingCount > 0 || state.phase == WorkspaceAgentSyncPhase.PENDING ||
@@ -32,6 +36,21 @@ internal fun AgentWorkspaceSyncNotice(state: WorkspaceAgentSyncState, busy: Bool
     }, colors = ButtonDefaults.textButtonColors(
         contentColor = if (needsAttention) DroideColors.Error else MaterialTheme.colorScheme.primary,
     )) { Text(filesLabel, maxLines = 1) }
+    if (chooseEarlier && onEarlier != null) AlertDialog(
+        onDismissRequest = { chooseEarlier = false },
+        title = { Text(stringResource(R.string.cli_earlier_copies)) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                items(state.earlierCopies) { offset ->
+                    val index = state.earlierCopies - 1 - offset
+                    TextButton(enabled = !busy, onClick = { chooseEarlier = false; onEarlier(index) }) {
+                        Text(stringResource(R.string.cli_copy_number, index + 1))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { chooseEarlier = false }) { Text("Close") } },
+    )
     // Permission sheets own the modal surface while a requested review is running.
     if (details && !(reviewRequested && busy)) AlertDialog(
         onDismissRequest = { details = false },
@@ -48,6 +67,13 @@ internal fun AgentWorkspaceSyncNotice(state: WorkspaceAgentSyncState, busy: Bool
                     TextButton(enabled = !busy, onClick = { details = false; recover() }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Retained versions")
                     }
+                }
+                if (state.earlierCopies > 0 && onEarlier != null) {
+                    Text(stringResource(R.string.cli_earlier_copy_notice))
+                    TextButton(enabled = !busy, onClick = {
+                        details = false
+                        if (state.earlierCopies == 1) onEarlier(0) else chooseEarlier = true
+                    }) { Text(stringResource(R.string.cli_earlier_copies)) }
                 }
                 if (state.pendingPaths.isNotEmpty()) Text(state.pendingPaths.joinToString("\n") +
                     if (state.pendingCount > state.pendingPaths.size) "\n… ${state.pendingCount - state.pendingPaths.size} more" else "",

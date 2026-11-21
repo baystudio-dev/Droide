@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="editor_show_android_status_bar">Show Android status bar</string>
+    <string name="editor_show_android_status_bar_summary">Keep the clock, battery and notifications above the editor.</string>
+    <string name="editor_status_bar_save_failed">Could not save the status bar setting</string>
+</resources>

@@ -82,6 +82,7 @@ Generated build output, backup archives and signing credentials are not reposito
 
 ## Release assets and evidence
 
+- [Droide 1.03 release and upgrade guidance](releases/1.03.md)
 - [Droide 1.02 release and upgrade guidance](releases/1.02.md)
 - [Brand assets and provenance](branding/README.md)
 - [Verification records and frozen upstream provenance](verification/README.md)

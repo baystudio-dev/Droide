@@ -27,7 +27,7 @@ class DevelopmentExtensionProjectionTest {
         assertEquals(specs.size, specs.map { it.id }.distinct().size)
         assertEquals(19, LegacyLspCatalogFixture.workspaceProfiles().size)
         val externallyManaged = mapOf(
-            "nomicfoundation-solidity-language-server" to "nomicfoundation-solidity-language-server",
+            "goose" to GooseLanguage.COMMAND,
             "metals" to "metals",
             "asm-lsp" to "asm-lsp",
             "elixir-ls" to "language_server.sh",
@@ -278,5 +278,27 @@ class DevelopmentExtensionProjectionTest {
         assertEquals(ExtensionState.INSTALLED, detected.state)
         assertTrue(detected.detail.contains("Device Workstation"))
         assertNull(DevelopmentExtensionProjection.detectedDeviceComponent(family, device, null))
+    }
+    @Test fun projectFrameworksKeepTheirScopeAndDoNotReplaceDetectedOrBlockedChoices() {
+        val family = requireNotNull(DevelopmentExtensionCatalog.byId("framework.react"))
+        val version = family.versions.single()
+        val choice = ExtensionVersionState(family, version, ExtensionState.UNAVAILABLE, version.note)
+        val routed = DevelopmentExtensionProjection.installChoices(family, listOf(choice), true)
+        assertEquals(ExtensionState.PROJECT_DEPENDENCY, routed.single().state)
+        assertTrue(routed.single().detail.contains("package.json"))
+        assertEquals(listOf(choice), DevelopmentExtensionProjection.installChoices(family, listOf(choice), false))
+        val detected = choice.copy(state = ExtensionState.EXTERNAL)
+        assertEquals(listOf(detected), DevelopmentExtensionProjection.installChoices(family, listOf(detected), true))
+    }
+
+    @Test fun manualUpstreamPackagesKeepTheirInstructionsAndNeverPretendToBeInstalled() {
+        for (id in listOf("toolchain.goose", "lsp.metals", "lsp.asm-lsp", "lsp.elixir-ls", "lsp.haskell-hls", "lsp.r-languageserver")) {
+            val family = DevelopmentExtensionCatalog.byId(id)!!
+            val before = family.versions.map { ExtensionVersionState(family, it, ExtensionState.UNAVAILABLE, it.note) }
+            val result = DevelopmentExtensionProjection.installChoices(family, before, true)
+            assertTrue(id, result.any { it.state == ExtensionState.MANUAL })
+            assertNotNull(id, ExtensionUpdatePolicy.forFamily(family).documentationUrl)
+            assertEquals(before, DevelopmentExtensionProjection.installChoices(family, before, false))
+        }
     }
 }

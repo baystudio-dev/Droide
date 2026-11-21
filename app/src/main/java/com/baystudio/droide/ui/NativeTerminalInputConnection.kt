@@ -1,20 +1,44 @@
 package com.baystudio.droide.ui
 
+import android.annotation.TargetApi
+import android.os.Build
 import android.os.SystemClock
 import android.text.Editable
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.TextAttribute
 
 /** Owns the IME's temporary editable, never a copy of terminal screen/history. The upstream commit sink retains
  * Termux's Unicode/control/modifier conversion. */
-internal class NativeTerminalInputConnection(
+internal open class NativeTerminalInputConnection protected constructor(
     target: View,
     private val lease: TerminalImeOwner.Lease,
     private val commitToTerminal: (CharSequence) -> Boolean,
     private val dispatchToTerminal: (KeyEvent) -> Boolean,
 ) : BaseInputConnection(target, true) {
+    companion object {
+        fun create(
+            target: View, lease: TerminalImeOwner.Lease,
+            commitToTerminal: (CharSequence) -> Boolean, dispatchToTerminal: (KeyEvent) -> Boolean,
+        ): NativeTerminalInputConnection = if (Build.VERSION.SDK_INT >= 34) {
+            ReplacementConnection(target, lease, commitToTerminal, dispatchToTerminal)
+        } else NativeTerminalInputConnection(target, lease, commitToTerminal, dispatchToTerminal)
+    }
+
+    @TargetApi(34)
+    private class ReplacementConnection(
+        target: View, lease: TerminalImeOwner.Lease,
+        commit: (CharSequence) -> Boolean, dispatch: (KeyEvent) -> Boolean,
+    ) : NativeTerminalInputConnection(target, lease, commit, dispatch) {
+        override fun replaceText(start: Int, end: Int, text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?): Boolean {
+            val length = editable?.length ?: return false
+            if (start !in 0..length || end !in 0..length) return false
+            return super.replaceText(start, end, text, newCursorPosition, textAttribute) && flushEditable()
+        }
+    }
+
     // Also fences newer BaseInputConnection editing overloads against a retired owner.
     override fun getEditable(): Editable? = if (lease.isCurrent()) super.getEditable() else null
 
@@ -71,7 +95,7 @@ internal class NativeTerminalInputConnection(
         super.closeConnection()
     }
 
-    private fun flushEditable(): Boolean {
+    protected fun flushEditable(): Boolean {
         val text = editable?.toString().orEmpty()
         if (text.isEmpty()) return lease.isCurrent()
         val delivered = lease.deliver { commitToTerminal(text) }

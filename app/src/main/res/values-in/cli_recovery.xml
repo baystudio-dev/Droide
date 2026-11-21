@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cli_earlier_copies">Salinan CLI sebelumnya</string>
+    <string name="cli_copy_number">Salinan CLI %1$d</string>
+    <string name="cli_earlier_copy_notice">Sesi ini memakai salinan terpisah. File yang belum diterapkan ke proyek bisa dipulihkan dari salinan sebelumnya.</string>
+    <string name="cli_save_working_copy">Simpan salinan kerja sebagai TAR</string>
+</resources>

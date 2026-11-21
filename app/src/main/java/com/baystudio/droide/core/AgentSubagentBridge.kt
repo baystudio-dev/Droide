@@ -76,7 +76,7 @@ class AgentSubagentBridge(
         if (origin == AgentInputOrigin.USER) {
             return SubagentInputProjection(
                 messages = listOf(AgentMessage("user", text, media = media)),
-                apiEntries = listOf(VisionSupport.userMessage(AgentIdeContextProjection.forModel(AgentMediaPromptReceipt.forModel(text, media, images), ideContext, maxApiMessageChars), images, maxApiMessageChars)),
+                apiEntries = listOf(AgentIdeContextProjection.userMessage(AgentMediaPromptReceipt.forModel(text, media, images), ideContext, images, maxApiMessageChars)),
             )
         }
         val part = AgentStreamPart(

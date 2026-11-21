@@ -20,6 +20,31 @@ class EditorSaveCoordinatorTest {
         finally { owner.close(); PathSecurity.deleteTreeNoFollow(root) }
     }
 
+    @Test fun executionWithUnreadableRecoveryPreservesTheArchiveAndRejectsDirtyBuffers() = workspace { root, _ ->
+        val archive = root.resolve("recovery.bin").apply { writeBytes(byteArrayOf(0, -1, 23)) }
+        val originalBytes = archive.readBytes()
+        val file = root.resolve("main.kt").apply { writeText("saved") }
+        val files = FileRepository(root)
+        val state = EditorWorkspaceState()
+        val doc = state.document("main.kt")
+        doc.ensureLoaded(files)
+        val saves = EditorSaveCoordinator(state, files, ActiveEditorBridge())
+        val unexpectedWrite: suspend () -> Unit = { error("Unavailable recovery must not be written") }
+
+        assertFalse(saves.prepareExecution(EditorRecoveryAvailability.LOADING, unexpectedWrite).ready)
+        assertTrue(saves.prepareExecution(EditorRecoveryAvailability.READ_FAILED, unexpectedWrite).ready)
+        doc.capture("new work")
+        val blocked = saves.prepareExecution(EditorRecoveryAvailability.READ_FAILED, unexpectedWrite)
+        assertEquals(listOf("main.kt"), blocked.issues.map { it.path })
+        assertEquals("saved", file.readText())
+        assertArrayEquals(originalBytes, archive.readBytes())
+
+        var persisted = false
+        assertTrue(saves.prepareExecution(EditorRecoveryAvailability.READY) { persisted = true }.ready)
+        assertTrue(persisted)
+        assertEquals("new work", file.readText())
+    }
+
     @Test fun exportScopeSaveLeavesUnrelatedBuffersUntouched() = workspace { root, _ ->
         root.resolve("src").mkdirs(); root.resolve("src/a.kt").writeText("A")
         root.resolve("outside.kt").writeText("outside")

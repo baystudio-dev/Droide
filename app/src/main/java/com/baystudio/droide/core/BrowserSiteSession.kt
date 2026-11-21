@@ -1,6 +1,5 @@
 package com.baystudio.droide.core
 
-import java.net.URI
 import java.util.Locale
 
 /** Explicit, in-memory consent for one origin in one agent session. Never a policy ALLOW. */
@@ -10,7 +9,7 @@ internal object BrowserSiteSession {
 
     fun origin(raw: String): String? = runCatching {
         if (raw.length !in 1..8192 || raw.any { it.code < 32 || it.code == 127 }) return null
-        val uri = URI(raw)
+        val uri = BrowserWebAddress.authority(raw)
         val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return null
         val host = uri.host?.lowercase(Locale.ROOT) ?: return null
         if (uri.isOpaque || uri.rawUserInfo != null || scheme !in setOf("https", "http")) return null

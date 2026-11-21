@@ -178,6 +178,25 @@ internal object DevelopmentExtensionProjection {
         return ExtensionVersionState(family, version, ExtensionState.INSTALLED, "Installed Device Workstation · $detail")
     }
 
+    fun installChoices(
+        family: ExtensionFamily,
+        states: List<ExtensionVersionState>,
+        localInstallAllowed: Boolean,
+    ): List<ExtensionVersionState> {
+        if (!localInstallAllowed || states.isEmpty() || states.any { it.state != ExtensionState.UNAVAILABLE }) return states
+        val policy = ExtensionUpdatePolicy.forFamily(family)
+        return when (policy.route) {
+            ExtensionUpdatePolicy.Route.UPSTREAM_MANAGER -> states.map { item ->
+                if (canDetectExternal(item.version)) item.copy(state = ExtensionState.MANUAL, detail = policy.description) else item
+            }
+            ExtensionUpdatePolicy.Route.PROJECT -> states.map { item ->
+                if (item.version.installKind == ExtensionInstallKind.CATALOG_ONLY && item.version.scope == ExecutionScope.EDITOR)
+                    item.copy(state = ExtensionState.PROJECT_DEPENDENCY, detail = policy.description) else item
+            }
+            else -> states
+        }
+    }
+
     /** Remove obsolete absent target placeholders while preserving real receipts and detections. */
     fun visibleStates(states: List<ExtensionVersionState>): List<ExtensionVersionState> {
         val installerFamilies = states.asSequence().filter { it.version.installKind in setOf(

@@ -198,8 +198,18 @@ internal class MirrorRetainedRecovery(private val source: File, private val work
     /** Reuse the verified export pipeline to rescue a complete folder, including hidden files,
      * empty directories and links. Archive publication never overwrites a project entry. */
     suspend fun archive(item: Item, files: FileRepository, destination: String, cache: File,
-                        requireCurrent: () -> Unit): Long = withContext(Dispatchers.IO) {
+                        requireCurrent: () -> Unit): Long {
         require(item.kind == AnchoredWorkspaceFiles.Kind.DIRECTORY) { "Select a retained folder" }
+        return archiveFolder(parent(item.role), name(item.operation, item.role), files, destination, cache, requireCurrent) {
+            requireRecord(item)
+        }
+    }
+
+    suspend fun archiveWorkingCopy(files: FileRepository, destination: String, cache: File, requireCurrent: () -> Unit): Long =
+        archiveFolder(checkNotNull(working.parentFile), working.name, files, destination, cache, requireCurrent) {}
+
+    private suspend fun archiveFolder(parent: File, selected: String, files: FileRepository, destination: String, cache: File,
+                                      requireCurrent: () -> Unit, validateSelection: () -> Unit): Long = withContext(Dispatchers.IO) {
         require(files.root.canonicalFile == source.canonicalFile) { "Archive belongs to another workspace" }
         val path = ExplorerFilePolicy.requireUserTarget(files.root, destination)
         require(path.endsWith(".tar", ignoreCase = true)) { "Use a .tar name for the recovered folder archive" }
@@ -213,15 +223,14 @@ internal class MirrorRetainedRecovery(private val source: File, private val work
         val control = ExportControl(checkCancelled = { caller.ensureActive(); requireCurrent() })
         try {
             val captured = read {
-                requireRecord(item)
-                AnchoredWorkspaceFiles(parent(item.role)).use { anchor ->
+                validateSelection()
+                AnchoredWorkspaceFiles(parent).use { anchor ->
                     val rootIdentity = anchor.directoryKey()
-                    val selected = name(item.operation, item.role)
                     val folderIdentity = anchor.directoryKey(selected)
                     val permit = object : ExportCapturePermit {
-                        override val root = parent(item.role)
+                        override val root = parent
                         override val scope = ExportScope(selected)
-                        override val stabilityAssumptions = listOf("Retained working-copy owner is serialized; uncooperative external writers are detected by observed identity/metadata checks")
+                        override val stabilityAssumptions = listOf("Directory identity and contents are checked during capture. External processes may continue writing.")
                         override fun validate() {
                             control.checkCancelled()
                             check(anchor.directoryKey() == rootIdentity && anchor.directoryKey(selected) == folderIdentity) {
@@ -229,7 +238,7 @@ internal class MirrorRetainedRecovery(private val source: File, private val work
                             }
                         }
                     }
-                    ExportCaptureStore(File(staging, "capture")).capture(permit, control).also { requireRecord(item) }
+                    ExportCaptureStore(File(staging, "capture")).capture(permit, control).also { validateSelection() }
                 }
             }
             captured.use {
@@ -248,7 +257,7 @@ internal class MirrorRetainedRecovery(private val source: File, private val work
                 val version = AnchoredWorkspaceFiles(staging).use { snapshots.inspect(it, archive.name, caller) }
                 archive.inputStream().use { input ->
                     files.writeStream(path, input, expectedBytes = version.size, requireAbsent = true, requireExistingParent = true,
-                        beforePublication = { read { control.checkCancelled(); requireRecord(item) } },
+                        beforePublication = { read { control.checkCancelled(); validateSelection() } },
                         publicationObserver = object : StreamPublicationObserver {
                             override fun beforePublish(preparation: StreamPublicationPreparation) {
                                 control.checkCancelled()

@@ -14,6 +14,7 @@ internal class OwnedChatRequestBody private constructor(
     private val target: ProviderReplayTarget,
     private val checkCancelled: () -> Unit,
     private val admittedBytes: Long,
+    val estimate: ContextEstimate,
 ) : RequestBody() {
     override fun contentType() = "application/json".toMediaType()
     override fun contentLength() = admittedBytes
@@ -27,7 +28,13 @@ internal class OwnedChatRequestBody private constructor(
         fun admit(options: JsonObject, history: List<SourceAwareChatHistoryWriter.Item>,
             target: ProviderReplayTarget, provider: AiProvider, checkCancelled: () -> Unit): OwnedChatRequestBody {
             require("messages" !in options)
-            val immutable = history.toList()
+            val window = AgentIdeContextProjection.Window()
+            val immutable = history.map { item ->
+                if (item is SourceAwareChatHistoryWriter.Item.Legacy) {
+                    val projected = window.project(item.message)
+                    if (projected === item.message) item else SourceAwareChatHistoryWriter.Item.Legacy(projected)
+                } else item
+            }
             // Complete legacy groups must not straddle an owned group.
             val segment = mutableListOf<JsonObject>()
             fun flush() { if (segment.isNotEmpty()) { AgentHistory.requireCompleteGroups(segment); segment.clear() } }
@@ -51,19 +58,20 @@ internal class OwnedChatRequestBody private constructor(
             write(options, immutable, target, counter, checkCancelled) // validates every owned group BEFORE networking
             val reserve = checkNotNull(ProviderRequestBudget.explicitOutputTokens(options))
             val available = ContextBudget.effectiveInputTokens(provider.id, target.modelId, reserve)
+            val legacy = immutable.filterIsInstance<SourceAwareChatHistoryWriter.Item.Legacy>().map { it.message }
+            val base = ContextBudget.estimate("", legacy, null, provider.id, target.modelId, null, reserve)
+            val otherBytes = (counter.bytes - legacy.sumOf { ContextBudget.serializedUtf8Bytes(it).toLong() }).coerceAtLeast(0)
+            val estimated = (otherBytes + 3) / 4 + base.approximateTokens
+            val otherChars = (counter.utf16 - legacy.sumOf { ContextBudget.serializedChars(it).toLong() }).coerceAtLeast(0)
+            val estimate = base.copy(approximateTokens = estimated.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                serializedChars = (otherChars + base.serializedChars).coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
             if (available != null) {
-                val legacy = immutable.filterIsInstance<SourceAwareChatHistoryWriter.Item.Legacy>().map { it.message }
-                // Wire base64 size is not model context. Replace only legacy message accounting
-                // with the shared Unicode/image-aware estimate; retain every exact wire byte.
-                val legacyEstimate = ContextBudget.estimate("", legacy, null, provider.id, target.modelId, null, reserve)
-                val otherBytes = (counter.bytes - legacy.sumOf { ContextBudget.serializedUtf8Bytes(it).toLong() }).coerceAtLeast(0)
-                val estimated = (otherBytes + 3) / 4 + legacyEstimate.approximateTokens
                 val margin = minOf(256, (available / 16).coerceAtLeast(1))
                 if (estimated + margin > available) throw ProviderContextOverflowException(
                     counter.utf16.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
                     "Estimated streamed provider input is $estimated tokens plus $margin safety tokens; available input is $available after reserving $reserve output tokens. Compact complete older turns or select a larger model. Counts are approximate; request preserved.")
             }
-            return OwnedChatRequestBody(options, immutable, target, checkCancelled, counter.bytes)
+            return OwnedChatRequestBody(options, immutable, target, checkCancelled, counter.bytes, estimate)
         }
         private fun write(options: JsonObject, history: List<SourceAwareChatHistoryWriter.Item>,
             target: ProviderReplayTarget, out: OutputStream, check: () -> Unit) {

@@ -11,6 +11,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
+internal class BrowserPointerInterruptedException : IllegalStateException()
+
 /** Native input only. The caller checks document identity and authority on every dispatch. */
 internal object AgentBrowserNativeInput {
     data class Point(val x: Float, val y: Float) {
@@ -63,35 +65,36 @@ internal object AgentBrowserNativeInput {
     }
 
     suspend fun gesture(view: WebView, from: Point, to: Point = from, durationMs: Long = 64,
-        mouse: Boolean = false, hover: Boolean = false,
+        hover: Boolean = false, fineMotion: Boolean = false,
         dispatch: suspend (() -> Unit) -> Unit, cancel: suspend (() -> Unit) -> Unit) {
         val downTime = SystemClock.uptimeMillis()
         var width = 0; var height = 0; var pressed = false
         fun send(action: Int, point: Point): Boolean {
             if (width == 0) { width = view.width; height = view.height }
             check(action == MotionEvent.ACTION_CANCEL || width > 0 && height > 0 && view.width == width && view.height == height) { "Browser viewport changed during input" }
-            val properties = MotionEvent.PointerProperties().apply { id = 0; toolType = if (mouse || hover) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER }
+            val properties = MotionEvent.PointerProperties().apply { id = 0; toolType = if (hover) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER }
             val coords = MotionEvent.PointerCoords().apply {
                 x = view.paddingLeft + point.x * (width - view.paddingLeft - view.paddingRight)
                 y = view.paddingTop + point.y * (height - view.paddingTop - view.paddingBottom)
                 pressure = if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL || hover) 0f else 1f; size = 1f
             }
             val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, 1, arrayOf(properties), arrayOf(coords),
-                0, if (mouse && action != MotionEvent.ACTION_UP) MotionEvent.BUTTON_PRIMARY else 0,
-                1f, 1f, 0, 0, if (mouse || hover) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_TOUCHSCREEN, 0)
+                0, 0,
+                1f, 1f, 0, 0, if (hover) InputDevice.SOURCE_MOUSE else InputDevice.SOURCE_TOUCHSCREEN, 0)
             return try { if (hover) view.dispatchGenericMotionEvent(event) else view.dispatchTouchEvent(event) }
                 finally { event.recycle() }
         }
         if (hover) { dispatch { check(send(MotionEvent.ACTION_HOVER_MOVE, from)) { "Browser did not accept hover" } }; return }
         try {
             dispatch {
-                if (from != to) {
+                if (from != to && !fineMotion) {
                     val dx = (to.x - from.x) * (view.width - view.paddingLeft - view.paddingRight)
                     val dy = (to.y - from.y) * (view.height - view.paddingTop - view.paddingBottom)
                     val minimum = ViewConfiguration.get(view.context).scaledTouchSlop * 2f
                     require(dx * dx + dy * dy >= minimum * minimum) { "Gesture is too small; choose a larger target to avoid an unintended click" }
                 }
-                check(view.requestFocus()) { "Browser could not receive input focus" }; pressed = true
+                view.requestFocus()
+                pressed = true
                 check(send(MotionEvent.ACTION_DOWN, from)) { "Browser did not accept pointer down" } }
             val steps = if (from == to) 1 else (durationMs / 16).toInt().coerceIn(2, 60)
             for (step in 1..steps) {
@@ -105,6 +108,9 @@ internal object AgentBrowserNativeInput {
             }
             dispatch { val accepted = send(MotionEvent.ACTION_UP, to); pressed = false
                 check(accepted) { "Browser did not accept pointer up" } }
+        } catch (changed: BrowserSurfaceChangedException) {
+            if (pressed) throw BrowserPointerInterruptedException()
+            throw changed
         } finally {
             if (pressed) withContext(NonCancellable) {
                 // Cancel a partly delivered gesture; never replay it on a replacement document.

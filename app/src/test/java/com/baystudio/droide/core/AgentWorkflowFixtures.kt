@@ -47,6 +47,7 @@ internal fun agentWorkflowContext(
     onProgress: (AgentToolProgress) -> Unit = {},
     browserController: AgentBrowserController? = null,
     provenance: AgentRequestProvenance = AgentRequestProvenance.primary(),
+    browserTabs: WorkspaceBrowserTabs? = null,
 ) : AgentTools.Ctx {
     val files = FileRepository(root)
     return AgentTools.Ctx(files, terminal, GitManager(root), ApprovalManager(), QuestionManager(), EditHistory(files, documents),
@@ -56,5 +57,5 @@ internal fun agentWorkflowContext(
             override suspend fun diagnose(relPath: String) = ""
             override suspend fun lsp(op: String, path: String, line: Int, col: Int) = ""
         }, backgroundCommands = manager, documentAuthority = documents, onImageReady = imageSink, webResearch = webResearch, onProgress = onProgress,
-        browserController = browserController, provenance = provenance)
+        browserController = browserController, provenance = provenance, browserTabs = browserTabs)
 }

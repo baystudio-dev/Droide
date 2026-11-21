@@ -17,6 +17,20 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [34])
 class BatchEditorSupportTest {
+    @Test fun tokenScopesOverrideTheirParentsWithoutColoringUnscopedText() {
+        val file = Files.createTempFile("scopes-", ".json").toFile()
+        try {
+            file.writeText("""{"scopeName":"source.config.comments","patterns":[
+                {"name":"support.type.property-name.config","match":"key"},
+                {"name":"keyword.operator.config","match":"[+]"},
+                {"name":"comment.line.config","match":"//.*"}]}""")
+            val grammar = Registry().addGrammar(IGrammarSource.fromFile(file))
+            val spans = renderActualGrammarTokens("key + bare // note", grammar)
+            assertEquals(listOf(DroideHighlightKind.PROPERTY, DroideHighlightKind.OPERATOR, DroideHighlightKind.COMMENT), spans.map { it.kind })
+            assertTrue(spans.none { 7 in it.start until it.end })
+        } finally { file.delete() }
+    }
+
     @Test fun routesBothExtensionsWithoutPretendingBashCanRunThem() {
         for (path in listOf("work/run.bat", "build.CMD")) {
             assertEquals("batch", LanguageRegistry.forFile(path)?.id)

@@ -94,6 +94,7 @@ class StatusBarInsetsHostTest {
     private var motionEnabled by mutableStateOf(true)
     private var requestedHidden by mutableStateOf(false)
     private var reclaimTopCutout by mutableStateOf(false)
+    private var reserveShownStatusBar by mutableStateOf(false)
     private var metricsKey by mutableStateOf<Any>("portrait@1")
     private var rootBounds = Rect.Zero
     private var hostBounds = Rect.Zero
@@ -144,6 +145,7 @@ class StatusBarInsetsHostTest {
                             ime = ime,
                             legacyImeResize = legacyImeResize,
                             statusBarRequestedHidden = requestedHidden,
+                            reserveShownStatusBar = reserveShownStatusBar,
                             reclaimTopCutout = reclaimTopCutout,
                             metricsKey = metricsKey,
                             motionEnabled = motionEnabled,
@@ -549,6 +551,39 @@ class StatusBarInsetsHostTest {
         }
         for (top in listOf(83, 28, 0, 100)) sample(top)
         assertEquals(rootBounds.top, hostBounds.top, 1f)
+    }
+
+    @Test fun editorPreferenceReservesOneShownInsetWhileAndroidVisibilityIsDelayed() {
+        motionEnabled = false
+        requestedHidden = true
+        reclaimTopCutout = true
+        cutout.top = 30
+        cutout.left = 18
+        status.top = 0
+        mount()
+        compose.mainClock.autoAdvance = true
+        assertGeometry(0f, left = 18)
+        compose.runOnIdle {
+            requestedHidden = false
+            reclaimTopCutout = false
+            reserveShownStatusBar = true
+        }
+        compose.waitForIdle()
+        assertGeometry(100f, left = 18)
+        for (top in listOf(0, 37, 100)) {
+            sample(top)
+            assertGeometry(100f, left = 18)
+        }
+        compose.runOnIdle { cutout.top = 115 }
+        compose.waitForIdle()
+        assertGeometry(115f, left = 18)
+        compose.runOnIdle {
+            reserveShownStatusBar = false
+            requestedHidden = true
+            reclaimTopCutout = true
+        }
+        compose.waitForIdle()
+        assertGeometry(0f, left = 18)
     }
 
     @Test fun initialEditorAndReducedMotionReclaimImmediatelyWithoutTouchingNavigationOrIme() {

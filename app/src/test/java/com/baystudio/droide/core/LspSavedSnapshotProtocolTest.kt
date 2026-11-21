@@ -8,6 +8,37 @@ import org.junit.Test
 
 /** Real framed JSON-RPC bytes, with a host fixture instead of an installed language server. */
 class LspSavedSnapshotProtocolTest {
+    @Test(timeout = 10000) fun incrementalEditsRoundTripAcrossLineEndingsAndUnicode() = runBlocking {
+        val host = Host()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val rpc = JsonRpcProcess(scope, File("."), listOf("fixture-lsp"), processHost = host)
+        val edits = listOf("A\r\nZ" to "A\nZ", "A\nZ" to "A\r\nZ", "x\uD800\uDC00!" to "x\uD801\uDC00!",
+            "x😀!" to "x😁!", "before\rafter" to "before\raXter", "a\r\n😀\rz" to "a\r\n✨\rz")
+        try {
+            rpc.start()
+            val sync = LspDocumentSyncAuthority(rpc, LspTextSyncPolicy(openClose = true, change = LspTextSyncPolicy.ChangeKind.INCREMENTAL))
+            for ((n, edit) in edits.withIndex()) {
+                val (old, new) = edit
+                val uri = "file:///workspace/test$n.kt"
+                sync.synchronize(uri, "kotlin", old)
+                sync.synchronize(uri, "kotlin", new)
+                val patch = host.messages().last().getValue("params").jsonObject.getValue("contentChanges").jsonArray.single().jsonObject
+                val range = patch.getValue("range").jsonObject
+                val starts = listOf(0) + Regex("\\r\\n|\\r|\\n").findAll(old).map { it.range.last + 1 }.toList()
+                fun offset(name: String): Int {
+                    val p = range.getValue(name).jsonObject
+                    val line = p.getValue("line").jsonPrimitive.int
+                    val column = p.getValue("character").jsonPrimitive.int
+                    val contentLength = old.substring(starts[line], starts.getOrNull(line + 1) ?: old.length).trimEnd('\r','\n').length
+                    assertTrue("LSP column falls inside a line ending in case $n", column in 0..contentLength)
+                    return starts[line] + column
+                }
+                assertEquals("Server reconstruction of case $n", new,
+                    old.replaceRange(offset("start"), offset("end"), patch.getValue("text").jsonPrimitive.content))
+            }
+        } finally { rpc.close(); host.close(); scope.cancel() }
+    }
+
     private class Host : StdioProcessHost, AutoCloseable {
         override val executionScope = ProcessExecutionScope.LOCAL_LINUX_ARM64
         val sent = ByteArrayOutputStream()

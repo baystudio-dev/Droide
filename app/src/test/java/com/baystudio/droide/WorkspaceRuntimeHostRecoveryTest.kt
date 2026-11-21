@@ -81,7 +81,7 @@ class WorkspaceRuntimeHostRecoveryTest {
         var constructions = 0; var processes = 0; var ubuntu = 0
         var ownedHost: WorkspaceRuntimeHost? = null
         try {
-            val host = WorkspaceRuntimeHost(application) { context, scope, timers ->
+            val host = WorkspaceRuntimeHost(application, isApplicationVisible = { false }) { context, scope, timers ->
                 constructions++
                 val bridge = DeviceBridgeManager(context, scope, DeviceBridgeDependencies(
                     configureIdentity = {}, create = { error("No transport") }, pair = { _, _, _ -> error("No pairing") },

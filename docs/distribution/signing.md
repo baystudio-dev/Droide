@@ -10,11 +10,13 @@ This configuration does not establish F-Droid acceptance. The official applicati
 
 ## Published release and packaging recipe
 
-The immutable `v1.02` and `v1.02-fdroid` tags identify application commit `ad75df7763aa6458b0c102818b891e0898af3a58`. Its production APK is `Droide-1.02-release.apk`, version 1.02 (46), published in [GitHub Releases](https://github.com/baystudio-dev/Droide-v1.-00/releases/tag/v1.02).
+The GitHub release tag `v1.03` and packaging tag `v1.03-fdroid` identify the same application source. The signed APK is `Droide-1.03-release.apk`, version 1.03 (47). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03)
+
+For the preceding release, `v1.02` and `v1.02-fdroid` identify commit `ad75df7763aa6458b0c102818b891e0898af3a58`.
 
 The [current recipe](../../tools/fdroid/com.baystudio.droide.yml) is maintained independently of those immutable tags. Use that recipe for the packaging submission; do not move an existing release tag to update metadata. Its `Binaries` URL identifies each version's signed release, while `AllowedAPKSigningKeys` restricts the accepted certificate. The disabled 1.01 recipe remains historical context and is not an initial inclusion target.
 
-Local and independent GitHub CI builds of the release commit produced the same raw unsigned APK. That alone does not prove upstream-signature compatibility. Android Build Tools 36 changed ZIP alignment padding during signing, so the recipe normalizes the rebuilt APK before F-Droid copies and verifies the existing signature. No application entry is replaced with data from the upstream APK.
+Local and independent GitHub CI builds of the 1.02 commit produced the same raw unsigned APK. That alone does not prove upstream-signature compatibility. Android Build Tools 36 changed ZIP alignment padding during signing, so the recipe normalizes the rebuilt APK before F-Droid copies and verifies the existing signature. No application entry is replaced with data from the upstream APK.
 
 The normalization tool is fetched by F-Droid as `reproducible-apk-tools@ca728486d42a79f1c9ec0c6ec755c39f251911a8` from its [source-library repository](https://gitlab.com/fdroid/reproducible-apk-tools). It is build tooling, not an application dependency or bundled runtime. The pinned `zipalign.py` SHA-256 is `7f8820cbe8049083d9b7a3088a41fda7bd895bb5ad5e6bb78b135a00021773a9`.
 
@@ -34,10 +36,10 @@ Use the current repository's verifier with the rebuilt artifact:
 
 ```sh
 python3 tools/verify_upstream_apk.py \
-  --signed-apk /absolute/path/Droide-1.02-release.apk \
+  --signed-apk /absolute/path/Droide-1.03-release.apk \
   --unsigned-apk /absolute/path/normalized-unsigned.apk \
   --apksigner /absolute/path/android-sdk/build-tools/36.0.0/apksigner \
-  --version-code 46 \
+  --version-code 47 \
   --output /absolute/path/new-verification.json
 ```
 
@@ -46,7 +48,7 @@ The verifier checks the enabled recipe, package/version, allowed certificate, a 
 Real-artifact regressions require explicit inputs:
 
 ```sh
-DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.02-release.apk \
+DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03-release.apk \
 DROIDE_UPSTREAM_UNSIGNED_APK=/absolute/path/normalized-unsigned.apk \
 DROIDE_APKSIGNER=/absolute/path/android-sdk/build-tools/36.0.0/apksigner \
 python3 -B -m unittest discover -s tools/tests -p 'test_upstream_apk_verification.py' -v

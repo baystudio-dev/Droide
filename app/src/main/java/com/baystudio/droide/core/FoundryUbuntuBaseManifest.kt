@@ -10,7 +10,10 @@ internal object FoundryUbuntuBaseManifest {
     const val ROOTFS_BYTES = 29_936_675L
     const val EXPECTED_PACKAGE_COUNT = 91
     const val PACKAGE_SET_SHA256 = "5c63840b017fb52485cb502cc7ffc1e727f82ffd86e232727704880f78285dec"
-    const val ROOTFS_URL = "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.5-base-arm64.tar.gz"
+    const val ROOTFS_FILE = "ubuntu-base-24.04.5-base-arm64.tar.gz"
+    private const val RELEASES = "https://cdimage.ubuntu.com/ubuntu-base/releases"
+    const val ROOTFS_URL = "$RELEASES/24.04/release/$ROOTFS_FILE"
+    const val ROOTFS_RECOVERY_URL = "$RELEASES/24.04.5/release/$ROOTFS_FILE"
 
     val packages = listOf(
         "apt", "base-files", "base-passwd", "bash", "bsdutils", "coreutils", "dash",

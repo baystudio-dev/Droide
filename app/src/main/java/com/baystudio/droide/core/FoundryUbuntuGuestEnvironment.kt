@@ -64,7 +64,7 @@ object FoundryUbuntuGuestEnvironmentSpec {
         id = "ubuntu-base-24.04.5-arm64",
         url = FoundryUbuntuBaseManifest.ROOTFS_URL,
         sha256 = FoundryUbuntuBaseManifest.ROOTFS_SHA256,
-        fileName = "ubuntu-base-24.04.5-base-arm64.tar.gz",
+        fileName = FoundryUbuntuBaseManifest.ROOTFS_FILE,
         maxBytes = FoundryUbuntuBaseManifest.ROOTFS_BYTES,
         expectedBytes = FoundryUbuntuBaseManifest.ROOTFS_BYTES,
     )
@@ -108,6 +108,12 @@ internal object FoundryUbuntuGuestCommand {
     // shellBounded quotes this command twice for its process lease. Leave headroom below
     // Linux's 128 KiB single-argument limit for the lease envelope and application paths.
     const val MAX_LEASE_QUOTED_BYTES = 98_304
+
+    fun healthArguments(launcher: String, currentLauncher: String? = null): List<String> {
+        val invocation = if (currentLauncher == null) listOf(launcher) else listOf("-c", currentLauncher, launcher)
+        return invocation + listOf("/bin/sh", "-c",
+            "cd . && /bin/pwd -P >/dev/null && test -x /usr/bin/apt-get && test \"\$(/usr/bin/dpkg --print-architecture)\" = arm64")
+    }
 
     fun downloadedArchiveSizesCommand(cacheDir: String): List<String> = listOf(
         "sh", "-lc",
@@ -166,17 +172,33 @@ class FoundryUbuntuGuestEnvironmentManager(
     override val environmentVersion: String = FoundryUbuntuGuestEnvironmentSpec.VERSION
     override fun launcherPath(): String = launcher
 
-    override suspend fun isHealthy(): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun isHealthy(): Boolean = healthyProfile(FoundryUbuntuGuestEnvironmentSpec.PROFILE_REVISION)
+
+    internal suspend fun verifyExistingForSetup(): Boolean? = withContext(Dispatchers.IO) {
+        LocalExecutionSubstrate.initializeIfNeeded(appContext)
+        val gate = FoundryUbuntuGuestMutationGate.mutex
+        if (!gate.tryLock()) return@withContext null
+        try {
+            // Android moves native libraries on APK updates. Probe with this APK's launcher and the retained guest's $0.
+            val probe = probeProfile(FoundryUbuntuGuestEnvironmentSpec.PROFILE_REVISION, FoundryUbuntuGuestEnvironmentSpec.LEGACY_PROFILE_REVISION,
+                currentLauncher = launcherScript(), timeoutMs = 5_000)
+            if (probe.timedOut) null else probe.exitCode == 0
+        } finally { gate.unlock() }
+    }
+
+    private suspend fun healthyProfile(revision: String): Boolean = probeProfile(revision).exitCode == 0
+
+    private suspend fun probeProfile(vararg revisions: String, currentLauncher: String? = null, timeoutMs: Long = 30_000): ExecResult = withContext(Dispatchers.IO) {
         LocalExecutionSubstrate.requireContextRoot(root)
-        
         val profileLock = "$finalRoot/BOOTSTRAP_LOCK.txt"
-        val probe = LocalExecutionSubstrate.shellBounded(
+        val profileCheck = revisions.joinToString(" || ") { "grep -Fxq ${q("profile_revision=$it")} ${q(profileLock)}" }
+        LocalExecutionSubstrate.shellBounded(
             "test -f ${q(launcher)} && test -f ${q(profileLock)} && " +
-                "grep -Fxq ${q("profile_revision=${FoundryUbuntuGuestEnvironmentSpec.PROFILE_REVISION}")} ${q(profileLock)} && " +
-                "/system/bin/sh ${q(launcher)} /bin/sh -lc ${q("cd . && /bin/pwd -P >/dev/null && test -x /usr/bin/apt-get && test \"\$(/usr/bin/dpkg --print-architecture)\" = arm64")}",
-            maxOutputBytes = 16_384,
+                "grep -Fxq ${q("environment=$environmentId")} ${q(profileLock)} && " +
+                "( $profileCheck ) && " +
+                "/system/bin/sh " + FoundryUbuntuGuestCommand.healthArguments(launcher, currentLauncher).joinToString(" ", transform = ::q),
+            maxOutputBytes = 16_384, timeoutMs = timeoutMs,
         )
-        probe.exitCode == 0
     }
 
     override suspend fun ensureInstalled(): String = ensureInstalledWithAdmission(null, {})
@@ -201,12 +223,14 @@ class FoundryUbuntuGuestEnvironmentManager(
         attempt?.require(checkCancelled)
         // Package downloads do not replace the guest. New terminals/STDIO peers may attach to its admitted identity
         // while that package-only owner holds the mutation gate.
-        if (packageAttachAdmission.mayAttach()) return@withContext finalRoot
+        if (setupProgress == null && packageAttachAdmission.mayAttach()) return@withContext finalRoot
         FoundryUbuntuGuestMutationGate.mutex.withLock {
             val installed = ensureInstalledUnlocked(attempt, checkCancelled, setupProgress)
             UbuntuAptCacheDefaults.install(File("$finalRoot/rootfs"))
             UbuntuSshClientDefaults.install(File("$finalRoot/rootfs"))
             PackagedWorkstationRootfs.evict(appContext, FoundryUbuntuGuestEnvironmentSpec.rootfsArtifact.fileName, FoundryUbuntuGuestEnvironmentSpec.rootfsArtifact.sha256)
+            if (setupProgress != null) UbuntuEnvironmentSetup.confirmActivation(appContext, File(installed))
+            else if (BuildConfig.FDROID_DISTRIBUTION) UbuntuEnvironmentSetup.confirmPendingActivation(appContext, File(installed))
             installed
         }
     }
@@ -223,6 +247,11 @@ class FoundryUbuntuGuestEnvironmentManager(
         if (readinessCache.mayReuse(readinessSeal(attempt = attempt, checkCancelled = checkCancelled))) return finalRoot
         readinessCache.invalidate()
         reconcileInterruptedBootstrap()
+        if (setupProgress != null) {
+            val current = File(finalRoot)
+            if (UbuntuGuestRecoveryInspection.clearEmptyActivation(current)) reconcileInterruptedBootstrap()
+            UbuntuGuestRecoveryInspection.restoreMissingLauncher(current, environmentId) { launcherScript(attempt, checkCancelled) }
+        }
         reconcileInterruptedLegacyCompactionUnlocked()
         repairExistingLauncher(attempt, checkCancelled)
         if (isHealthy()) {
@@ -271,6 +300,7 @@ class FoundryUbuntuGuestEnvironmentManager(
         try {
             if (BuildConfig.FDROID_DISTRIBUTION) {
                 TrustedArtifactDownloader(appContext).withArtifact(FoundryUbuntuGuestEnvironmentSpec.rootfsArtifact,
+                    integrityRetryUrl = FoundryUbuntuBaseManifest.ROOTFS_RECOVERY_URL,
                     onProgress = { download -> setupProgress?.invoke(EnvironmentSetupProgress(
                         if (download.phase == TrustedArtifactDownloadPhase.VERIFYING || download.fromCache)
                             EnvironmentSetupPhase.VERIFYING else EnvironmentSetupPhase.DOWNLOADING,
@@ -571,16 +601,7 @@ class FoundryUbuntuGuestEnvironmentManager(
     }
 
 
-    private suspend fun isLegacyHealthyUnlocked(): Boolean {
-        val profileLock = "$finalRoot/BOOTSTRAP_LOCK.txt"
-        val probe = LocalExecutionSubstrate.shellBounded(
-            "test -f ${q(launcher)} && test -f ${q(profileLock)} && " +
-                "grep -Fxq ${q("profile_revision=${FoundryUbuntuGuestEnvironmentSpec.LEGACY_PROFILE_REVISION}")} ${q(profileLock)} && " +
-                "/system/bin/sh ${q(launcher)} /bin/sh -lc ${q("cd . && /bin/pwd -P >/dev/null && test -x /usr/bin/apt-get && test \"\$(/usr/bin/dpkg --print-architecture)\" = arm64")}",
-            maxOutputBytes = 16_384,
-        )
-        return probe.exitCode == 0
-    }
+    private suspend fun isLegacyHealthyUnlocked(): Boolean = healthyProfile(FoundryUbuntuGuestEnvironmentSpec.LEGACY_PROFILE_REVISION)
 
     private suspend fun migrateLegacyProfileInPlaceUnlocked() {
         // Safety-first migration: keep the already-working broad r1 package set intact.

@@ -24,6 +24,35 @@ internal object UbuntuGuestRecoveryInspection {
         return BootstrapState(previousExists, stageExists, currentExists)
     }
 
+    fun clearEmptyActivation(current: File): Boolean {
+        requireDirectParent(current)
+        if (!guestDirectoryExists(current)) return false
+        Files.newDirectoryStream(current.toPath()).use { if (it.iterator().hasNext()) return false }
+        return try {
+            Files.delete(current.toPath())
+            true
+        } catch (_: java.nio.file.DirectoryNotEmptyException) {
+            false
+        }
+    }
+
+    fun restoreMissingLauncher(current: File, environment: String, script: () -> String) {
+        if (!guestDirectoryExists(current) || !guestDirectoryExists(current.resolve("rootfs"))) return
+        val launch = current.resolve("launch")
+        if (attributes(launch) != null) return
+        val profile = current.resolve("BOOTSTRAP_LOCK.txt")
+        val info = attributes(profile) ?: return
+        if (!info.isRegularFile || info.size() !in 1..65_536 || "environment=$environment" !in profile.readLines()) return
+        val staged = Files.createTempFile(current.toPath(), ".launch-repair-", null).toFile()
+        try {
+            java.io.FileOutputStream(staged).use { out -> out.write(script().toByteArray(Charsets.UTF_8)); out.fd.sync() }
+            check(staged.setExecutable(true, true)) { "Could not restore Ubuntu launcher permissions" }
+            Files.createLink(launch.toPath(), staged.toPath())
+        } finally {
+            Files.deleteIfExists(staged.toPath())
+        }
+    }
+
     private fun requireDirectParent(path: File) {
         val parent = path.parentFile
         check(parent != null && attributes(parent)?.isSymbolicLink != true) {

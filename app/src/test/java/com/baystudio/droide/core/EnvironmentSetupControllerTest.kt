@@ -35,6 +35,27 @@ class EnvironmentSetupControllerTest {
         }
     }
 
+    @Test fun overlappingRequestsKeepTheSetupHiddenWhileRecheckingAnInstalledGuest() = runTest {
+        val release = CompletableDeferred<Unit>()
+        var inspections = 0
+        val controller = EnvironmentSetupController(this, true, inspect = {
+            if (++inspections > 1) release.await()
+            EnvironmentSetupInspection(true)
+        }, install = { error("Unexpected installer") }, defer = {})
+        runCurrent()
+        assertTrue(controller.state.value.enteredWorkspace)
+        controller.show()
+        runCurrent()
+        repeat(4) {
+            controller.show()
+            assertFalse(controller.state.value.presented)
+        }
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(2, inspections)
+        assertFalse(controller.state.value.presented)
+    }
+
     @Test fun inspectionFailureDoesNotTreatUnreadableUserDataAsAnEmptyInstallation() = runTest {
         var installs = 0
         val controller = EnvironmentSetupController(this, true, inspect = { error("Storage unavailable") },

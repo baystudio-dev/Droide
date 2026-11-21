@@ -52,7 +52,7 @@ class NativeTerminalInputConnectionR61Test {
         activity.pause().stop().destroy()
     }
 
-    private fun connect(): NativeTerminalInputConnection = NativeTerminalInputConnection(
+    private fun connect(): NativeTerminalInputConnection = NativeTerminalInputConnection.create(
         target = target,
         lease = owner.connect(session, currentSession = { session }, eligible = { true }),
         commitToTerminal = { text ->
@@ -68,6 +68,18 @@ class NativeTerminalInputConnectionR61Test {
     )
 
     private fun editable(): Editable = checkNotNull(connection.editable)
+
+    @Test @Config(sdk = [34, 35])
+    fun finalReplacementReachesThePtyOnceAndCannotChangeShellHistory() {
+        assertTrue(connection.replaceText(0, 0, "pwd", 1, null))
+        assertFalse(connection.replaceText(0, 3, "old", 1, null))
+        assertTrue(connection.setComposingText("kafe", 1))
+        assertTrue(connection.replaceText(2, 4, "fé", 1, null))
+        assertTrue(connection.finishComposingText())
+        connection.closeConnection()
+        assertFalse(connection.replaceText(0, 0, "late", 1, null))
+        assertCommits("pwd", "kafé")
+    }
 
     private fun assertLocalText(expected: String) {
         assertEquals(expected, editable().toString())

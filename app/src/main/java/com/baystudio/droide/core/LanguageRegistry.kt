@@ -1,5 +1,9 @@
 package com.baystudio.droide.core
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+
  
 data class RunPlan(
     val steps: List<List<String>>,
@@ -68,7 +72,9 @@ object LanguageRegistry {
         LanguageDef("scss", "SCSS", listOf("scss"), null, "$" + "accent: #58A6FF;\nbody { color: $" + "accent; }\n"),
         LanguageDef("less", "Less", listOf("less"), null, "@accent: #58A6FF;\nbody { color: @accent; }\n"),
         LanguageDef("json", "JSON", listOf("json"), null, "{\"hello\": \"world\"}\n"),
-        LanguageDef("jsonc", "JSON with Comments", listOf("jsonc"), null, "{\n  // Configuration\n  \"hello\": \"world\",\n}\n"),
+        LanguageDef("jsonc", "JSON with Comments", listOf("jsonc", "eslintrc", "eslintrc.json", "babelrc", "swcrc", "jshintrc"), null,
+            "{\n  // Configuration\n  \"hello\": \"world\",\n}\n",
+            filenames = listOf("tsconfig.json", "jsconfig.json", ".babelrc.json", "babel.config.json", "typedoc.json", "bun.lock")),
         LanguageDef("xml", "XML", listOf("xml", "xsd", "xsl", "xslt", "svg", "rng", "dtd"), null, "<?xml version=\"1.0\"?>\n<hello>world</hello>\n"),
         LanguageDef("yaml", "YAML", listOf("yaml", "yml"), null, "hello: world\n"),
         LanguageDef("markdown", "Markdown", listOf("md", "markdown", "mdx"), null, "# Hello\n"),
@@ -107,13 +113,25 @@ object LanguageRegistry {
     fun isBuiltIn(languageId: String): Boolean = builtIns.any { it.id == languageId }
 
     private val dynamicByExtension = linkedMapOf<String, List<LanguageDef>>()
+    private var cachedDefinitions: List<LanguageDef>? = null
+    private val revision = MutableStateFlow(0L)
+    internal val syntaxRevision = revision.asStateFlow()
+    internal fun syntaxChanged() = revision.update { it + 1 }
 
     val all: List<LanguageDef>
-        @Synchronized get() = (builtIns + dynamicByExtension.values.flatten()).distinctBy { it.id to it.extensions }
+        get() = definitionsForLookup().toList()
+
+    @Synchronized
+    private fun definitionsForLookup(): List<LanguageDef> {
+        cachedDefinitions?.let { return it }
+        val definitions = (builtIns + dynamicByExtension.values.flatten()).distinctBy { it.id to it.extensions }
+        cachedDefinitions = definitions
+        return definitions
+    }
 
     @Synchronized
     fun registerDeclarative(extensionId: String, contributions: List<DeclarativeLanguageSpec>) {
-        dynamicByExtension[extensionId] = contributions.map { contribution ->
+        val definitions = contributions.map { contribution ->
             LanguageDef(
                 id = contribution.id,
                 name = contribution.name,
@@ -123,20 +141,41 @@ object LanguageRegistry {
                 filenames = contribution.filenames.toList(),
             )
         }
+        if (dynamicByExtension.put(extensionId, definitions).orEmpty() != definitions) {
+            cachedDefinitions = null
+            syntaxChanged()
+        }
     }
 
     @Synchronized
-    fun unregisterDeclarative(extensionId: String) { dynamicByExtension.remove(extensionId) }
-
-    fun forExtension(ext: String): LanguageDef? = all.firstOrNull { ext.lowercase() in it.extensions.map(String::lowercase) }
-    fun forFile(path: String): LanguageDef? {
-        val leaf = path.replace('\\', '/').substringAfterLast('/').lowercase()
-        all.firstOrNull { language -> language.filenames.any { it.equals(leaf, ignoreCase = true) } }?.let { return it }
-        if (path.substringAfterLast('.', "") in setOf("C", "H")) return all.firstOrNull { it.id == "cpp" }
-        if (leaf == "dockerfile") return all.firstOrNull { it.id == "dockerfile" }
-        if (leaf == "makefile") return all.firstOrNull { it.id == "makefile" }
-        return forExtension(path.substringAfterLast('.', "").lowercase())
+    fun unregisterDeclarative(extensionId: String) {
+        if (!dynamicByExtension.remove(extensionId).isNullOrEmpty()) {
+            cachedDefinitions = null
+            syntaxChanged()
+        }
     }
+
+    fun forExtension(ext: String): LanguageDef? =
+        definitionsForLookup().firstOrNull { language -> language.extensions.any { it.equals(ext, true) } }
+    fun forFile(path: String): LanguageDef? {
+        val leaf = path.replace('\\', '/').substringAfterLast('/')
+        val definitions = definitionsForLookup()
+        definitions.firstOrNull { language -> language.filenames.any { it.equals(leaf, true) } }?.let { return it }
+        if (leaf.substringAfterLast('.', "") in setOf("C", "H")) return definitions.firstOrNull { it.id == "cpp" }
+        if (leaf.equals("Dockerfile", true)) return definitions.firstOrNull { it.id == "dockerfile" }
+        if (configVariant.matches(leaf)) return definitions.firstOrNull { it.id == "jsonc" }
+        var best: LanguageDef? = null
+        var length = 0
+        for (language in definitions) for (extension in language.extensions) {
+            val dot = leaf.length - extension.length - 1
+            if (extension.length > length && dot >= 0 && leaf[dot] == '.' && leaf.endsWith(extension, true)) {
+                best = language
+                length = extension.length
+            }
+        }
+        return best
+    }
+    private val configVariant = Regex("(?:tsconfig|jsconfig)[.-].+\\.json", RegexOption.IGNORE_CASE)
     fun runPlanFor(path: String): RunPlan? {
         val extension = path.substringAfterLast('.', "").lowercase()
         if (extension == "zon" || extension == "hrl" || extension == "sbt") return null

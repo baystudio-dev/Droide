@@ -3,6 +3,7 @@ package com.baystudio.droide.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.json.*
 
 
 @OptIn(ExperimentalSerializationApi::class)
@@ -116,6 +117,38 @@ object AgentIdeProblemRelevance {
 
 object AgentIdeContextProjection {
     private const val MAX_CONTEXT_CHARS = 8_000
+    private const val OFFSET = "_droide_ide_context_offset"
+
+    internal fun userMessage(text: String, context: AgentIdeContextSnapshot?, images: List<AgentImageRef>, limit: Int): JsonObject {
+        val combined = forModel(text, context, limit)
+        val message = VisionSupport.userMessage(combined, images, limit)
+        if (combined.length == text.length) return message
+        return JsonObject(message + (OFFSET to JsonPrimitive(text.length + 2)))
+    }
+
+    internal class Window {
+        private var previous: String? = null
+
+        fun project(message: JsonObject): JsonObject {
+            val offset = message[OFFSET] ?: return message
+            val public = JsonObject(message - OFFSET)
+            if (message["role"] != JsonPrimitive("user")) return public
+            val content = message["content"]
+            val parts = content as? JsonArray
+            val first = parts?.firstOrNull() as? JsonObject
+            val text = (if (parts == null) content else first?.get("text")) as? JsonPrimitive ?: return public
+            val start = (offset as? JsonPrimitive)?.intOrNull ?: return public
+            if (!text.isString || start !in 2 until text.content.length ||
+                text.content.length - start > MAX_CONTEXT_CHARS || !text.content.startsWith("[IDE_CONTEXT_DATA", start)) return public
+            val block = text.content.substring(start)
+            val same = previous == block
+            previous = block
+            if (!same) return public
+            val short = JsonPrimitive(text.content.substring(0, start) + "[Editor context unchanged from the preceding snapshot.]")
+            val updated = if (parts == null) short else JsonArray(listOf(JsonObject(checkNotNull(first) + ("text" to short))) + parts.drop(1))
+            return JsonObject(public + ("content" to updated))
+        }
+    }
 
     fun forModel(userText: String, context: AgentIdeContextSnapshot?, maxChars: Int): String {
         require(maxChars > 0) { "maxChars must be positive" }
@@ -124,7 +157,10 @@ object AgentIdeContextProjection {
         val separator = "\n\n"
         val room = (maxChars.toLong() - userText.length - separator.length).coerceAtLeast(0).toInt()
         if (room == 0) return userText
-        val block = renderContext(context).take(minOf(MAX_CONTEXT_CHARS, room))
+        val full = renderContext(context)
+        val end = minOf(full.length, MAX_CONTEXT_CHARS, room)
+        val splitsPair = end in 1 until full.length && full[end - 1].isHighSurrogate() && full[end].isLowSurrogate()
+        val block = full.substring(0, if (splitsPair) end - 1 else end)
         return userText + separator + block
     }
 

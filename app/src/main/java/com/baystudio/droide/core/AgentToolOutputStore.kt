@@ -4,15 +4,20 @@ import java.io.*
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
 import java.nio.file.Files
+import java.nio.file.DirectoryNotEmptyException
+import java.nio.file.NoSuchFileException
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-/** Immutable model-output artifacts. Quotas affect retention only, never tool execution. Published files and
- * crash remnants are never automatically deleted. */
-internal class AgentToolOutputStore(private val root: File, private val limits: Limits = Limits()) {
+/** Immutable outputs are owned by conversations. Forks retain their own hard links. */
+internal class AgentToolOutputStore(
+    private val root: File, private val limits: Limits = Limits(), private val sessionDirectory: File? = null,
+) {
+    private class CapacityReached : IOException("Output retention capacity reached; existing outputs preserved")
+    private class Owners { val publishing = mutableSetOf<String>() }
     data class Limits(val bytes: Long = 128L * 1024 * 1024, val entries: Int = 512,
         val outputBytes: Long = 16L * 1024 * 1024) {
         init { require(bytes > 0 && entries > 0 && outputBytes > 8 && outputBytes <= bytes) }
@@ -24,11 +29,14 @@ internal class AgentToolOutputStore(private val root: File, private val limits: 
         private const val MAGIC = 0x44544f32
         private const val CHUNK_CHARS = 8192
         private val idPattern = Regex("[a-f0-9]{32}-[a-f0-9]{64}")
-        private val locks = ConcurrentHashMap<String, Any>()
+        private val locks = ConcurrentHashMap<String, Owners>()
+        private val pendingPattern = Regex("pending-[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\\.tmp")
+        private val ownerPattern = Regex("[a-f0-9]{64}")
         fun forWorkspace(workDir: File): AgentToolOutputStore {
-            val base = ChatMediaStoragePaths.baseDirectory(workDir)
+            val workspace = ChatMediaStoragePaths.canonicalWorkspace(workDir)
+            val base = ChatMediaStoragePaths.baseDirectory(workspace)
             return AgentToolOutputStore(File(base.parentFile,
-                "tool-output/${ChatMediaStoragePaths.workspaceKey(workDir)}"))
+                "tool-output/${ChatMediaStoragePaths.workspaceKey(workDir)}"), sessionDirectory = File(workspace, ".droide/sessions"))
         }
         fun references(text: String): Set<String> = Regex("droide-tool-output://[a-f0-9]{32}-[a-f0-9]{64}")
             .findAll(text).map { it.value }.toSet()
@@ -36,7 +44,7 @@ internal class AgentToolOutputStore(private val root: File, private val limits: 
             .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     }
     internal var onReadBytes: ((Int) -> Unit)? = null
-    private val lock get() = locks.getOrPut(root.absolutePath) { Any() }
+    private val lock = locks.getOrPut(root.absolutePath) { Owners() }
     private fun safe(file: File): File {
         var current: File? = file.absoluteFile
         while (current != null) {
@@ -83,7 +91,7 @@ internal class AgentToolOutputStore(private val root: File, private val limits: 
                 size = Math.addExact(size, attributes.size())
             }
             if (count > limits.entries || size > limits.bytes)
-                throw IOException("Output retention capacity reached; existing outputs preserved")
+                throw CapacityReached()
         }
         if (root.exists()) Files.newDirectoryStream(root.toPath()).use { owners ->
             for (owner in owners) {
@@ -93,9 +101,66 @@ internal class AgentToolOutputStore(private val root: File, private val limits: 
                 } else inspect(dir)
             }
         }
-        if (count > limits.entries || size > limits.bytes) throw IOException("Output retention capacity reached; existing outputs preserved")
+        if (count > limits.entries || size > limits.bytes) throw CapacityReached()
     }
-    fun retain(session: String, output: String): Retained = synchronized(lock) {
+    private fun releaseDirectory(directory: File, deletedByUser: Boolean = false) {
+        val path = safe(directory).toPath()
+        try {
+            Files.newDirectoryStream(path).use { files ->
+                for (entry in files) {
+                    val name = entry.fileName.toString()
+                    val published = name.endsWith(".bin") && idPattern.matches(name.removeSuffix(".bin"))
+                    if ((published || deletedByUser && pendingPattern.matches(name)) &&
+                        Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) Files.deleteIfExists(entry)
+                }
+            }
+            syncDirectory(directory)
+            Files.delete(path)
+        } catch (_: NoSuchFileException) {
+            return
+        } catch (_: DirectoryNotEmptyException) {
+            // Unidentified files and interrupted writes remain available for explicit recovery.
+        }
+        syncDirectory(root)
+    }
+
+    fun releaseDeletedOwner(session: String) = synchronized(lock) { releaseDirectory(owner(session), deletedByUser = true) }
+
+    private fun reclaimDeletedOwners(currentSession: String) {
+        val sessions = sessionDirectory?.let(::safe) ?: return
+        if (!Files.isDirectory(sessions.toPath(), LinkOption.NOFOLLOW_LINKS)) return
+        val candidates = mutableSetOf<String>()
+        Files.newDirectoryStream(safe(root).toPath()).use { owners ->
+            for (directory in owners) {
+                val name = directory.fileName.toString()
+                if (ownerPattern.matches(name) && Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) candidates += name
+            }
+        }
+        candidates.remove(digest(currentSession))
+        candidates.removeAll(lock.publishing)
+        Files.newDirectoryStream(sessions.toPath(), "*.json").use { files ->
+            for (file in files) {
+                candidates.remove(digest(file.fileName.toString().removeSuffix(".json")))
+                if (candidates.isEmpty()) return
+            }
+        }
+        candidates.forEach { releaseDirectory(File(root, it)) }
+    }
+
+    suspend fun <T> publishFork(source: String, target: String, references: Set<String>, publish: suspend () -> T): T {
+        if (references.isEmpty()) return publish()
+        val key = digest(target)
+        synchronized(lock) { check(lock.publishing.add(key)) { "Conversation fork is already being published" } }
+        try {
+            copyOwner(source, target, references)
+            return publish()
+        } finally {
+            synchronized(lock) { lock.publishing.remove(key) }
+        }
+    }
+
+    fun retain(session: String, output: String, ownerIsCurrent: () -> Boolean = { true }): Retained = synchronized(lock) {
+        check(ownerIsCurrent()) { "The conversation was removed before tool output could be retained" }
         require(8L + output.length.toLong()*2 <= limits.outputBytes) { "Output exceeds archival capacity; operation was not blocked" }
         val chunks = (output.length.toLong() + CHUNK_CHARS - 1).div(CHUNK_CHARS).toInt()
         require(8L + chunks.toLong()*32 + output.length.toLong()*2 <= limits.outputBytes) { "Output exceeds archival capacity; operation was not blocked" }
@@ -111,7 +176,13 @@ internal class AgentToolOutputStore(private val root: File, private val limits: 
         }.toByteArray()
         val bytes = indexBytes.size.toLong() + output.length.toLong() * 2
         require(bytes <= limits.outputBytes) { "Output exceeds archival capacity; operation was not blocked" }
-        admit(bytes)
+        try {
+            admit(bytes)
+        } catch (capacity: CapacityReached) {
+            if (sessionDirectory == null) throw capacity
+            reclaimDeletedOwners(session)
+            admit(bytes)
+        }
         val dir = owner(session); mkdir(dir)
         val temporary = safe(File(dir, "pending-${UUID.randomUUID()}.tmp"))
         // Temporary files are counted after a crash and kept for explicit recovery.

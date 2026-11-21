@@ -95,10 +95,12 @@ internal object AgentBrowserCapture {
     )
 
     /** Pure allocation/coverage plan. Quality floor limits tall-page capture instead of producing an unreadably thin image. */
-    fun plan(geometry: Geometry, fullPage: Boolean): Plan {
+    fun plan(geometry: Geometry, fullPage: Boolean, cssViewport: AgentBrowserViewport? = null): Plan {
         val width = geometry.viewportWidth
         val height = geometry.viewportHeight
         require(width > 0 && height > 0) { "Browser viewport is not laid out" }
+        val logicalWidth = if (fullPage) width else cssViewport?.width ?: width
+        val logicalHeight = if (fullPage) height else cssViewport?.height ?: height
         val sourceHeight = geometry.sourceHeight
         val reasons = mutableListOf<String>()
         val capturedHeight: Int
@@ -107,7 +109,8 @@ internal object AgentBrowserCapture {
             capturedHeight = height
             // Downsample large viewports, but never invent extra pixels on a small
             // mobile surface: 2x upscaling quadruples raster/encoder work.
-            rasterScale = min(1600.0 / maxOf(width, height), sqrt(2_000_000.0 / (width.toDouble() * height))).coerceAtMost(1.0)
+            rasterScale = minOf(1.0, width.toDouble() / logicalWidth, height.toDouble() / logicalHeight,
+                1600.0 / maxOf(logicalWidth, logicalHeight), sqrt(2_000_000.0 / (logicalWidth.toDouble() * logicalHeight)))
         } else {
             if (validScale(geometry.scale) == null) reasons += "scale_unavailable"
             else if (sourceHeight == null) reasons += "document_height_unavailable"
@@ -126,8 +129,8 @@ internal object AgentBrowserCapture {
             rasterScale = min(widthScale, min(MAX_OUTPUT_HEIGHT.toDouble() / capturedHeight,
                 sqrt(MAX_PIXELS.toDouble() / (width.toDouble() * capturedHeight))))
         }
-        val outputWidth = floor(width * rasterScale).toInt().coerceAtLeast(1)
-        val outputHeight = floor(capturedHeight * rasterScale).toInt().coerceAtLeast(1)
+        val outputWidth = floor(logicalWidth * rasterScale).toInt().coerceAtLeast(1)
+        val outputHeight = floor((if (fullPage) capturedHeight else logicalHeight) * rasterScale).toInt().coerceAtLeast(1)
         check(outputWidth.toLong() * outputHeight <= MAX_PIXELS) { "Browser capture raster exceeds its pixel budget" }
         return Plan(fullPage, width, height, sourceHeight,
             if (fullPage) 0 else geometry.scrollX, if (fullPage) 0 else geometry.scrollY,
@@ -143,6 +146,7 @@ internal object AgentBrowserCapture {
         checkLease: () -> Unit,
         scaleOnMain: () -> Double?,
         checkRestoreIdentity: () -> Unit = checkLease,
+        cssViewport: AgentBrowserViewport? = null,
         clock: () -> Long = SystemClock::elapsedRealtime,
         allocateBitmap: (Int, Int) -> Bitmap = { width, height -> Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) },
         block: suspend (Captured) -> T,
@@ -180,7 +184,8 @@ internal object AgentBrowserCapture {
                     geometry(view, scaleOnMain)
                 }
                 initial = first
-                val plan = plan(first, fullPage)
+                if (cssViewport != null && !fullPage) visualState(view, sourceUrl, checkLease, 1_500L)
+                val plan = plan(first, fullPage, cssViewport)
                 withContext(Dispatchers.Main.immediate) {
                     page(view, sourceUrl, checkLease)
                     geometryUnchanged(first, geometry(view, scaleOnMain), fullPage)

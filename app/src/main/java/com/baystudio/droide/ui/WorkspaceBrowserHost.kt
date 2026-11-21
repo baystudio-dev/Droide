@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
+import com.baystudio.droide.core.AgentBrowserController
 
 internal data class WorkspaceBrowserGeometry(val viewport: Rect, val visible: Rect) {
     val fullyVisible: Boolean get() = visible.left <= viewport.left + 1f && visible.top <= viewport.top + 1f &&
@@ -105,6 +106,7 @@ internal fun BoxScope.WorkspaceBrowserHost(
     selectedSlot: WorkspaceBrowserSlot?,
     keepActive: Boolean,
     stopping: Boolean,
+    selectedTab: Boolean = true,
     browser: @Composable (presented: Boolean, captureReady: Boolean) -> Unit,
 ) {
     SideEffect { placement.select(selectedSlot) }
@@ -116,7 +118,7 @@ internal fun BoxScope.WorkspaceBrowserHost(
     // A known fully clipped pane is intentionally hidden. Missing destination
     // measurement during a placement move is only transient and keeps one host.
     if (currentGeometry != null && visibleGeometry == null && !keepActive && !stopping) return
-    val presented = selectedSlot != null && visibleGeometry != null
+    val presented = selectedTab && selectedSlot != null && visibleGeometry != null
     val density = LocalDensity.current
     val width = with(density) { bounds.width.toDp() }
     val height = with(density) { bounds.height.toDp() }
@@ -142,6 +144,31 @@ internal fun BoxScope.WorkspaceBrowserHost(
             .absoluteOffset { IntOffset((viewport.left - bounds.left).roundToInt(), (viewport.top - bounds.top).roundToInt()) }
             .requiredSize(with(density) { viewport.width.toDp() }, with(density) { viewport.height.toDp() })) {
             browser(presented, presented && geometry.fullyVisible)
+        }
+    }
+}
+
+@Composable
+internal fun BoxScope.WorkspaceBrowserTabHosts(
+    placement: WorkspaceBrowserPlacement,
+    slot: WorkspaceBrowserSlot?,
+    user: AgentBrowserController,
+    agent: AgentBrowserController,
+    viewingAgent: Boolean,
+    chatVisible: Boolean,
+    userTabShared: Boolean,
+    content: @Composable (AgentBrowserController, Boolean, Boolean, Boolean) -> Unit,
+) {
+    val panes = remember(user, agent) { listOf(user, agent).distinct() }
+    for (pane in panes) key(pane) {
+        val personal = pane === user
+        val selected = if (personal) !viewingAgent else viewingAgent
+        val state by pane.retention.collectAsState()
+        if (selected || state.attached || state.stopping) {
+            val retainPage = state.attached && (!selected || chatVisible || (personal && userTabShared))
+            WorkspaceBrowserHost(placement, slot, state.keepActive || retainPage, state.stopping, selected) { presented, ready ->
+                content(pane, presented, ready, selected && slot != null)
+            }
         }
     }
 }

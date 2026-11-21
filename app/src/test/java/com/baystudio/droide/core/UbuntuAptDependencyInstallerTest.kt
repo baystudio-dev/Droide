@@ -34,6 +34,7 @@ class UbuntuAptDependencyInstallerTest {
                     argv.first() == "dpkg-query" -> ExecResult(if (argv.drop(3).all { it in installed }) 0 else 1,
                         argv.drop(3).filter { it in installed }.joinToString("\n") { "$it\tarm64\tinstall ok installed" }, false)
                     argv == listOf("dpkg", "--audit") -> ok(audit)
+                    argv == listOf("env", "LC_ALL=C", "apt-get", "-s", "check") -> ExecResult(100, "E: Unmet dependencies.", false)
                     argv == listOf("dpkg", "--configure", "-a") -> {
                         if (configureFailures-- > 0) ExecResult(1, "dependency problems prevent configuration", false)
                         else { audit = ""; ok() }
@@ -154,6 +155,22 @@ class UbuntuAptDependencyInstallerTest {
         f.intercept = { argv -> if (argv == listOf("dpkg", "--configure", "-a")) ExecResult(124, "timed out", true) else null }
         try { f.ensure(listOf("git"), id); fail("Timeout accepted") } catch (_: IllegalStateException) {}
         assertFalse(f.calls.any { it.last().contains("apt-get") }); assertTrue(f.marks.isEmpty())
+    }
+
+    @Test fun killedProcessOrFailingPostInstallScriptDoesNotStartDependencyRepair() = runBlocking {
+        for (exit in listOf(1, 137)) {
+            val f = Fixture()
+            f.audit = "pending configuration"
+            f.intercept = { argv -> when (argv) {
+                listOf("dpkg", "--configure", "-a") -> ExecResult(exit, "interrupted", false)
+                listOf("env", "LC_ALL=C", "apt-get", "-s", "check") -> ExecResult(0, "", false)
+                else -> null
+            } }
+            val failure = runCatching { f.ensure(listOf("git"), id) }.exceptionOrNull() as UbuntuPackageCommandFailure
+            assertTrue(failure.summary.contains("finish Ubuntu package configuration (exit $exit)"))
+            assertFalse(f.calls.any { it.last().contains("-f install") || it.last().endsWith(" update") })
+            assertEquals(exit == 1, f.calls.any { it.last() == "check" })
+        }
     }
 
     @Test fun cleanupErrorPreservesTheOriginalFailureForDiagnosis() = runBlocking {

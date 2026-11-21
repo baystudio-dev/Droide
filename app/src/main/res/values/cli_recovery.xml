@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="cli_earlier_copies">Earlier CLI copies</string>
+    <string name="cli_copy_number">CLI copy %1$d</string>
+    <string name="cli_earlier_copy_notice">This session uses a separate copy. You can recover unpublished files from an earlier copy.</string>
+    <string name="cli_save_working_copy">Save working copy as TAR</string>
+</resources>

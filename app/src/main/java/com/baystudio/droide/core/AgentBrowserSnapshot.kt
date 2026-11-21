@@ -72,7 +72,7 @@ internal object AgentBrowserSnapshot {
                 // Text search needs neither control geometry nor target-ID writes.
                 const scrollable=(['auto','scroll'].includes(style.overflowY)&&e.scrollHeight>e.clientHeight)||
                   (['auto','scroll'].includes(style.overflowX)&&e.scrollWidth>e.clientWidth);
-                const candidate=operation!=='find'&&(['A','BUTTON','INPUT','TEXTAREA','SELECT'].includes(tag)||
+                const candidate=operation!=='find'&&(['A','BUTTON','INPUT','TEXTAREA','SELECT','VIDEO','AUDIO'].includes(tag)||
                   ['button','link','textbox','searchbox','checkbox','radio','switch','combobox','listbox','option','menuitem','tab','slider','spinbutton'].includes(role.toLowerCase())||isEditable||scrollable);
                 let frame=null;
                 if(candidate&&!hidesText) {
@@ -81,6 +81,12 @@ internal object AgentBrowserSnapshot {
                     if(bounded.length>=maxElements) return stop('element_budget');
                     const item={id:identify(e),tag:tag.toLowerCase(),role,type:String(e.type||'').slice(0,40),name:D.name(e,semanticBudget),text:'',disabled:D.disabled(e),
                       readonly:!!e.readOnly||attr(e,'aria-readonly',10)==='true',scrollable};
+                    if(operation==='read'&&bounded.length>=$elementStart&&bounded.length<$elementStart+$elementCount)
+                    {
+                      item.pointer_state=D.geometry(e,false,style).error||'ready';
+                      if(tag==='VIDEO'||tag==='AUDIO') item.media={paused:e.paused,muted:e.muted,ended:e.ended,
+                        ready_state:e.readyState,controls:e.controls,error_code:e.error?.code||null};
+                    }
                     if(typeof e.checked==='boolean'&&['checkbox','radio'].includes(e.type)) item.checked=e.checked;
                     else if(e.hasAttribute('aria-checked')) item.checked=attr(e,'aria-checked',10);
                     if(e.hasAttribute('aria-expanded')) item.expanded=attr(e,'aria-expanded',10)==='true';
@@ -136,6 +142,7 @@ internal object AgentBrowserSnapshot {
               const lines=extractedLines.slice(0,100000);
               const sourceIncomplete=limit!==null||frames.length>0;
               const base={url:location.href.slice(0,8192),title:document.title.slice(0,512),operation,
+                document_state:document.readyState,viewport:{width:innerWidth,height:innerHeight},
                 total_lines:lines.length,source_incomplete:sourceIncomplete,form_values_included:false,
                 coverage:'top document and open shadow roots; frame documents and closed shadow roots excluded',frames,
                 select_options_included:true,

@@ -1,0 +1,68 @@
+import javax.inject.Inject
+import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.MapProperty
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+import org.gradle.build.event.BuildEventsListenerRegistry
+import org.gradle.tooling.events.FinishEvent
+import org.gradle.tooling.events.OperationCompletionListener
+import org.gradle.tooling.events.task.TaskFinishEvent
+import org.gradle.tooling.events.task.TaskSuccessResult
+
+abstract class DroideBuildOutputs implements BuildService<DroideBuildOutputs.Parameters>, OperationCompletionListener {
+    interface Parameters extends BuildServiceParameters {
+        MapProperty<String, List<String>> getTaskOutputs()
+    }
+
+    private final Set<String> reported = new HashSet<>()
+
+    @Override
+    synchronized void onFinish(FinishEvent event) {
+        if (!(event instanceof TaskFinishEvent) || !(event.result instanceof TaskSuccessResult)) return
+        def paths = parameters.taskOutputs.get().get(event.descriptor.taskPath)
+        if (!paths) return
+        // The destination belongs to this invocation, including when Gradle restores the task graph.
+        def manifest = new File(System.getenv('DROIDE_BUILD_OUTPUT_MANIFEST'))
+        def result = event.result
+        def outcome = result.fromCache ? 'FROM-CACHE' : (result.upToDate ? 'UP-TO-DATE' : 'EXECUTED')
+        for (String path : paths) {
+            if (!new File(path).exists() || !reported.add(path)) continue
+            if (path.length() > 4096 || path.toCharArray().any { c -> ((int) c) < 32 || ((int) c) == 127 }) {
+                throw new GradleException('Unsafe Droide output path')
+            }
+            def row = outcome + '\t' + path + '\n'
+            if (reported.size() > 2048 || manifest.length() + row.getBytes('UTF-8').length > 524288) {
+                throw new GradleException('Droide artifact evidence exceeded its limit')
+            }
+            manifest.append(row, 'UTF-8')
+        }
+    }
+}
+
+abstract class DroideBuildOutputsPlugin implements Plugin<Gradle> {
+    @Inject abstract BuildEventsListenerRegistry getEvents()
+    @Inject abstract ObjectFactory getObjects()
+
+    void apply(Gradle build) {
+        def declarations = objects.mapProperty(String, List)
+        def service = build.sharedServices.registerIfAbsent('droideBuildOutputs', DroideBuildOutputs) {
+            parameters.taskOutputs.set(declarations)
+        }
+        events.onTaskCompletion(service)
+        build.taskGraph.whenReady { graph ->
+            def root = build.rootProject.projectDir.canonicalFile.toPath()
+            def outputs = [:]
+            graph.allTasks.each { task ->
+                def paths = task.outputs.files.files.collect { it.canonicalFile.toPath() }.findAll { path ->
+                    if (!path.startsWith(root)) return false
+                    def relative = '/' + root.relativize(path).toString().replace(File.separatorChar, '/' as char) + '/'
+                    return relative.contains('/build/outputs/')
+                }.collect { it.toString() }
+                if (!paths.empty) outputs[task.path] = paths
+            }
+            declarations.set(outputs)
+        }
+    }
+}
+
+if (gradle.parent == null) apply plugin: DroideBuildOutputsPlugin

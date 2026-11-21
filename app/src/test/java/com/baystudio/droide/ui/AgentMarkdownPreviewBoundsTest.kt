@@ -62,4 +62,26 @@ class AgentMarkdownPreviewBoundsTest {
         assertEquals(AgentMarkdownParser.parse("New.\n\ntail"), final.stableBlocks)
         assertEquals("", final.tail)
     }
+
+    @Test fun resumingAfterCompletionCanExtendTheFinalParagraphOrFence() {
+        val prefix = "Intro.\n\n"
+        for ((partial, rest) in listOf("Hello" to ", world!\n\n", "~~~kt\nval a" to " = 1\n~~~\n")) {
+            val projector = AgentStreamingMarkdownProjector()
+            projector.project(prefix, false)
+            val previous = projector.project(prefix + partial, true)
+            val resumed = prefix + partial + rest + "next"
+            assertEquals(AgentStreamingMarkdownProjector().project(resumed, false), projector.project(resumed, false))
+            assertEquals(AgentMarkdownParser.parse(prefix + partial), previous.stableBlocks)
+        }
+    }
+
+    @Test fun aRewrittenStreamDropsItsOldFenceAndRespectsTheNodeBudget() {
+        val projector = AgentStreamingMarkdownProjector(2)
+        projector.project("Title\n\n~~~\nstill open\n", false)
+        val replacement = "New\n\n~~~\n\n~~~\n"
+        val fresh = AgentStreamingMarkdownProjector(2)
+        for (source in listOf(replacement, replacement + "more\n\n", replacement + "more\n\nend")) {
+            assertEquals(fresh.project(source, false), projector.project(source, false))
+        }
+    }
 }

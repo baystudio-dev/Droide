@@ -9,6 +9,7 @@ data class WorkspaceAgentSyncState(
     val pendingPaths: List<String> = emptyList(),
     val pendingCount: Int = 0,
     val notice: String? = null,
+    val earlierCopies: Int = 0,
 ) {
     val label: String get() = when (phase) {
         WorkspaceAgentSyncPhase.ISOLATED -> "CLI uses a separate review workspace"

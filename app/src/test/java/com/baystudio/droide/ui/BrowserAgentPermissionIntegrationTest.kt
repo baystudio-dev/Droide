@@ -26,7 +26,8 @@ class BrowserAgentPermissionIntegrationTest {
     private val browser = AgentBrowserController(root)
     private val caller = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private val permissions = PermissionEngine()
-    private val context = agentWorkflowContext(root, permissions = permissions, browserController = browser,
+    private var afterProgress: (AgentToolProgress) -> Unit = {}
+    private val context = agentWorkflowContext(root, permissions = permissions, browserController = browser, onProgress = { afterProgress(it) },
         provenance = AgentRequestProvenance.primary("browser-agent-session"))
     private lateinit var view: PageView
 
@@ -37,7 +38,8 @@ class BrowserAgentPermissionIntegrationTest {
         override fun evaluateJavascript(script: String, resultCallback: android.webkit.ValueCallback<String>?) {
             evaluations++
             if (acknowledge) {
-                val payload = if (script.contains("const a=")) "{\"ok\":true,\"action\":\"type\",\"target\":\"d1\",\"accepted\":true}"
+                val payload = if (script.contains("\"operation\":\"scroll\"")) """{"ok":true,"action":"scroll","moved":true}"""
+                    else if (script.contains("const a=")) "{\"ok\":true,\"action\":\"type\",\"target\":\"d1\",\"accepted\":true}"
                     else buildJsonObject { put("ok", true); put("url", page); put("lines", buildJsonArray {}) }.toString()
                 resultCallback?.onReceiveValue(JsonPrimitive(payload).toString())
             } else super.evaluateJavascript(script, resultCallback)
@@ -86,6 +88,50 @@ class BrowserAgentPermissionIntegrationTest {
         pumpUntil { operation.isCompleted }
         assertNull("One explicit site grant covers browser read/local requirements", context.approvals.pending.value)
         assertEquals("browser_status", Json.parseToJsonElement(runBlocking { operation.await() }).jsonObject["kind"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun statusReportsOnlyTheCapturedPageWhenAFeedNavigatesDuringConsent() {
+        val original = view.page
+        val pending = start()
+        pumpUntil { context.approvals.pending.value?.action == "webfetch" }
+        view.page = "https://other.example/new-private-path"
+        view.webViewClient.onPageStarted(view, view.page, null)
+        context.approvals.resolve(ApprovalResolution.ALLOW_SESSION)
+        pumpUntil { pending.isCompleted }
+        val result = runBlocking { pending.await() }
+        assertEquals(original, Json.parseToJsonElement(result).jsonObject.getValue("url").jsonPrimitive.content)
+        assertFalse(result.contains("new-private-path"))
+        assertEquals(0, view.evaluations)
+        val next = start()
+        pumpUntil { context.approvals.pending.value != null }
+        assertEquals(view.page, context.approvals.pending.value!!.resource)
+        context.approvals.resolve(ApprovalResolution.DENY)
+        pumpUntil { next.isCompleted }
+        assertTrue(runBlocking { next.await() }.startsWith("DENIED"))
+    }
+
+    @Test fun aGrantedFeedScrollRebindsOnceBeforeInputWithoutPrompting() {
+        approveInitialBrowserOrigin()
+        browser.setKeepActive(true)
+        view.acknowledge = true
+        afterProgress = { update ->
+            if (update.detail.startsWith("Approved")) {
+                afterProgress = {}
+                view.page = "http://localhost:3000/next-item"
+                view.webViewClient.onPageStarted(view, view.page, null)
+                view.webViewClient.onPageFinished(view, view.page)
+            }
+        }
+        val pending = caller.async { AgentTools.execute("browser", buildJsonObject {
+            put("operation", "scroll"); put("text", "down"); put("wait_ms", 50)
+        }, context) }
+        pumpUntil { pending.isCompleted || context.approvals.pending.value != null }
+        assertNull(context.approvals.pending.value)
+        val raw = runBlocking { pending.await() }
+        assertEquals(raw, JsonPrimitive(true), Json.parseToJsonElement(raw).jsonObject["success"])
+        assertEquals("Scroll and follow-up read each execute once", 2, view.evaluations)
+        assertTrue(raw.contains("next-item"))
+        assertTrue(context.browserPublication.scrollAdvanced)
     }
 
     @Test fun actualBrowserDispatchReusesBothReadAndLocalOriginApprovalsAcrossPaths() {

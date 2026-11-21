@@ -95,7 +95,7 @@ class AgentBrowserDialogs internal constructor() {
         var includeSource = dialog.sourceUrl != null
         var message = dialog.message.take(1_000)
         val sourceOrigin = dialog.sourceUrl?.let { raw ->
-            val uri = URI(raw)
+            val uri = BrowserWebAddress.authority(raw)
             URI(uri.scheme.lowercase(), null, uri.host, uri.port, null, null, null).toASCIIString()
         }
         fun encoded() = buildJsonObject {
@@ -123,7 +123,7 @@ class AgentBrowserDialogs internal constructor() {
 
     private fun observedSource(raw: String?): String? = runCatching {
         if (raw == null || raw.length !in 1..8_192) return@runCatching null
-        val uri = URI(raw)
+        val uri = BrowserWebAddress.authority(raw)
         if ((!uri.scheme.equals("http", true) && !uri.scheme.equals("https", true)) || uri.host == null ||
             uri.userInfo != null || uri.port !in -1..65535) return@runCatching null
         // Preserve a valid requesting URL exactly. Unknown/oversized metadata must

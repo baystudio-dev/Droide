@@ -359,6 +359,15 @@ class FileRepository internal constructor(
     }
 
     suspend fun exists(rel: String): Boolean = withContext(Dispatchers.IO) { resolve(rel).exists() }
+
+    internal suspend fun attributesIfPresent(rel: String): BasicFileAttributes? = withContext(Dispatchers.IO) {
+        try {
+            Files.readAttributes(resolve(rel).toPath(), BasicFileAttributes::class.java)
+        } catch (_: java.nio.file.NoSuchFileException) {
+            null
+        }
+    }
+
     suspend fun isDirectory(rel: String): Boolean = withContext(Dispatchers.IO) { resolve(rel).isDirectory }
 
     // Large files are never represented by a destructive preview buffer.

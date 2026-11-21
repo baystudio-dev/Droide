@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Pengaturan</string>
+    <string name="settings_back">Kembali</string>
+    <string name="settings_close">Tutup pengaturan</string>
+    <string name="settings_search">Cari pengaturan</string>
+    <string name="settings_clear">Hapus pencarian</string>
+    <string name="settings_no_results">Pengaturan tidak ditemukan</string>
+    <string name="settings_try_search">Coba kata kunci lain.</string>
+    <string name="settings_user">Pengguna</string>
+    <string name="settings_workspace">Ruang kerja</string>
+    <string name="settings_group_workbench">Area kerja</string>
+    <string name="settings_group_development">Pengembangan</string>
+    <string name="settings_group_agents">Agen &amp; alat</string>
+    <string name="settings_group_application">Aplikasi</string>
+    <string name="settings_workspace_theme">Tema untuk ruang kerja ini</string>
+    <string name="settings_code_preview">Pratinjau kode Kotlin, main.kt</string>
+    <string name="settings_display">Tampilan</string>
+    <string name="settings_indentation">Indentasi</string>
+    <string name="settings_indent_style">Gaya indentasi</string>
+    <string name="settings_spaces">Spasi</string>
+    <string name="settings_tabs">Tab</string>
+</resources>

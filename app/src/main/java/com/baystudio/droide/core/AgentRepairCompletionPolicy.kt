@@ -1,6 +1,5 @@
 package com.baystudio.droide.core
 
-import java.net.URI
 
  
 object AgentRepairCompletionPolicy {
@@ -13,10 +12,10 @@ object AgentRepairCompletionPolicy {
     fun browserPermissionTarget(operation: String, requestedUrl: String?, currentUrl: String): String =
         if (operation in setOf("open", "navigate")) requestedUrl.orEmpty() else currentUrl
 
-    fun browserInteracts(operation: String): Boolean = operation in setOf("click", "type", "check", "key", "hover", "swipe", "drag", "dialog_respond")
+    fun browserInteracts(operation: String): Boolean = operation in BrowserInteractionAuthority.operations
 
     fun classifyBrowserTarget(raw: String): BrowserTargetClass = runCatching {
-        val uri = URI(raw)
+        val uri = BrowserWebAddress.authority(raw)
         val host = uri.host ?: return@runCatching BrowserTargetClass.BLOCKED
         if (uri.userInfo != null) return@runCatching BrowserTargetClass.BLOCKED
         val scheme = uri.scheme?.lowercase().orEmpty()

@@ -138,7 +138,7 @@ class ThemeManager(private val workDir: File) {
         }
     }
 
-    private fun buildSnapshot(theme: DroideTheme): DroideThemeSnapshot {
+    internal fun buildSnapshot(theme: DroideTheme): DroideThemeSnapshot {
         val math = ThemeContrastPolicy
         
 

@@ -13,10 +13,9 @@ internal class TerminalOutputCollector(capacity: Int, onOutput: (String) -> Unit
         tail.write(bytes)
         var offset = 0
         while (offset < bytes.size) {
-            val end = minOf(offset + 8192, bytes.size)
-            val chunk = bytes.copyOfRange(offset, end)
-            decoder.accept(chunk, chunk.size)
-            offset = end
+            val count = minOf(Utf8StreamDecoder.MAX_CHUNK_BYTES, bytes.size - offset)
+            decoder.accept(bytes, offset, count)
+            offset += count
         }
     }
 

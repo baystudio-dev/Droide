@@ -19,6 +19,23 @@ class BrowserCapturePlanTest {
         assertTrue(plan.complete)
     }
 
+    @Test fun desktopCaptureIncludesTheEntireHighDensityViewportAtTheSelectedCssSize() {
+        for (density in listOf(1.0, 2.0, 2.625, 3.0, 4.0)) {
+            val width = (1280 * density).toInt()
+            val height = (800 * density).toInt()
+            val plan = AgentBrowserCapture.plan(geometry(width, height), false, AgentBrowserViewport.Desktop)
+            assertEquals(width, plan.viewportWidth); assertEquals(height, plan.captureHeight)
+            assertEquals(1280, plan.outputWidth); assertEquals(800, plan.outputHeight)
+            assertEquals(1, plan.tileCount)
+        }
+    }
+
+    @Test fun fractionalDensityKeepsBothMobileDimensionsAfterPhysicalPixelRounding() {
+        val mobile = AgentBrowserViewport.Mobile
+        val plan = AgentBrowserCapture.plan(geometry(488, 1055), false, mobile)
+        assertEquals(390, plan.outputWidth); assertEquals(844, plan.outputHeight)
+    }
+
     @Test fun smallViewportUsesOneQuarterOfThePreviousUpscaledRasterPixels() {
         val plan = AgentBrowserCapture.plan(geometry(640, 640), false)
         assertEquals(640, plan.outputWidth)

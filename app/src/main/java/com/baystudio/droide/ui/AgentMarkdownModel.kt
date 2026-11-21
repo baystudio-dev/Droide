@@ -88,23 +88,20 @@ internal class AgentStreamingMarkdownProjector(maxRenderNodes: Int = AgentMarkdo
     private val stable = ArrayList<AgentMarkdownBlock>()
 
     fun project(markdown: String, completed: Boolean): AgentStreamingMarkdownProjection {
-        if (!markdown.startsWith(source)) reset()
-        source = markdown
         if (completed) {
-            val all = AgentMarkdownParser.parse(markdown, nodeLimit)
-            stable.clear()
-            stable.addAll(all)
-            stableChars = markdown.length
-            return AgentStreamingMarkdownProjection(stable.toList(), "", true)
+            reset()
+            return AgentStreamingMarkdownProjection(AgentMarkdownParser.parse(markdown, nodeLimit), "", true)
         }
 
-        val nextStable = AgentMarkdownParser.stableStreamingPrefixLength(markdown)
-        if (nextStable < stableChars) reset()
+        if (!markdown.startsWith(source)) reset()
+        source = markdown
         val remainingNodes = nodeLimit - stable.sumOf { it.renderCost() }
-        if (nextStable > stableChars && remainingNodes > 0) {
-            val chunk = markdown.substring(stableChars, nextStable)
-            stable += AgentMarkdownParser.parse(chunk, remainingNodes)
-            stableChars = nextStable
+        if (remainingNodes > 0) {
+            val nextStable = AgentMarkdownParser.stableStreamingPrefixLength(markdown, stableChars)
+            if (nextStable > stableChars) {
+                stable += AgentMarkdownParser.parse(markdown.substring(stableChars, nextStable), remainingNodes)
+                stableChars = nextStable
+            }
         }
         return AgentStreamingMarkdownProjection(
             stableBlocks = stable.toList(),
@@ -423,10 +420,10 @@ internal object AgentMarkdownParser {
     }
 
 
-    fun stableStreamingPrefixLength(markdown: String): Int {
-        if (markdown.isEmpty()) return 0
-        var offset = 0
-        var stable = 0
+    fun stableStreamingPrefixLength(markdown: String, committed: Int = 0): Int {
+        // Committed text ends after a blank line or a closed fence.
+        var offset = committed
+        var stable = committed
         var fence: Fence? = null
         while (offset < markdown.length) {
             val newline = markdown.indexOf('\n', offset)
@@ -449,7 +446,7 @@ internal object AgentMarkdownParser {
             }
             offset = next
         }
-        return stable.coerceIn(0, markdown.length)
+        return stable
     }
 
     fun isSafeHttpUrl(url: String?): Boolean {

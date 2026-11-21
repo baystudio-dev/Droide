@@ -31,6 +31,20 @@ class ExtensionCatalogUiTest {
         return ExtensionVersionState(family, entry, state, detail)
     }
 
+    @Test fun pendingAndTerminalManagedRowsShowTheirActualNextStep() {
+        var state by mutableStateOf(ExtensionState.CHECKING)
+        compose.setContent { DroideTheme {
+            val choice = item("External", state)
+            ExtensionRow(ExtensionCatalogCard(choice, listOf(choice))) {}
+        } }
+        compose.onNodeWithText("Checking…").assertIsDisplayed()
+        compose.onNodeWithText("Unavailable").assertDoesNotExist()
+        compose.runOnIdle { state = ExtensionState.MANUAL }
+        compose.onNodeWithText("Install in Terminal").assertIsDisplayed()
+        compose.runOnIdle { state = ExtensionState.PROJECT_DEPENDENCY }
+        compose.onNodeWithText("Project dependency").assertIsDisplayed()
+    }
+
     @Test fun screenshotFamilyAppearsOnceAndOpensActualInstallableChoice() {
         val ready = item("Latest npm", ExtensionState.AVAILABLE)
         val cards = extensionCatalogCards(listOf(item("Local", ExtensionState.UNAVAILABLE),

@@ -89,6 +89,26 @@ class TrustedArtifactCacheTest {
         } finally { root.deleteRecursively() }
     }
 
+    @Test fun manyArchivesArePinnedTogetherAndReleasedOnFailure() = runBlocking {
+        val root = Files.createTempDirectory("droide-archive-set-").toFile()
+        try {
+            val archives = (1..96).map { File(root, "$it.zip").apply { writeText("verified") } }
+            val shared = archives.first()
+            TrustedArtifactCache.withLease(shared) {
+                try {
+                    TrustedArtifactCache.withLeases(archives + shared) {
+                        archives.forEach { assertFalse(TrustedArtifactCache.discard(it)) }
+                        TrustedArtifactCache.prune(root, 0, emptySet())
+                        assertTrue(archives.all(File::exists))
+                        throw CancellationException("stop")
+                    }
+                } catch (_: CancellationException) { }
+                assertEquals(listOf(shared), root.listFiles()!!.toList())
+            }
+            assertFalse(shared.exists())
+        } finally { root.deleteRecursively() }
+    }
+
     @Test fun pruningPreservesPartialTransferFilesAndDoesNotFollowSymlinks() {
         val root = Files.createTempDirectory("droide-cache-paths-").toFile()
         val outside = Files.createTempFile("droide-cache-outside-", ".data").toFile()

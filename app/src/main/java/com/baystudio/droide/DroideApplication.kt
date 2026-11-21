@@ -7,6 +7,7 @@ import com.baystudio.droide.core.ApplicationExitDeadline
 import com.baystudio.droide.core.requestAndroidApplicationClose
 import com.baystudio.droide.core.ExitOwnerBarrier
 import com.baystudio.droide.core.ApplicationWorkAdmission
+import com.baystudio.droide.core.BrowserApplicationVisibility
 import com.baystudio.droide.core.ChatMediaCleanup
 import com.baystudio.droide.core.ExportController
 import com.baystudio.droide.core.DevelopmentForegroundService
@@ -20,10 +21,12 @@ import kotlinx.coroutines.flow.first
 class DroideApplication : Application() {
     private val exitScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var retainedHost: WorkspaceRuntimeHost? = null
+    private val browserVisibility = BrowserApplicationVisibility { retainedHost?.setBrowserApplicationVisible(it) }
+    internal val isBrowserApplicationVisible: Boolean get() = browserVisibility.isVisible
     internal val workspaceHost: WorkspaceRuntimeHost get() {
         retainedHost?.let { return it }
         ApplicationWorkAdmission.requireOpen()
-        return WorkspaceRuntimeHost(this).also { retainedHost = it }
+        return WorkspaceRuntimeHost(this, ::isBrowserApplicationVisible).also { retainedHost = it }
     }
     internal val interfaceEpoch = MutableStateFlow<String?>(null)
     private val mutableExit = MutableStateFlow(ApplicationExitSequence.State())
@@ -49,6 +52,8 @@ class DroideApplication : Application() {
         super.onCreate()
         // Isolated PDF workers have no workspace/files/network authority or normal app startup.
         if (Application.getProcessName().contains(":document_preview")) return
+        // Open Droide can create the workspace after the current Activity has already started.
+        registerActivityLifecycleCallbacks(browserVisibility)
         try { ApplicationWorkAdmission.initialize(this) }
         catch (_: Exception) { startupFailure.value = "Saved work state could not be read. Droide remains stopped." }
     }

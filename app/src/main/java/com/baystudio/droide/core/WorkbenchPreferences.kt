@@ -14,6 +14,7 @@ val Context.workbenchPreferences by preferencesDataStore(name = "workbench_cfg")
 
 object WorkbenchPreferences {
     private val WORD_WRAP = booleanPreferencesKey("editor_word_wrap")
+    private val SHOW_EDITOR_STATUS_BAR = booleanPreferencesKey("editor_show_android_status_bar")
     private val HARDWARE_SHORTCUTS = booleanPreferencesKey("hardware_shortcuts")
     private val ACCESSORY_KEYS_COMFORTABLE = booleanPreferencesKey("accessory_keys_comfortable")
     private val CODING_KEYBOARD_MODE = stringPreferencesKey("coding_keyboard_mode")
@@ -35,6 +36,7 @@ object WorkbenchPreferences {
         val tabWidth: Int = 4,
         val indentSize: Int = 4,
         val continuationIndent: Int = 8,
+        val showEditorStatusBar: Boolean = false,
     ) {
         val codeStyleDefaults: CodeStyleDefaults get() = CodeStyleDefaults(
             detectIndentation = detectIndentation,
@@ -48,6 +50,7 @@ object WorkbenchPreferences {
     fun flow(context: Context): Flow<Snapshot> = context.workbenchPreferences.data.map { prefs ->
         Snapshot(
             wordWrap = prefs[WORD_WRAP] ?: false,
+            showEditorStatusBar = prefs[SHOW_EDITOR_STATUS_BAR] ?: false,
             hardwareShortcuts = prefs[HARDWARE_SHORTCUTS] ?: true,
             accessoryKeysComfortable = prefs[ACCESSORY_KEYS_COMFORTABLE] ?: false,
             codingKeyboardMode = CodingKeyboardMode.fromStoredValue(prefs[CODING_KEYBOARD_MODE]),
@@ -62,6 +65,10 @@ object WorkbenchPreferences {
 
     suspend fun setWordWrap(context: Context, enabled: Boolean) {
         context.workbenchPreferences.edit { it[WORD_WRAP] = enabled }
+    }
+
+    suspend fun setShowEditorStatusBar(context: Context, enabled: Boolean) {
+        context.workbenchPreferences.edit { it[SHOW_EDITOR_STATUS_BAR] = enabled }
     }
 
     suspend fun setHardwareShortcuts(context: Context, enabled: Boolean) {

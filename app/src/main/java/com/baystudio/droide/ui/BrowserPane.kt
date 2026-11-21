@@ -1,6 +1,7 @@
 package com.baystudio.droide.ui
 
 import android.content.Context
+import kotlin.math.roundToInt
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -30,9 +31,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.baystudio.droide.core.AgentBrowserController
+import com.baystudio.droide.core.AgentBrowserViewport
+import com.baystudio.droide.core.AgentBrowserViewportSurface
+import androidx.compose.ui.res.stringResource
+import com.baystudio.droide.R
 import com.baystudio.droide.core.AgentBrowserDialogs
 import com.baystudio.droide.core.BrowserInitializationDiagnostics
 import com.baystudio.droide.core.BrowserInitializationDiagnostics.Phase
@@ -68,10 +77,13 @@ fun BrowserPane(
     onUserFocus: () -> Unit = {},
     expanded: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {},
+    onSwitchTab: (() -> Unit)? = null,
+    onEndHandoff: (() -> Unit)? = null,
+    tabActive: Boolean = true,
 ) {
     key(agentBrowser) {
         WorkspaceBrowserPane(url, onUrlChange, agentBrowser, presented, captureReady, onReviewAgentApproval, onUserFocus,
-            expanded = expanded, onExpandedChange = onExpandedChange)
+            expanded = expanded, onExpandedChange = onExpandedChange, onSwitchTab = onSwitchTab, onEndHandoff = onEndHandoff, tabActive = tabActive)
     }
 }
 
@@ -86,6 +98,9 @@ internal fun WorkspaceBrowserPane(
     onUserFocus: () -> Unit = {},
     expanded: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {},
+    onSwitchTab: (() -> Unit)? = null,
+    onEndHandoff: (() -> Unit)? = null,
+    tabActive: Boolean = true,
     createWebView: (Context) -> WebView = { WebView(it) },
 ) {
     val scope = rememberWorkspaceCoroutineScope()
@@ -104,8 +119,17 @@ internal fun WorkspaceBrowserPane(
     var keepActiveDisclosure by rememberSaveable { mutableStateOf(false) }
     var browserMenuOpen by remember { mutableStateOf(false) }
     val retention by agentBrowser.retention.collectAsState()
+    val viewport by agentBrowser.viewport.collectAsState()
+    val preview = remember(agentBrowser, viewport, browserGeneration) {
+        viewport?.takeIf { it.mode == "desktop" }?.let(::DesktopBrowserPreview)
+    }
+    var previewSize by remember { mutableStateOf(Size.Zero) }
+    LaunchedEffect(presented, preview) {
+        if (!presented && preview?.directInput == true) preview.switchInput()
+    }
     val navigation by agentBrowser.navigation.collectAsState()
     val pendingDialog by agentBrowser.pendingDialog.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val focusManager = LocalFocusManager.current
     val currentPresented by rememberUpdatedState(presented)
@@ -118,6 +142,7 @@ internal fun WorkspaceBrowserPane(
     }
 
     fun releaseBrowser(host: BrowserViewHost, preserveState: Boolean) {
+        host.desktopPreview = null
         val view = host.browser ?: return
         val binding = host.binding
         host.browser = null
@@ -137,30 +162,32 @@ internal fun WorkspaceBrowserPane(
         agentBrowser.reportNativeSurfaceReleased(view, releaseFailure)
     }
 
-    fun navigate(raw: String, operation: String = "open", initialBinding: AgentBrowserController.Binding? = null) {
-        if (!presented || retention.stopping || loading || webView == null || browserError != null) return
+    suspend fun reportNavigationFailure(action: suspend () -> Unit) {
+        try {
+            action()
+        } catch (timeout: TimeoutCancellationException) {
+            currentCoroutineContext().ensureActive()
+            status = "Blocked: browser operation timed out"
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            status = "Blocked: ${failure.message ?: "navigation failed"}"
+        } catch (failure: LinkageError) {
+            status = "Blocked: ${failure.message ?: "WebView unavailable"}"
+        }
+    }
+
+    val navigationAvailable = presented && retention.resumed && !retention.stopping && browserError == null
+
+    fun navigate(raw: String, operation: String = "open") {
+        if (!navigationAvailable || loading) return
         loading = true
         scope.launch {
             status = "Loading…"
             try {
-                if (initialBinding != null) agentBrowser.initializeDefaultPage(initialBinding, raw.trim())
-                    else agentBrowser.execute(operation, url = raw.trim(), allowLoopback = true, waitMs = 350)
-                val current = agentBrowser.currentUrl().ifBlank { raw.trim() }
-                inputUrl = current
-                if (appliedNavigationUrl != current) {
-                    appliedNavigationUrl = current
-                    onUrlChange(current)
+                reportNavigationFailure {
+                    agentBrowser.navigateFromAddressBar(operation, raw)
                 }
-                status = agentBrowser.navigation.value.title.ifBlank { current }
-            } catch (timeout: TimeoutCancellationException) {
-                currentCoroutineContext().ensureActive()
-                status = "Blocked: browser operation timed out"
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                status = "Blocked: ${failure.message ?: "navigation failed"}"
-            } catch (failure: LinkageError) {
-                status = "Blocked: ${failure.message ?: "WebView unavailable"}"
             } finally { loading = false }
         }
     }
@@ -171,7 +198,7 @@ internal fun WorkspaceBrowserPane(
         }
     }
 
-    val canNavigate = presented && !retention.stopping && !loading && webView != null && browserError == null
+    val canNavigate = navigationAvailable && !loading
     val browserStatus = if (retention.stopping) "Stopping browser work…" else status
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -185,7 +212,7 @@ internal fun WorkspaceBrowserPane(
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     BasicTextField(
                         value = inputUrl,
-                        onValueChange = { if (presented) onUserFocus(); inputUrl = it.take(2_000) },
+                        onValueChange = { if (presented) onUserFocus(); inputUrl = it.take(8_193) },
                         modifier = Modifier.weight(1f).height(urlHeight).testTag("browser-url")
                             .semantics { contentDescription = "Browser URL" }
                             .onFocusChanged {
@@ -218,6 +245,10 @@ internal fun WorkspaceBrowserPane(
                                 Icon(Icons.Default.MoreVert, contentDescription = "Browser actions")
                             }
                             if (presented) DropdownMenu(expanded = presented && browserMenuOpen, onDismissRequest = { browserMenuOpen = false }) {
+                                if (preview != null && browserError == null) {
+                                    DesktopBrowserPreviewMenu(preview, previewSize) { browserMenuOpen = false }
+                                    HorizontalDivider()
+                                }
                                 DropdownMenuItem(text = { Text("Back") }, enabled = canNavigate,
                                     leadingIcon = { Icon(Icons.Default.ArrowBack, contentDescription = null) },
                                     onClick = { browserMenuOpen = false; navigate(inputUrl, "back") })
@@ -226,6 +257,30 @@ internal fun WorkspaceBrowserPane(
                                     onClick = { browserMenuOpen = false; navigate(inputUrl, "reload") })
                                 DropdownMenuItem(text = { Text("Go") }, enabled = canNavigate,
                                     onClick = { browserMenuOpen = false; navigate(inputUrl) })
+                                val external = navigation.url.ifBlank { inputUrl }
+                                DropdownMenuItem(text = { Text(stringResource(R.string.browser_open_externally)) },
+                                    enabled = external.startsWith("https://", true) && !agentBrowser.isWorkspacePreview(external),
+                                    onClick = {
+                                        browserMenuOpen = false
+                                        scope.launch {
+                                            reportNavigationFailure {
+                                                val address = agentBrowser.externalAddress(external)
+                                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(address))
+                                                    .addCategory(android.content.Intent.CATEGORY_BROWSABLE)
+                                                try { context.startActivity(intent) } catch (_: android.content.ActivityNotFoundException) {
+                                                    status = context.getString(R.string.browser_no_external_app)
+                                                }
+                                            }
+                                        }
+                                    })
+                                onSwitchTab?.let { switch ->
+                                    DropdownMenuItem(text = { Text(stringResource(if (viewport == null) R.string.browser_show_agent_tab else R.string.browser_show_user_tab)) },
+                                        onClick = { browserMenuOpen = false; switch() })
+                                }
+                                onEndHandoff?.let { end ->
+                                    DropdownMenuItem(text = { Text(stringResource(R.string.browser_end_handoff)) },
+                                        onClick = { browserMenuOpen = false; end() })
+                                }
                                 HorizontalDivider()
                                 DropdownMenuItem(text = { Text(if (expanded) "Exit expanded browser" else "Expand browser") },
                                     onClick = { browserMenuOpen = false; onExpandedChange(!expanded) })
@@ -276,9 +331,10 @@ internal fun WorkspaceBrowserPane(
                     }
                 }
             }
+            BrowserDownloadPrompt(agentBrowser, webView, presented) { status = it }
             if (!expanded) {
                 Text(
-                    browserStatus,
+                    viewport?.let { stringResource(R.string.browser_agent_viewport, it.width, it.height) + " · " + browserStatus } ?: browserStatus,
                     style = MaterialTheme.typography.labelSmall,
                     color = if (browserStatus.startsWith("Blocked:")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
@@ -318,71 +374,81 @@ internal fun WorkspaceBrowserPane(
                         enabled = presented && !retention.stopping) { Text("Retry browser") }
                 }
             } else key(browserGeneration) {
-                AndroidView(
-                    factory = { ctx ->
-                        BrowserViewHost(ctx).also { host ->
-                            val diagnostics = BrowserInitializationDiagnostics.create()
-                            val ready = runUiCatching(::showBrowserFailure) {
-                                val view = diagnostics.phase(Phase.CREATE) { createWebView(ctx) }
-                                view.setOnFocusChangeListener { _, focused ->
-                                    if (focused && currentPresented) currentOnUserFocus()
-                                }
-                                host.browser = view
-                                diagnostics.providerAfterCreation(BrowserInitializationDiagnostics::currentProvider)
-                                diagnostics.phase(Phase.CONFIGURE) { agentBrowser.configure(view,
-                                    onExitRelease = { releaseBrowser(host, preserveState = false) }) { gone, message ->
-                                    if (host.browser === gone) { host.browser = null; host.binding = null }
-                                    if (webView === gone) { webView = null; browserBinding = null }
-                                    if (message.startsWith("Browser released")) {
-                                        agentBrowser.currentUrl().takeIf { it.isNotBlank() }?.let { current ->
-                                            inputUrl = current
-                                            onUrlChange(current)
-                                        }
+                val measurePreview = if (preview != null) Modifier.onSizeChanged { previewSize = it.toSize() } else Modifier
+                DesktopBrowserPreviewFrame(preview, presented,
+                    Modifier.weight(1f).fillMaxWidth().testTag("browser-viewport").then(measurePreview)) { nativeModifier ->
+                    AndroidView(
+                        factory = { ctx ->
+                            BrowserViewHost(ctx).also { host ->
+                                val diagnostics = BrowserInitializationDiagnostics.create()
+                                val ready = runUiCatching(::showBrowserFailure) {
+                                    host.viewport = viewport
+                                    host.desktopPreview = preview
+                                    val view = diagnostics.phase(Phase.CREATE) {
+                                        createWebView(ctx)
                                     }
-                                    browserError = message
-                                    status = "Blocked: $message"
-                                    loading = false
-                                } }
-                                host.binding = diagnostics.phase(Phase.ATTACH) { agentBrowser.attach(view) }
-                                browserBinding = host.binding
-                                diagnostics.phase(Phase.MOUNT) {
-                                    agentBrowser.setSurfaceStarted(requireNotNull(host.binding), view,
-                                        lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
-                                    host.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                                    host.present(presented)
-                                    agentBrowser.setSurfacePresented(requireNotNull(host.binding), view, presented, captureReady)
+                                    view.setOnFocusChangeListener { _, focused ->
+                                        if (focused && currentPresented) currentOnUserFocus()
+                                    }
+                                    host.browser = view
+                                    diagnostics.providerAfterCreation(BrowserInitializationDiagnostics::currentProvider)
+                                    diagnostics.phase(Phase.CONFIGURE) { agentBrowser.configure(view,
+                                        onExitRelease = { releaseBrowser(host, preserveState = false) }) { gone, message ->
+                                        if (host.browser === gone) { host.browser = null; host.binding = null }
+                                        if (webView === gone) { webView = null; browserBinding = null }
+                                        if (message.startsWith("Browser released")) {
+                                            agentBrowser.currentUrl().takeIf { it.isNotBlank() }?.let { current ->
+                                                inputUrl = current
+                                                onUrlChange(current)
+                                            }
+                                        }
+                                        browserError = message
+                                        status = "Blocked: $message"
+                                        loading = false
+                                    } }
+                                    host.binding = diagnostics.phase(Phase.ATTACH) { agentBrowser.attach(view) }
+                                    browserBinding = host.binding
+                                    diagnostics.phase(Phase.MOUNT) {
+                                        agentBrowser.setSurfaceStarted(requireNotNull(host.binding), view,
+                                            (tabActive || retention.keepActive) && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+                                        host.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                                        host.present(presented, pageAccessibility = preview == null || preview.directInput)
+                                        agentBrowser.setSurfacePresented(requireNotNull(host.binding), view, presented, captureReady)
+                                    }
+                                    webView = view
+                                    true
                                 }
-                                webView = view
-                                true
+                                if (ready != true) releaseBrowser(host, preserveState = false)
                             }
-                            if (ready != true) releaseBrowser(host, preserveState = false)
-                        }
-                    },
-                    update = { host ->
-                        runUiCatching(::showBrowserFailure) {
-                            host.present(presented)
-                            val view = host.browser
-                            val binding = host.binding
-                            if (view != null && binding != null) {
-                                agentBrowser.setSurfacePresented(binding, view, presented, captureReady)
+                        },
+                        update = { host ->
+                            runUiCatching(::showBrowserFailure) {
+                                host.viewport = viewport
+                                host.desktopPreview = preview
+                                host.present(presented, pageAccessibility = preview == null || preview.directInput)
+                                val view = host.browser
+                                val binding = host.binding
+                                if (view != null && binding != null) {
+                                    agentBrowser.setSurfacePresented(binding, view, presented, captureReady)
+                                }
                             }
-                        }
-                    },
-                    onRelease = { releaseBrowser(it, preserveState = true) },
-                    modifier = Modifier.weight(1f).fillMaxWidth().testTag("browser-viewport"),
-                )
+                        },
+                        onRelease = { releaseBrowser(it, preserveState = true) },
+                        modifier = nativeModifier,
+                    )
+                }
             }
         }
 
     }
 
-    DisposableEffect(lifecycle, webView, browserBinding) {
+    DisposableEffect(lifecycle, webView, browserBinding, tabActive, retention.keepActive) {
         val view = webView
         val binding = browserBinding
         val observer = LifecycleEventObserver { _, _ ->
             if (view != null && binding != null) {
                 runUiCatching(::showBrowserFailure) {
-                    agentBrowser.setSurfaceStarted(binding, view, lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+                    agentBrowser.setSurfaceStarted(binding, view, (tabActive || retention.keepActive) && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
                 }
             }
         }
@@ -408,11 +474,12 @@ internal fun WorkspaceBrowserPane(
         if (!presented && urlFieldFocused) focusManager.clearFocus(force = true)
     }
 
-    LaunchedEffect(webView) {
+    LaunchedEffect(browserBinding, presented, retention.resumed) {
         val view = webView ?: return@LaunchedEffect
         val binding = browserBinding ?: return@LaunchedEffect
-        if (presented && runUiCatching(::showBrowserFailure) { view.copyBackForwardList().size == 0 } == true && url.isNotBlank()) {
-            navigate(url, initialBinding = binding)
+        if (navigationAvailable && url.isNotBlank() &&
+            runUiCatching(::showBrowserFailure) { view.copyBackForwardList().size == 0 } == true) {
+            reportNavigationFailure { agentBrowser.initializeDefaultPage(binding, url.trim()) }
         }
     }
 
@@ -476,16 +543,83 @@ internal fun WorkspaceBrowserPane(
     }
 }
 
-private class BrowserViewHost(context: Context) : FrameLayout(context) {
+internal class BrowserViewHost(context: Context) : FrameLayout(context), AgentBrowserViewportSurface {
+    private var providerDensity: Float? = null
+    override val rendererDensity: Float get() = providerDensity ?: resources.displayMetrics.density
+
+    override fun useRendererDensity(density: Float) {
+        if (density == rendererDensity) return
+        providerDensity = density
+        if (viewport?.mode == "desktop") browser?.setInitialScale((100 * density).roundToInt())
+        requestLayout()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        providerDensity = null
+        if (viewport?.mode == "desktop") browser?.setInitialScale((100 * rendererDensity).roundToInt())
+        if (viewport != null) requestLayout()
+    }
+    var desktopPreview: DesktopBrowserPreview? = null
+        set(value) {
+            if (field === value) return
+            field?.onTransformChanged = null
+            field = value
+            value?.onTransformChanged = ::positionBrowser
+            positionBrowser()
+        }
     var browser: WebView? = null
     var binding: AgentBrowserController.Binding? = null
+    var viewport: AgentBrowserViewport? = null
+        set(value) { if (field != value) { field = value; requestLayout() } }
 
-    fun present(presented: Boolean) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val profile = viewport
+        val view = browser
+        if (profile == null || view == null) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            return
+        }
+        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+        val density = rendererDensity
+        view.measure(MeasureSpec.makeMeasureSpec(profile.pixels(profile.width, density), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(profile.pixels(profile.height, density), MeasureSpec.EXACTLY))
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val view = browser
+        if (viewport == null || view == null) {
+            super.onLayout(changed, left, top, right, bottom)
+            return
+        }
+        val width = view.measuredWidth
+        val height = view.measuredHeight
+        if (width <= 0 || height <= 0) return
+        view.layout(0, 0, width, height)
+        positionBrowser()
+    }
+
+    private fun positionBrowser() {
+        val view = browser ?: return
+        if (viewport == null || view.measuredWidth == 0 || view.measuredHeight == 0 || width == 0 || height == 0) return
+        val fit = minOf(width.toFloat() / view.measuredWidth, height.toFloat() / view.measuredHeight)
+        val preview = desktopPreview
+        val scale = fit * (preview?.zoom ?: 1f)
+        val pan = preview?.translation(Size(width.toFloat(), height.toFloat())) ?: Offset.Zero
+        view.pivotX = 0f
+        view.pivotY = 0f
+        view.scaleX = scale
+        view.scaleY = scale
+        view.translationX = (width - view.measuredWidth * scale) / 2f + pan.x
+        view.translationY = (height - view.measuredHeight * scale) / 2f + pan.y
+    }
+
+    fun present(presented: Boolean, pageAccessibility: Boolean = true) {
         val visibility = if (presented) View.VISIBLE else View.INVISIBLE
         if (!presented) { clearFocus(); browser?.clearFocus() }
         this.visibility = visibility
         browser?.visibility = visibility
         descendantFocusability = if (presented) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS
-        importantForAccessibility = if (presented) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        importantForAccessibility = if (presented && pageAccessibility) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 }

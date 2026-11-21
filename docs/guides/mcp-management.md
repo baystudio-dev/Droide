@@ -47,8 +47,8 @@ they are not split as a shell command. The runtime validates server names,
 executable/argument bounds, transport and enablement types. Remote HTTP, OAuth
 and custom environment variables are not implemented by this stdio-only client.
 The form and runtime reject those transports/settings instead of pretending they
-are connected. Protocol Auto preserves existing negotiation behavior; 2025 and
-2026 preferences remain available for compatibility.
+are connected. Auto negotiates the protocol when the first connection opens. The 2025 and
+2026 options select a specific protocol for servers that require it.
 
 Saving or enabling a server does not launch it. Connect displays the exact command
 and arguments, and Connect once authorizes that connection/discovery attempt under
@@ -70,13 +70,18 @@ writes. Other servers and unknown JSON fields survive edits. Invalid existing
 configuration is left intact: use Open config to repair it, then Reload. JSON
 formatting is normalized on save; comments are not supported by this JSON format.
 
-## Verification scope
+## Tools, resources and prompts
 
-Regression tests cover guarded configuration writes, dirty editor protection,
-connection review, runtime retirement, late health responses, cancellation,
-external-session projection and actual Compose management controls. Focused host
-compilation and Robolectric tests also cover cursor-aware completion, draft limits,
-disabled mention filtering and keyboard focus on a 320 dp layout. They are not an
-APK build or a physical-device test. See `mcp-management.md` for the
-exact test inventory and focused harness limitations.
-No live third-party MCP credentials/server or remote transport was exercised.
+Connect reads the capabilities advertised by the server. A server that offers
+only resources or prompts can connect with zero tools. Its resources and
+prompts are available through the corresponding MCP operations.
+
+The agent reuses the discovered tool catalog. When a connected server reports
+a tool list change, the next discovery refreshes that server. Before dispatch,
+Droide checks the selected tool against its advertised input schema. If the
+schema changed, the agent can rediscover the tool and prepare a new call. Both
+structured and JSON-form calls use the permission for the named server and tool.
+
+A new external CLI session receives up to 16 enabled workspace servers whose
+commands and arguments can be resolved for its execution environment. Several
+servers can share the same executable. The CLI owns the connections it opens.

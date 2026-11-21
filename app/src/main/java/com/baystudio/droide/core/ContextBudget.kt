@@ -64,6 +64,7 @@ object ModelContextRegistry {
     private const val MAX_CONTEXT_TOKENS = 16_000_000
 }
 
+@kotlinx.serialization.Serializable
 data class ContextEstimate(
     val approximateTokens: Int,
     val serializedChars: Int,

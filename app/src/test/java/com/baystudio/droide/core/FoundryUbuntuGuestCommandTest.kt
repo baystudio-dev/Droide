@@ -7,6 +7,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FoundryUbuntuGuestCommandTest {
+    @Test fun upgradeProbeUsesTheCurrentApkWithTheRetainedGuestAsItsWorkingRoot() {
+        val guest = Files.createTempDirectory("ubuntu user's guest ").toFile()
+        try {
+            val launcher = guest.resolve("launch").apply { writeText("exec /removed-apk/bin/proot") }
+            val current = """printf '%s\n' "$0" "$1" "$2" "$3" """
+            val args = FoundryUbuntuGuestCommand.healthArguments(launcher.path, current)
+            val command = "/bin/sh " + args.joinToString(" ", transform = LocalExecutionSubstrate::shellQuote)
+            val output = invoke(command).toString(Charsets.UTF_8).lines()
+            assertEquals(listOf(launcher.path, "/bin/sh", "-c"), output.take(3))
+            assertTrue(output[3].contains("/usr/bin/dpkg --print-architecture"))
+            assertEquals("exec /removed-apk/bin/proot", launcher.readText())
+            assertEquals(listOf(launcher.path, "/bin/sh", "-c"), FoundryUbuntuGuestCommand.healthArguments(launcher.path).take(3))
+        } finally { guest.deleteRecursively() }
+    }
+
     private fun hostCommand(launcher: File, argv: List<String>): String {
         val command = FoundryUbuntuGuestCommand.build(launcher.absolutePath, argv)
         assertTrue(command.startsWith("/system/bin/sh "))

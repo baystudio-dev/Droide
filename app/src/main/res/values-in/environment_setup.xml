@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="environment_setup_title">Mulai ruang kerjamu</string>
+    <string name="environment_setup_once">Cukup instal environment sekali. Droide menyimpannya untuk digunakan setiap kali aplikasi dibuka.</string>
+    <string name="environment_setup_capabilities">Lingkungan Linux untuk terminal, alat pengembangan, dan agent.</string>
+    <string name="environment_setup_size">Unduhan sekitar 30 MB · Memerlukan internet</string>
+    <string name="environment_setup_consent">Ubuntu diunduh dari Canonical. Berkas program ini berada di luar pemeriksaan F-Droid. Pilih Instal environment untuk mengizinkan unduhan ini.</string>
+    <string name="environment_setup_install">Instal environment</string>
+    <string name="environment_setup_retry">Lanjutkan setup</string>
+    <string name="environment_setup_unverified_download">Droide membuang unduhan Ubuntu karena gagal diverifikasi. Coba lagi. Jika masih gagal, gunakan koneksi lain.</string>
+    <string name="environment_setup_later">Nanti</string>
+    <string name="environment_setup_pause">Jeda instalasi</string>
+    <string name="environment_setup_checking">Memeriksa environment tersimpan…</string>
+    <string name="environment_setup_preparing">Menyiapkan penyimpanan…</string>
+    <string name="environment_setup_downloading">Mengunduh</string>
+    <string name="environment_setup_verifying">Memverifikasi unduhan…</string>
+    <string name="environment_setup_extracting">Memasang environment…</string>
+    <string name="environment_setup_configuring">Menyelesaikan setup…</string>
+    <string name="environment_setup_pausing">Menjeda instalasi…</string>
+    <string name="environment_setup_download_progress">%1$s dari %2$s</string>
+    <string name="session_exit_time_limit">Menyimpan draf dan menghentikan proses. Droide akan tertutup dalam waktu paling lama %1$d detik.</string>
+    <string name="session_paused_section">RUANG KERJA / DIJEDA</string>
+    <string name="session_paused_title">Siap saat kamu kembali</string>
+    <string name="session_paused_description">File dan draf pemulihanmu tetap tersimpan.</string>
+    <string name="session_open">Buka Droide</string>
+    <string name="session_paused_hint">Tugas sebelumnya tidak akan dimulai kembali secara otomatis.</string>
+    <string name="environment_setup_section_invite">LINGKUNGAN LINUX</string>
+    <string name="environment_setup_section_build">PENYIAPAN SATU KALI</string>
+    <string name="environment_setup_section_download">PENYIAPAN LINUX</string>
+    <string name="environment_setup_build_title">Siapkan ruang kerjamu.</string>
+    <string name="environment_setup_build_once">Cukup instal Ubuntu sekali. Lingkungan pengembanganmu siap digunakan setiap kali Droide dibuka.</string>
+    <string name="environment_setup_download_title">Ruang kerjamu sedang disiapkan.</string>
+    <string name="environment_setup_download_source">Mengunduh Ubuntu 24.04 dari Canonical.</string>
+    <string name="environment_setup_ubuntu">Ubuntu 24.04</string>
+    <string name="environment_setup_cancel_download">Batalkan unduhan</string>
+    <string name="environment_setup_wait">Tunggu hingga unduhan selesai.</string>
+    <string name="environment_setup_ready">Lingkungan Linux siap</string>
+    <string name="environment_setup_received">%1$s diterima</string>
+    <string name="environment_setup_megabytes">%1$s MB</string>
+    <string name="environment_setup_repair">Periksa dan pulihkan</string>
+    <string name="environment_setup_repair_description">Droide menemukan penyiapan Ubuntu yang belum selesai. Periksa lingkungan yang ada dan pulihkan jika memungkinkan. File Anda tetap tersimpan.</string>
+</resources>

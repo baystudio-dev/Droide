@@ -12,6 +12,12 @@ import io.github.rosemoe.sora.lang.styling.Styles
 import io.github.rosemoe.sora.lang.styling.TextStyle
 import io.github.rosemoe.sora.widget.schemes.EditorColorScheme
 import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -26,6 +32,46 @@ import org.robolectric.shadows.ShadowLooper
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class EditorSnippetHighlightTest {
     private val style = CodeStyleProfile(IndentStyle.SPACES, 4, 4, 8, "fixture")
+
+    @Test fun liveEditorPaintsSyntaxThenSemanticColorWithoutMovingTheCursor() {
+        val editor = DroideCodeEditor(RuntimeEnvironment.getApplication(), "kotlin", codeStyle = style)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val response = CompletableDeferred<List<LspSemanticToken>>()
+        val lsp = object : LspManager {
+            override val diagnostics = MutableStateFlow<Map<String, List<LspDiagnostic>>>(emptyMap())
+            override suspend fun diagnose(relPath: String) = ""
+            override suspend fun lsp(op: String, path: String, line: Int, col: Int) = ""
+            override suspend fun semanticTokens(path: String, currentText: String?) = response.await()
+        }
+        val controller = DroideEditorHighlightController(editor, "main.kt", "kotlin", lsp, scope, style)
+        fun color(column: Int) = editor.styles?.spans?.read()?.getSpansOnLine(0)
+            ?.lastOrNull { it.column <= column }?.foregroundColorId
+        fun awaitColor(column: Int, role: Int) {
+            val until = System.nanoTime() + 5_000_000_000L
+            while (color(column) != role && System.nanoTime() < until) {
+                ShadowLooper.idleMainLooper()
+                Thread.sleep(5)
+            }
+            assertEquals("Column " + column, role, color(column))
+        }
+        try {
+            val text = "val count = 12"
+            editor.setText(text)
+            editor.layout(0, 0, 480, 220)
+            editor.setSelection(0, 5)
+            controller.schedule(text, immediate = true)
+            awaitColor(0, EditorColorScheme.KEYWORD)
+            response.complete(listOf(LspSemanticToken(0, 0, 3, "custom-unmapped"), LspSemanticToken(0, 4, 5, "function")))
+            awaitColor(4, EditorColorScheme.FUNCTION_NAME)
+            assertEquals(EditorColorScheme.KEYWORD, color(0))
+            assertEquals(text, editor.text.toString())
+            assertEquals(5, editor.cursor.left)
+        } finally {
+            controller.release()
+            scope.cancel()
+            editor.release()
+        }
+    }
 
     @Test fun allBuiltinThemesUseTranslucentSnippetRolesWithoutChangingSyntaxOrSelection() {
         val root = Files.createTempDirectory("snippet-themes-").toFile()

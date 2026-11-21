@@ -222,7 +222,7 @@ class MirrorProcessCustodyTest {
             val failure = runCatching {
                 host.startAdmitted(listOf("/bin/sh"), emptyMap(), null,
                     prepareStart = { PreparedLocalNativeProcess(
-                        ProcessBuilder(working.resolve("missing").path).directory(working), scope) {} },
+                        ProcessBuilder(working.resolve("missing").path).directory(working), scope, cleanup = {}) },
                     processCustody = mirror.processCustody, admitStart = { it() })
             }.exceptionOrNull()
             assertTrue(failure.toString(), failure is java.io.IOException)
@@ -231,7 +231,7 @@ class MirrorProcessCustodyTest {
             ExportWriterAdmission.beginCapture(working).close()
             val process = host.startAdmitted(listOf("/bin/sh"), emptyMap(), null,
                 prepareStart = { PreparedLocalNativeProcess(
-                    ProcessBuilder("/bin/sh", "-c", "exit 0").directory(working), scope) {} },
+                    ProcessBuilder("/bin/sh", "-c", "exit 0").directory(working), scope, cleanup = {}) },
                 processCustody = mirror.processCustody, admitStart = { it() }).also(owner::retain)
             assertEquals(0, process.awaitExit())
             owner.stopAndAwait()

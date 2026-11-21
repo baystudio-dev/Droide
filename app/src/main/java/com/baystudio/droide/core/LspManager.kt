@@ -1,5 +1,7 @@
 package com.baystudio.droide.core
 
+import com.baystudio.droide.BuildConfig
+
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.*
@@ -2604,7 +2606,7 @@ class ProfessionalLspManager(
                 put("processId", JsonNull)
                 put("rootUri", mapper.remoteUriFor(root))
                 put("workspaceFolders", buildJsonArray { add(workspaceFolder(mapper, root, spec)) })
-                put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", "1.00") })
+                put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", BuildConfig.VERSION_NAME) })
                 put("capabilities", LspServerProfiles.clientCapabilities(spec))
                 put("initializationOptions", buildJsonObject { put("contractVersion", 1); put("pairEpoch", epoch) })
                 put("trace", "off")
@@ -2931,7 +2933,7 @@ class ProfessionalLspManager(
                 currentStart()
                 val init = buildJsonObject {
                     put("processId", JsonNull)
-                    put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", "1.00") })
+                    put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", BuildConfig.VERSION_NAME) })
                     put("rootUri", mapper.remoteUriFor(File(selection.sourceLocalCanonical)))
                     put("workspaceFolders", buildJsonArray { add(workspaceFolder(mapper, File(selection.sourceLocalCanonical), spec)) })
                     put("capabilities", LspServerProfiles.clientCapabilities(spec))
@@ -3565,7 +3567,7 @@ class ProfessionalLspManager(
                 }
                 val init = buildJsonObject {
                     put("processId", JsonNull)
-                    put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", "1.00") })
+                    put("clientInfo", buildJsonObject { put("name", "Droide"); put("version", BuildConfig.VERSION_NAME) })
                     put("rootUri", if (key.publishesWorkspaceRoot) JsonPrimitive(rootUri(mapper, projectRoot, spec)) else JsonNull)
                     put("workspaceFolders", buildJsonArray { if (key.publishesWorkspaceRoot) add(workspaceFolder(mapper, projectRoot, spec)) })
                     put("capabilities", LspServerProfiles.clientCapabilities(spec))

@@ -13,9 +13,9 @@ Categories:
 License: LGPL-3.0-only
 AuthorName: BayStudio
 WebSite: https://droide.rekacipta.biz.id
-SourceCode: https://github.com/baystudio-dev/Droide-v1.-00
-IssueTracker: https://github.com/baystudio-dev/Droide-v1.-00/issues
-Changelog: https://github.com/baystudio-dev/Droide-v1.-00/releases
+SourceCode: https://github.com/baystudio-dev/Droide
+IssueTracker: https://github.com/baystudio-dev/Droide/issues
+Changelog: https://github.com/baystudio-dev/Droide/releases
 
 AutoName: Droide
 Summary: Code editor, Linux terminal and development workspace
@@ -26,8 +26,8 @@ Description: |-
   Ubuntu requires ARM64. Optional tools and providers retain their own terms.
 
 RepoType: git
-Repo: https://github.com/baystudio-dev/Droide-v1.-00.git
-Binaries: https://github.com/baystudio-dev/Droide-v1.-00/releases/download/v%v/Droide-%v-release.apk
+Repo: https://github.com/baystudio-dev/Droide.git
+Binaries: https://github.com/baystudio-dev/Droide/releases/download/v%v/Droide-%v-release.apk
 
 Builds:
   - versionName: '1.01'
@@ -67,9 +67,30 @@ Builds:
         --replace "$$OUT$$" "$$OUT$$.aligned"
       - mv "$$OUT$$.aligned" "$$OUT$$"
 
+  - versionName: '1.03'
+    versionCode: 47
+    commit: v1.03-fdroid
+    sudo:
+      - apt-get update
+      - apt-get install -y openjdk-17-jdk-headless make patch
+    output: app/build-source-release-fdroid-candidate/outputs/apk/release/app-release-unsigned.apk
+    srclibs:
+      - reproducible-apk-tools@ca728486d42a79f1c9ec0c6ec755c39f251911a8
+    prebuild: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'cmake;3.22.1'
+    build:
+      - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      - python3 -B tools/build_fdroid_candidate.py --sdk "$ANDROID_HOME" --java-home
+        "$JAVA_HOME" --gradle "$(command -v gradle)" --dependencies "$PWD/.fdroid-source-products"
+        --device-storage
+    ndk: 28.2.13676358
+    postbuild:
+      - python3 "$$reproducible-apk-tools$$/zipalign.py" --page-size 16 --pad-like-apksigner
+        --replace "$$OUT$$" "$$OUT$$.aligned"
+      - mv "$$OUT$$.aligned" "$$OUT$$"
+
 AllowedAPKSigningKeys: 0cc1c5885fea5c5779eb4b3ddcce2a8518b7c207cab7dd7606e94c4d27ccb7ac
 
 AutoUpdateMode: Version v%v-fdroid
 UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+-fdroid$
-CurrentVersion: '1.02'
-CurrentVersionCode: 46
+CurrentVersion: '1.03'
+CurrentVersionCode: 47

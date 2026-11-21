@@ -37,6 +37,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadows.ShadowApplication
 import org.robolectric.shadows.ShadowPowerManager
 import org.robolectric.shadows.ShadowProcess
 
@@ -64,6 +65,8 @@ class ExitActivityLifecycleR64Test {
         // Robolectric replaces Application between tests; retire the factory's process cache too.
         androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory::class.java
             .getDeclaredField("_instance").apply { isAccessible = true }.set(null, null)
+        ShadowApplication.setProcessName(app.packageName)
+        app.applicationInfo.processName = app.packageName
         previousPid = Process.myPid()
         ShadowProcess.setPid(4242)
         ApplicationWorkAdmission.initialize(app)
@@ -122,6 +125,25 @@ class ExitActivityLifecycleR64Test {
         assertEquals(1, cancellations)
         assertNull(readField(app, "retainedHost"))
         assertNull(app.interfaceEpoch.value)
+    }
+
+    @Test fun workspaceOpenedFromAnAlreadyVisibleActivityReceivesForegroundAndBackgroundChanges() {
+        val screen = Robolectric.buildActivity(android.app.Activity::class.java).setup()
+        try {
+            val browser = checkNotNull(realHost().coordinator.runtime.value).agentBrowser
+            fun visible() = org.json.JSONObject(runBlocking { browser.execute("status") }).getBoolean("application_visible")
+            assertTrue("Open Droide created a workspace after the Activity was already STARTED", visible())
+            screen.pause()
+            assertTrue("A paused window can still be visible in split-screen", visible())
+            screen.stop()
+            assertFalse(visible())
+            val denied = runCatching { runBlocking { browser.execute("open", url = "https://github.com") } }
+            assertTrue(denied.exceptionOrNull()?.message.orEmpty().contains("requires Droide to be visible"))
+            screen.restart().start().resume()
+            assertTrue(visible())
+        } finally {
+            screen.pause().stop().destroy()
+        }
     }
 
     @Test fun notificationExitClosesOnlyTheCapturedInterfaceWithoutStartingAnActivity() {
@@ -215,7 +237,7 @@ class ExitActivityLifecycleR64Test {
         controller.recreate()
         compose.waitForIdle()
         compose.onNodeWithText("Preserving unsaved editor drafts").assertIsDisplayed()
-        compose.onNodeWithText("Saving drafts. Droide will close automatically.").assertIsDisplayed()
+        compose.onNodeWithText("Saving drafts and stopping work. Droide will close within 5 seconds.").assertIsDisplayed()
         compose.onNodeWithText("Retry Exit").assertDoesNotExist()
         assertRecoveryOwnerIntact(fixture, controller.get())
         assertTrue(app.exitState.value.running)
@@ -234,7 +256,7 @@ class ExitActivityLifecycleR64Test {
 
         compose.onNodeWithText("Retry Exit").performClick()
         await { app.exitState.value.running && fixture.attempts() == 2 }
-        compose.onNodeWithText("Saving drafts. Droide will close automatically.").assertIsDisplayed()
+        compose.onNodeWithText("Saving drafts and stopping work. Droide will close within 5 seconds.").assertIsDisplayed()
         assertRecoveryOwnerIntact(fixture, controller.get())
         assertFalse(controller.get().isFinishing)
     }
@@ -245,7 +267,7 @@ class ExitActivityLifecycleR64Test {
         await { app.exitState.value.completed }
         val controller = activity()
 
-        compose.onNodeWithText("Session stopped").assertIsDisplayed()
+        compose.onNodeWithText("WORKSPACE / PAUSED").assertIsDisplayed()
         compose.onNodeWithText("Ready when you are").assertIsDisplayed()
         compose.onNodeWithText("Open Droide").assertIsDisplayed().assertIsEnabled()
         compose.waitForIdle()
@@ -411,7 +433,7 @@ class ExitActivityLifecycleR64Test {
         }
         ModelsDevCatalog.parse(cache.readText())
         File(cache.parentFile, "cache.meta").writeText("fetchedAtMs=${System.currentTimeMillis()}")
-        val host = WorkspaceRuntimeHost(app) { _, scope, timers ->
+        val host = WorkspaceRuntimeHost(app, app::isBrowserApplicationVisible) { _, scope, timers ->
             val bridge = DeviceBridgeManager(context, scope, DeviceBridgeDependencies(
                 configureIdentity = {}, create = { error("No transport in lifecycle fixture") },
                 pair = { _, _, _ -> error("No pairing in lifecycle fixture") },

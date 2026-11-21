@@ -1,6 +1,9 @@
 package com.baystudio.droide.ui
 
+import android.app.Activity
 import android.app.Application
+import android.view.MotionEvent
+import org.robolectric.android.controller.ActivityController
 import android.content.Context
 import android.os.Looper
 import android.webkit.ValueCallback
@@ -19,7 +22,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 
-/** Controlled callbacks only. Authored by static review; never compiled or executed in this repair. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class,
     shadows = [BrowserDialogResultShadow::class, BrowserDialogPromptResultShadow::class])
@@ -31,6 +33,7 @@ class BrowserObservationOwnershipTest {
     private val permissions = PermissionEngine(listOf(PermRule("*", "*", PermEffect.ALLOW)))
     private val context = agentWorkflowContext(root, permissions = permissions, browserController = controller,
         provenance = AgentRequestProvenance.primary("observation-session"))
+    private var activity: ActivityController<Activity>? = null
     private lateinit var view: SnapshotView
     private lateinit var binding: AgentBrowserController.Binding
 
@@ -39,6 +42,7 @@ class BrowserObservationOwnershipTest {
         var autoReply = true
         var onInteraction: (() -> Unit)? = null
         var interactionEvaluations = 0
+        val snapshotPages = mutableListOf<String>()
         var navigationDispatches = 0
         override fun loadUrl(url: String) { navigationDispatches++; page = url }
         val callbacks = mutableListOf<ValueCallback<String>>()
@@ -50,13 +54,31 @@ class BrowserObservationOwnershipTest {
         override fun evaluateJavascript(script: String, resultCallback: ValueCallback<String>?) {
             resultCallback ?: return
             callbacks += resultCallback
-            if (script.contains("const t =")) {
-                interactionEvaluations++
-                onInteraction?.invoke()
-                resultCallback.onReceiveValue(JsonPrimitive("{\"ok\":true,\"action\":\"fixture\"}").toString())
+            val answer = when {
+                script.contains("\"operation\":\"click\"") ->
+                    """{"ok":true,"prepared":true,"target":"d1","point":{"x":0.5,"y":0.5}}"""
+                script.contains("const r=D.resolve(") -> """{"ok":true}"""
+                script.contains("\"operation\":\"type\"") -> {
+                    interactionEvaluations++
+                    onInteraction?.invoke()
+                    """{"ok":true,"action":"type"}"""
+                }
+                else -> null
+            }
+            if (answer != null) {
+                resultCallback.onReceiveValue(JsonPrimitive(answer).toString())
                 return
             }
-            if (autoReply) resultCallback.onReceiveValue(snapshot())
+            if (autoReply) { snapshotPages += page; resultCallback.onReceiveValue(snapshot()) }
+        }
+        override fun requestFocus(direction: Int, previouslyFocusedRect: android.graphics.Rect?) = true
+
+        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                interactionEvaluations++
+                onInteraction?.invoke()
+            }
+            return true
         }
     }
 
@@ -69,7 +91,7 @@ class BrowserObservationOwnershipTest {
         controller.configure(view); binding = controller.attach(view)
     }
 
-    @After fun cleanup() { caller.cancel(); view.destroy(); context.webResearch.close(); root.deleteRecursively() }
+    @After fun cleanup() { caller.cancel(); view.destroy(); activity?.pause()?.stop()?.destroy(); context.webResearch.close(); root.deleteRecursively() }
 
     private fun pumpUntil(condition: () -> Boolean) {
         val deadline = System.nanoTime() + 3_000_000_000L
@@ -114,10 +136,11 @@ class BrowserObservationOwnershipTest {
         assertEquals(original, observation.sources.single().url)
     }
 
-    @Test fun clickAndTypeReturningADeniedRedirectPageCannotPublishItsBody() {
+    @Test fun acknowledgedInputDoesNotReadOrDiscloseADeniedRedirect() {
         val original = view.page
         val deniedPage = "http://localhost:3000/denied-result"
         permissions.replacePolicy(PermissionPolicyDocument(rules = listOf(PermRule("webfetch", deniedPage, PermEffect.DENY))))
+        activity = mountBrowserTestSurface(view)
         for (operation in listOf("click", "type")) {
             navigate(original)
             view.onInteraction = { navigate(deniedPage) }
@@ -127,9 +150,15 @@ class BrowserObservationOwnershipTest {
                     put("wait_ms", 100)
                 }, context)
             })
-            assertTrue(result.startsWith("DENIED"))
+            val acknowledgment = Json.parseToJsonElement(result).jsonObject
+            assertEquals(JsonPrimitive(true), acknowledgment["success"])
+            assertEquals(JsonPrimitive(true), acknowledgment["page_pending"])
+            assertFalse(acknowledgment.containsKey("page"))
             assertFalse(result.contains("private-body-fixture"))
-            assertTrue(result.contains("do not replay"))
+            assertFalse(result.contains(deniedPage))
+            val nextRead = completed(caller.async { AgentTools.execute("browser", buildJsonObject { put("operation", "read") }, context) })
+            assertTrue(nextRead.startsWith("DENIED"))
+            assertFalse("Redirect must never be sampled", deniedPage in view.snapshotPages)
         }
         assertEquals(2, view.interactionEvaluations)
     }
@@ -183,7 +212,7 @@ class BrowserObservationOwnershipTest {
         val result = completed(caller.async {
             AgentTools.execute("browser", buildJsonObject { put("operation", "console") }, context)
         })
-        assertTrue(result.startsWith("DENIED"))
+        assertTrue(result.take(180), result.startsWith("DENIED"))
         assertFalse(result.contains("private-console-fixture"))
     }
 

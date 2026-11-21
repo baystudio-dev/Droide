@@ -12,6 +12,12 @@ The existing Extensions catalog and Agent backend picker now include Antigravity
 
 Use Extensions to install/update, authenticate in the shared Ubuntu terminal, then select the agent in chat. Each CLI owns its credentials and native session state. A built-in Meta/Google/Kimi provider connection is independent of CLI authentication. Models, effort settings and supported commands come from the agent's ACP metadata; no model list is invented.
 
+## Reopening a CLI session
+
+Droide reuses the project’s CLI working copy after a clean shutdown. If Android interrupted a session and its process may still write files, Droide opens a separate working copy from the saved project. This applies to external agents in the chat panel. The CLI handles conversation resume through its own ACP transport.
+
+Open **Files → Earlier CLI copies** to recover unpublished work. Select a copy and choose **Save working copy as TAR** to save its contents under a new project filename. The same dialog lists file versions retained during synchronization. You can export the resulting archive from Explorer.
+
 ## Installation and ownership
 
 - Antigravity uses the original publisher archive. Latest resolves Google's platform manifest. SHA-512 authenticates the download; a canonical SHA-256 is recorded afterward for receipt compatibility. The independently verified 1.5.3 checksum remains a historical pin. `--process-per-session` is documented as required for client-provided HTTP MCP servers. Managed wrappers and health probes set the documented `AGY_CLI_DISABLE_AUTO_UPDATE=true` to prevent replacement of sealed bytes outside Extensions.

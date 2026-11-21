@@ -48,7 +48,7 @@ class WorkspaceStoppedScreenTest {
                 WorkspaceStoppedScreen(canOpen = true, failure = null, onOpen = { opens++ })
             } }
         }
-        compose.onNodeWithText("Session stopped").assertIsDisplayed()
+        compose.onNodeWithText("WORKSPACE / PAUSED").assertIsDisplayed()
         compose.onNodeWithText("Ready when you are").assertIsDisplayed()
         compose.onAllNodes(hasClickAction()).assertCountEquals(1)
         compose.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertCountEquals(0)
@@ -98,12 +98,12 @@ class WorkspaceStoppedScreenTest {
         compose.onNodeWithText(reason).performScrollTo().assertIsDisplayed()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.Error, reason))
-        compose.onNodeWithText("Open Droide").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithText("Open Droide").assertIsDisplayed().performClick()
         compose.runOnIdle { assertEquals(1, opens) }
-        compose.onNodeWithText("Your workspace, anywhere.").assertIsDisplayed()
+        compose.onNodeWithText("Previous tasks won’t restart automatically.").assertIsDisplayed()
     }
 
-    @Test fun largeTextAndRtlKeepActionAboveFooterInShortAndLandscapeWindows() {
+    @Test fun largeTextAndRtlKeepActionAndTaskNoticeReachable() {
         var dimensions by mutableStateOf(320.dp to 280.dp)
         compose.setContent { CompositionLocalProvider(
             LocalDensity provides Density(1f, fontScale = 2f),
@@ -112,9 +112,9 @@ class WorkspaceStoppedScreenTest {
             WorkspaceStoppedScreen(canOpen = true, failure = null, onOpen = {})
         } } } }
         fun assertReachableAction() {
-            val button = compose.onNodeWithText("Open Droide").performScrollTo().assertIsDisplayed()
+            val button = compose.onNodeWithText("Open Droide").assertIsDisplayed()
                 .fetchSemanticsNode().boundsInRoot
-            val footer = compose.onNodeWithText("Your workspace, anywhere.").assertIsDisplayed()
+            val footer = compose.onNodeWithText("Previous tasks won’t restart automatically.").assertIsDisplayed()
                 .fetchSemanticsNode().boundsInRoot
             assertTrue(button.height >= 48f)
             assertTrue(button.bottom <= footer.top)

@@ -1,5 +1,17 @@
 package com.baystudio.droide.core
 
+internal object WorkspaceAgentTextBatcher : RetainedEventBatcher<WorkspaceAgentEvent> {
+    override fun compatible(first: WorkspaceAgentEvent, next: WorkspaceAgentEvent): Boolean =
+        (first is WorkspaceAgentEvent.Text && next is WorkspaceAgentEvent.Text) ||
+            (first is WorkspaceAgentEvent.Thought && next is WorkspaceAgentEvent.Thought)
+
+    override fun combine(events: List<WorkspaceAgentEvent>): WorkspaceAgentEvent = when (events.first()) {
+        is WorkspaceAgentEvent.Text -> WorkspaceAgentEvent.Text(events.joinToString("") { (it as WorkspaceAgentEvent.Text).text })
+        is WorkspaceAgentEvent.Thought -> WorkspaceAgentEvent.Thought(events.joinToString("") { (it as WorkspaceAgentEvent.Thought).text })
+        else -> error("Only adjacent text deltas can be combined")
+    }
+}
+
 /** UTF-16 payload units plus a small fixed per-event allowance; not measured heap bytes. */
 internal fun WorkspaceAgentEvent.retainedChars(): Long = 64L + when (this) {
     is WorkspaceAgentEvent.Text -> text.length.toLong()

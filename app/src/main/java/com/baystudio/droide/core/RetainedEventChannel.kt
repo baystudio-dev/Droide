@@ -5,16 +5,31 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 
+internal interface RetainedEventBatcher<T> {
+    fun compatible(first: T, next: T): Boolean
+    fun combine(events: List<T>): T
+}
+
 /** One-owner FIFO. Graceful close and overflow drain accepted events; neither evicts their data. Unlike
  * ProtocolEventMailbox this admits events before the consumer starts. */
 internal class RetainedEventChannel<T>(
     private val capacity: Int,
     private val maxRetainedChars: Long,
+    private val batcher: RetainedEventBatcher<T>? = null,
 ) {
     enum class Admission { ACCEPTED, OVERFLOW, CLOSED }
 
-    private inner class Entry(val value: T, val chars: Long) {
+    private inner class Entry(val value: T, var chars: Long) {
+        private var batch: MutableList<T>? = null
         var released = false
+        fun appendIfCompatible(next: T, cost: Long): Boolean {
+            if (batcher == null || cost > 32_768L - chars || (batch?.size ?: 1) >= 128 || !batcher.compatible(value, next)) return false
+            val items = batch ?: mutableListOf(value).also { batch = it }
+            items.add(next)
+            chars += cost
+            return true
+        }
+        fun delivery(): T = batch?.let { checkNotNull(batcher).combine(it) } ?: value
         fun releaseLocked() {
             if (!released) {
                 released = true
@@ -42,6 +57,10 @@ internal class RetainedEventChannel<T>(
         val result = synchronized(lock) {
             when {
                 closed -> Admission.CLOSED
+                chars <= maxRetainedChars - retained && entries.peekLast()?.appendIfCompatible(value, chars) == true -> {
+                    retained += chars
+                    Admission.ACCEPTED
+                }
                 count >= capacity || chars > maxRetainedChars - retained -> {
                     // Latch the first gap: no later event can be admitted past it.
                     closed = true
@@ -76,7 +95,7 @@ internal class RetainedEventChannel<T>(
                     entries.pollFirst()
                 }
                 if (entry == null) { wake.receiveCatching(); continue }
-                try { action(entry.value) }
+                try { action(entry.delivery()) }
                 finally { synchronized(lock) { entry.releaseLocked() } }
             }
         } finally {

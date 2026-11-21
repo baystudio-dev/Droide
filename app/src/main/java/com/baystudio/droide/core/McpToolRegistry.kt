@@ -33,8 +33,8 @@ class McpToolRegistry(
             val identity = selection.runtimeIdentity
             
 
-            if (permissions.decide("mcp", identity, permissionScope) != PermEffect.ALLOW) {
-                val permission = permissions.decide("mcp", identity, permissionScope)
+            val permission = permissions.decide("mcp", identity, permissionScope)
+            if (permission != PermEffect.ALLOW) {
                 McpHealthRegistry.permissionDeferred(workDir, server, denied = permission == PermEffect.DENY)
                 continue
             }
@@ -42,10 +42,12 @@ class McpToolRegistry(
             val now = System.nanoTime()
             val cached = CACHE[cacheKey]?.takeIf {
                 it.runtimeIdentity == identity && now - it.createdAtNanos <= CACHE_TTL_NANOS
-            }
+            }?.tools?.takeUnless { manager.hasPendingMessages(selection) }
             val tools = if (cached != null) {
-                cached.tools
+                cached
             } else {
+                val loading = CacheEntry(identity, now, null)
+                putCache(cacheKey, loading, now)
                 val discovered = try {
                     manager.discoverTools(selection).mapNotNull { raw ->
                         val name = raw["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
@@ -62,11 +64,13 @@ class McpToolRegistry(
                         )
                     }.sortedWith(compareBy(McpAgentTool::serverName, McpAgentTool::toolName))
                 } catch (cancelled: CancellationException) {
+                    CACHE.remove(cacheKey, loading)
                     throw cancelled
-                } catch (_: Throwable) {
+                } catch (_: Exception) {
                     null
                 }
-                if (discovered != null) putCache(cacheKey, CacheEntry(identity, now, discovered), now)
+                if (discovered == null) CACHE.remove(cacheKey, loading)
+                else CACHE.replace(cacheKey, loading, CacheEntry(identity, now, discovered))
                 discovered.orEmpty()
             }
             for (tool in tools) {
@@ -87,10 +91,10 @@ class McpToolRegistry(
 
     private fun workspaceKey(): String = runCatching { workDir.canonicalPath }.getOrElse { workDir.absolutePath }
 
-    private data class CacheEntry(
+    private class CacheEntry(
         val runtimeIdentity: String,
         val createdAtNanos: Long,
-        val tools: List<McpAgentTool>,
+        val tools: List<McpAgentTool>?,
     )
 
     companion object {

@@ -79,13 +79,15 @@ class UserInitiatedArtifactTransfer(context: Context) {
         specs: List<TrustedArtifactDescriptor>,
         block: suspend (Map<TrustedArtifactDescriptor, File>) -> T,
     ): T {
-        require(specs.size in 1..64) { "Invalid artifact group size" }
-        suspend fun acquire(index: Int): T = if (index == specs.size) {
-            block(specs.associateWith { downloadDescriptor(it, {}) })
-        } else {
-            downloader.withLease(specs[index]) { acquire(index + 1) }
+        val distinctSpecs = specs.distinct()
+        return downloader.withLeases(distinctSpecs) {
+            val files = linkedMapOf<TrustedArtifactDescriptor, File>()
+            for (spec in distinctSpecs) {
+                currentCoroutineContext().ensureActive()
+                files[spec] = downloadDescriptor(spec, {})
+            }
+            block(files)
         }
-        return acquire(0)
     }
 
     suspend fun discard(spec: TrustedArtifactSpec) = downloader.discard(spec)

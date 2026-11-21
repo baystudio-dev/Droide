@@ -215,15 +215,33 @@ internal class MirrorMetadataAuthority(
 
     private fun processRecoveryRequired(rebootObserved: Boolean) = WorkspaceProcessRecoveryRequiredException(
         if (rebootObserved) "CLI session recovery is required: cleanup from an earlier runtime is unconfirmed. Your files and retained changes are preserved. Restart the Android device once, then reopen Droide and retry; restarting only the app is not enough."
-        else "CLI session recovery is required: cleanup from an earlier runtime is unconfirmed. Your files and retained changes are preserved. This workspace has no comparable trusted device-restart proof; retrying the prompt or restarting only the app cannot clear it. Inspect CLI workspace recovery before starting another session."
+        else "CLI session recovery is required: cleanup from an earlier runtime is unconfirmed. Your files and retained changes are preserved. This workspace has no comparable trusted device-restart proof; retrying the prompt or restarting only the app cannot clear it. Inspect CLI workspace recovery before starting another session.",
+        earlierRuntime = true,
     )
+
+    fun needsSeparateWorkingCopy(): Boolean {
+        val earlier = access { db -> transaction(db) {
+            db.version >= PROCESS_CUSTODY_SCHEMA &&
+                MirrorProcessCustodyLedger.read(db, binding).any { it.runtimeId != WorkspaceProcessCustody.runtimeId }
+        } }
+        if (!earlier) return false
+        return try {
+            reconcileProcessOwners(allowCurrentRuntime = true)
+            false
+        } catch (failure: WorkspaceProcessRecoveryRequiredException) {
+            if (!failure.earlierRuntime) throw failure
+            true
+        }
+    }
 
     fun pendingProcessOwners(): List<MirrorProcessCustodyLedger.Owner> = access { db -> transaction(db) {
         readState(db)
         if (db.version < PROCESS_CUSTODY_SCHEMA) emptyList() else MirrorProcessCustodyLedger.read(db, binding)
     } }
 
-    fun requireNoPendingProcessOwners() {
+    fun requireNoPendingProcessOwners() = reconcileProcessOwners(allowCurrentRuntime = false)
+
+    private fun reconcileProcessOwners(allowCurrentRuntime: Boolean) {
         revokeUnenteredProcessReservations(WorkspaceProcessCustody.runtimeId)
         val boot = processBootIdentity()
         val rebootObserved = observeProcessRecovery(boot, WorkspaceProcessCustody.runtimeId)
@@ -235,8 +253,8 @@ internal class MirrorMetadataAuthority(
             val remaining = MirrorProcessRebootBarrier(directory, binding).remaining(MirrorProcessCleanupReceipts(directory, binding, checkpoint = processCheckpoint).remaining(
                 MirrorProcessCustodyLedger.withoutPreviousBoot(owners, boot, WorkspaceProcessCustody.runtimeId)
                     .filterNot { it.id in cancelled }), boot, WorkspaceProcessCustody.runtimeId)
-            if (remaining.isNotEmpty()) {
-                if (remaining.any { it.runtimeId != WorkspaceProcessCustody.runtimeId }) throw processRecoveryRequired(rebootObserved)
+            if (remaining.any { it.runtimeId != WorkspaceProcessCustody.runtimeId }) throw processRecoveryRequired(rebootObserved)
+            if (remaining.isNotEmpty() && !allowCurrentRuntime) {
                 throw WorkspaceProcessRecoveryRequiredException("CLI session recovery is required: ${remaining.size} process cleanup receipt(s) remain unconfirmed. Stop the active CLI session and retry cleanup. Recovery metadata and retained files were preserved.")
             }
             MirrorProcessCustodyLedger.recordBootReconciliation(db, binding, owners, remaining)

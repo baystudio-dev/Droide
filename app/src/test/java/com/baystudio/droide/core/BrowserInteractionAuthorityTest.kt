@@ -6,12 +6,18 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Authored by static review only. These regressions have not been compiled or executed. */
 class BrowserInteractionAuthorityTest {
     private fun key(url: String = "https://example.test/page", target: String = "#submit",
         document: String = "renderer-a:1", operation: String = "click", text: String? = null,
         submit: Boolean = false, dialogText: String? = null) =
         BrowserInteractionAuthority.sessionResource(document, url, operation, target, text, submit, dialogText)
+
+    @Test fun holdAndDoubleClickUseTheSameSiteAndTargetPolicyAsOtherPointerInput() {
+        for (op in listOf("hold", "double_click")) {
+            assertTrue(AgentRepairCompletionPolicy.browserInteracts(op))
+            assertEquals("https://example.test/#$op:#small", BrowserInteractionAuthority.policyResource("https://example.test/", op, "#small"))
+        }
+    }
 
     @Test fun fullUrlAndTargetReachPolicyDespiteIdenticalOldPrefixes() {
         val prefix = "https://example.test/" + "a".repeat(600)

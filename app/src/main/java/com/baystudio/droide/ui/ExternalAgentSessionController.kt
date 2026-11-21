@@ -50,6 +50,7 @@ import com.baystudio.droide.core.PluginConversationHistory
 import com.baystudio.droide.core.PluginHistoryStatus
 import com.baystudio.droide.core.PluginHistoryWindow
 import com.baystudio.droide.core.RetainedEventChannel
+import com.baystudio.droide.core.WorkspaceAgentTextBatcher
 import com.baystudio.droide.core.retainedChars
 import com.baystudio.droide.core.appendBoundedTextTail
 
@@ -614,7 +615,7 @@ internal class ExternalAgentSessionController(
                     }
                 }
                 currentCoroutineContext().ensureActive()
-                val events = RetainedEventChannel<WorkspaceAgentEvent>(128, maxEventRetainedChars)
+                val events = RetainedEventChannel(128, maxEventRetainedChars, WorkspaceAgentTextBatcher)
                 val ownedRun = kotlinx.coroutines.currentCoroutineContext()[Job]
                 val eventRelay = scope.launch {
                     try { events.consume { event -> applyEvent(runId, agentId, event) } }

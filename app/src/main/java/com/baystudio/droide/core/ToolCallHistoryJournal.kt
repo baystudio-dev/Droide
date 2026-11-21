@@ -593,6 +593,9 @@ internal class ToolCallHistoryJournal(
     fun verifyResult(locator: Locator) = synchronized(lock) {
         verifiedResultChannel(locator,read(locator)).use { }
     }
+    fun openVerifiedResult(locator: Locator): java.io.InputStream = synchronized(lock) {
+        java.nio.channels.Channels.newInputStream(verifiedResultChannel(locator, read(locator)))
+    }
     fun writeResult(locator: Locator, output: OutputStream) = synchronized(lock) {
         verifiedResultChannel(locator,read(locator)).use { copyVerifiedResult(it,output) }
     }

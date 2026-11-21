@@ -1,6 +1,7 @@
 package com.baystudio.droide.ui
 
 import android.os.Build
+import com.baystudio.droide.EditorStatusBarRequest
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -77,12 +78,12 @@ private class StatusBarInsetAnimation(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun DroideWindowInsetsHost(
-    statusBarRequestedHidden: Boolean,
-    reclaimTopCutout: Boolean = false,
+    editorStatusBar: EditorStatusBarRequest = EditorStatusBarRequest.FOLLOW_ORIENTATION,
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val configuration = LocalConfiguration.current
+    val reclaimTopCutout = editorStatusBar.reclaimsTopCutout(configuration.orientation)
     val density = LocalDensity.current
     val view = LocalView.current
     val displayCutout = WindowInsets.displayCutout
@@ -106,7 +107,8 @@ internal fun DroideWindowInsetsHost(
         ime = WindowInsets.ime,
         // Legacy adjustResize remains owned by this root; modern panes own their IME residual.
         legacyImeResize = Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM,
-        statusBarRequestedHidden = statusBarRequestedHidden,
+        statusBarRequestedHidden = editorStatusBar.isHidden(configuration.orientation),
+        reserveShownStatusBar = editorStatusBar == EditorStatusBarRequest.SHOW_IN_EDITOR,
         reclaimTopCutout = reclaimTopCutout,
         metricsKey = metricsKey,
         motionEnabled = rememberDroideMotionEnabled(),
@@ -143,6 +145,7 @@ internal fun StatusBarInsetsHost(
     metricsKey: Any?,
     motionEnabled: Boolean,
     reclaimTopCutout: Boolean = false,
+    reserveShownStatusBar: Boolean = false,
     modifier: Modifier = Modifier,
     protectedTopPx: () -> Int = { 0 },
     content: @Composable BoxScope.() -> Unit,
@@ -150,6 +153,7 @@ internal fun StatusBarInsetsHost(
     val controller = remember(status, shownStatus) { StatusBarInsetMotionController() }
     val requestedHidden = rememberUpdatedState(statusBarRequestedHidden)
     val reclaimCutout = rememberUpdatedState(reclaimTopCutout)
+    val reserveShown = rememberUpdatedState(reserveShownStatusBar)
     val currentMetrics = rememberUpdatedState(metricsKey)
     val currentMotionEnabled = rememberUpdatedState(motionEnabled)
     val protectedTop = rememberUpdatedState(protectedTopPx)
@@ -175,10 +179,12 @@ internal fun StatusBarInsetsHost(
                     fallbackFrame = frame,
                     requestedHidden = requestedHidden.value,
                     anticipateHiddenRequest = reclaimCutout.value,
+                    reserveShownSpace = reserveShown.value,
                 )
                 animation.update(sample.fallback)
+                val reclaim = !reserveShown.value && (reclaimCutout.value || controller.reclaimsTopInset)
                 return max(protectedTop.value(), max(sample.topPx.roundToInt().coerceAtLeast(0),
-                    max(if (reclaimCutout.value || controller.reclaimsTopInset) 0 else cutout.getTop(density),
+                    max(if (reclaim) 0 else cutout.getTop(density),
                         max(caption.getTop(density), navigation.getTop(density)))))
             }
         }

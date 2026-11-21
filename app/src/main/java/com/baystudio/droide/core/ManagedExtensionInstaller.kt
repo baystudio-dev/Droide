@@ -379,7 +379,9 @@ class ManagedExtensionInstaller(
                 throw cancelled
             } catch (failure: Exception) {
                 val log = progressLog.append("\n${failure.message ?: "Operation failed"}\n")
-                _state.value = State(Phase.FAILED, log.lineSequence().filter { it.isNotBlank() }.last().take(300), family,
+                val aptFailure = generateSequence<Throwable>(failure) { it.cause }.take(8).filterIsInstance<UbuntuPackageCommandFailure>().firstOrNull()
+                val summary = aptFailure?.summary ?: log.lineSequence().last { it.isNotBlank() }
+                _state.value = State(Phase.FAILED, summary.take(300), family,
                     version.ifBlank { _state.value.version.orEmpty() }, log)
                 throw IllegalStateException(_state.value.message, failure)
             } catch (fatal: Error) {

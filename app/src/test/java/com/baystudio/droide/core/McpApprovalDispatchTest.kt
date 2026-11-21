@@ -12,6 +12,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class McpApprovalDispatchTest {
+    @Test fun legacyEnvelopeUsesTheNamedToolPermissionAndRejectsMalformedArguments() = fixture { root, host ->
+        val c = context(root, AgentPluginSource.EMPTY, host)
+        val keys = mutableListOf<String>()
+        suspend fun invoke(args: JsonObject) = McpAgentOperations.execute(args, c,
+            gate = { _, resource -> keys += resource; "DENIED by fixture" },
+            gatePreview = { _, _, _, _, _ -> error("Unexpected repair") })
+        val envelope = """{"tool":"counter","arguments":{}}"""
+        assertEquals("DENIED by fixture", invoke(buildJsonObject { put("server", "local"); put("input", envelope) }))
+        assertTrue(keys.single(), keys.single().startsWith("local/counter@cfg:"))
+        keys.clear()
+        val result = invoke(buildJsonObject {
+            put("server","local"); put("operation","call_tool"); put("tool","counter"); put("arguments","bad")
+        })
+        assertTrue(result, result.startsWith("ERROR:"))
+        assertTrue(keys.isEmpty())
+        assertTrue(host.starts.isEmpty())
+    }
+
     private class RecordingHost : StdioProcessHost {
         override val executionScope = ProcessExecutionScope.LOCAL_LINUX_ARM64
         val starts = CopyOnWriteArrayList<List<String>>()

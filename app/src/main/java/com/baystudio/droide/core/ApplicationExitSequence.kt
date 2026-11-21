@@ -15,7 +15,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal class ApplicationExitSequence(
     private val scope: CoroutineScope,
     private val steps: List<Step>,
-    private val observationMs: Long = 10_000,
+    private val observationMs: Long = ApplicationExitDeadline.TIMEOUT_MS / 2,
 ) {
     data class Step(val label: String, val run: suspend () -> Unit)
     data class State(

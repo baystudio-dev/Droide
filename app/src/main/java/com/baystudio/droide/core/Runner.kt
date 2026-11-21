@@ -119,11 +119,11 @@ class Runner(
             for (command in commands) {
                 val prepare = terminal.execArgv(command, timeoutMs = timeoutMs)
                 if (prepare.exitCode != 0 || prepare.timedOut) {
-                    return RunnerExecutionResult("Runner: could not prepare remote run directory\n${prepare.output.take(8_000)}", prepare.exitCode, prepare.timedOut)
+                    return RunnerExecutionResult("Runner: could not prepare remote run directory\n${boundedRunOutput(prepare.output, 8_000)}", prepare.exitCode, prepare.timedOut)
                 }
             }
         }
-        val out = StringBuilder("▶ ${plan.display}\n")
+        var out = StringBuilder("▶ ${boundedRunOutput(plan.display, 1_000)}\n")
         var lastExit: Int? = null
         var timedOut = false
         for (originalStep in plan.steps) {
@@ -131,7 +131,9 @@ class Runner(
             val r = WorkspaceCommandInvocation.execute(terminal, workDir, workDir, step, timeoutMs)
             lastExit = r.exitCode
             timedOut = r.timedOut
-            out.append("exit=${r.exitCode}\n${r.output.take(8_000)}\n")
+            out.appendLine(boundedRunOutput(r.output, 8_000))
+            if (r.outputIncomplete) out.appendLine("[Command output capture was incomplete]")
+            out.appendLine("exit=${r.exitCode}")
             if (r.exitCode != 0 || r.timedOut) {
                 if (r.exitCode in setOf(-1, 126, 127)) {
                     if (plan.pythonConfigurationIdentity?.startsWith("sha256:") == true) {
@@ -142,8 +144,9 @@ class Runner(
                 if (r.timedOut) out.append("Tool execution timed out after ${timeoutMs}ms.\n")
                 break
             }
+            if (out.length > 16_000) out = StringBuilder(boundedRunOutput(out, 16_000))
         }
-        return RunnerExecutionResult(out.toString().take(16_000), lastExit, timedOut, processStarted = true)
+        return RunnerExecutionResult(boundedRunOutput(out, 16_000), lastExit, timedOut, processStarted = true)
     }
 
     private suspend fun resolveCompilerAlias(step: List<String>): List<String> {

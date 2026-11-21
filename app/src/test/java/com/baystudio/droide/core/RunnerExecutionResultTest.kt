@@ -38,6 +38,20 @@ class RunnerExecutionResultTest {
         assertEquals(1_800_000L, Runner.DEFAULT_RUN_TIMEOUT_MS)
     }
 
+    @Test fun finalDiagnosticAndExitSurviveSeveralVerboseSteps() = runBlocking {
+        val noisy = "w".repeat(9_000)
+        val ok = ExecResult(0, noisy, false)
+        val last = ExecResult(7, noisy + "\nlink failed", false, outputIncomplete = true)
+        val plan = RunPlan(List(3) { listOf("compile") }, "Build")
+        val result = Runner(Terminal(ok, ok, last), temp.root).runPlanResult(plan)
+        assertEquals(7, result.exitCode)
+        assertTrue(result.output.length <= 16_000)
+        assertTrue(result.output.contains("output omitted"))
+        assertTrue(result.output.contains("link failed"))
+        assertTrue(result.output.contains("capture was incomplete"))
+        assertTrue(result.output.trimEnd().endsWith("exit=7"))
+    }
+
     @Test fun explicitDeadlineCanBeUnlimitedOrUpToOneDayButInvalidValuesAreRejected() = runBlocking {
         val terminal = Terminal(ExecResult(0, "no-deadline", false), ExecResult(0, "one-day", false))
         val runner = Runner(terminal, temp.root)

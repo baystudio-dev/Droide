@@ -222,6 +222,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         responseSession: OwnedResponseContentStore.Session,
         callSession: (String) -> OwnedResponseContentStore.Session,
         onRecovery: (OwnedChatStreamAccumulator.Recovery) -> Unit,
+        onContextEstimate: ((ContextEstimate) -> Unit)? = null,
         onEvent: suspend (LlmStreamEvent) -> Unit,
     ): OwnedChatResult = withContext(Dispatchers.IO) {
         val context = currentCoroutineContext()
@@ -241,16 +242,18 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         require(nativeOptions.toString().length <= MAX_REQUEST_CHARS) { "Provider request options and tool schemas are too large" }
         val networkTarget = NetworkSecurity.validateProviderTarget(provider, "${baseUrl.trimEnd('/')}${spec.chatPath}")
         val replayTarget = ProviderReplayTarget(provider.id, model, ProviderReplayTarget.Protocol.OPENAI_CHAT, OwnedChatEndpointIdentity.fromValidatedUrl(networkTarget.url))
+        val window = AgentIdeContextProjection.Window()
         val normalizedHistory = history.mapNotNull { item ->
             when (item) {
                 is SourceAwareChatHistoryWriter.Item.OwnedAssistantGroup -> item
                 is SourceAwareChatHistoryWriter.Item.OwnedAssistant -> item
-                is SourceAwareChatHistoryWriter.Item.Legacy -> AgentResponseOutcome.providerHistory(listOf(item.message)).singleOrNull()?.let {
+                is SourceAwareChatHistoryWriter.Item.Legacy -> AgentResponseOutcome.providerHistory(listOf(window.project(item.message))).singleOrNull()?.let {
                     SourceAwareChatHistoryWriter.Item.Legacy(ChatReasoningContinuation.restore(it, provider, model))
                 }
             }
         }
         val requestBody = OwnedChatRequestBody.admit(nativeOptions, normalizedHistory, replayTarget, provider, checkCancelled)
+        onContextEstimate?.invoke(requestBody.estimate)
         val builder = Request.Builder().url(networkTarget.url).addHeader("Content-Type", "application/json").addHeader("Accept", "text/event-stream, application/json")
         ProviderTransportV2.applyAuth(builder, provider, apiKey)
         val req = ProviderRequestAuthorizer.authorize(builder.post(requestBody).build(), provider, apiKey)

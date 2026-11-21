@@ -393,17 +393,30 @@ internal object AgentToolCatalog {
             buildJsonObject {
                 put("operation", buildJsonObject {
                     put("type", "string")
-                    put("enum", buildJsonArray { add("status"); add("console"); add("dialog"); add("dialog_respond"); add("open"); add("navigate"); add("read"); add("find"); add("links"); add("scroll"); add("click"); add("type"); add("check"); add("key"); add("hover"); add("swipe"); add("drag"); add("wait_for"); add("back"); add("reload"); add("wait"); add("screenshot") })
+                    put("enum", buildJsonArray { add("status"); add("viewport"); add("request_user_tab"); add("console"); add("dialog"); add("dialog_respond"); add("open"); add("navigate"); add("read"); add("find"); add("links"); add("scroll"); add("click"); add("type"); add("check"); add("key"); add("hover"); add("swipe"); add("drag"); add("double_click"); add("hold"); add("wait_for"); add("back"); add("reload"); add("wait"); add("screenshot") })
+                })
+                put("tab", buildJsonObject { put("type", "string"); put("enum", buildJsonArray { add("agent"); add("user") }); put("description", "Default agent. Use user only after explicit handoff approval for this chat.") })
+                put("mode", buildJsonObject { put("type", "string"); put("enum", buildJsonArray { add("desktop"); add("mobile") }); put("description", "viewport only. Desktop defaults to 1280×800 and mobile to 390×844.") })
+                for (size in listOf("width", "height")) put(size, buildJsonObject {
+                    put("type", "integer"); put("minimum", 240); put("maximum", 1920); put("description", "Optional agent viewport dimension in CSS pixels.")
                 })
                 put("url", buildJsonObject { put("type", "string") })
-                put("target", buildJsonObject { put("type", "string"); put("description", "Observed opaque element reference or unique CSS selector, including open shadow roots. scroll: optional container (default document). dialog_respond: returned opaque dialog id. Refresh stale references with read.") })
+                put("target", buildJsonObject { put("type", "string"); put("description", "Observed opaque element reference or unique CSS selector, including open shadow roots. scroll/swipe: optional element inside the intended area (default visible feed). dialog_respond: returned opaque dialog id. Refresh stale references with read.") })
                 put("text", buildJsonObject { put("type", "string"); put("description", "type: replace text/select option value or label; scroll: up/down/left/right/top/bottom; swipe: finger movement up/down/left/right; dialog_respond: accept or dismiss") })
                 put("checked", buildJsonObject { put("type", "boolean"); put("description", "check: desired checkbox/radio/switch state; idempotent, use instead of repeated click") })
                 put("option_index", buildJsonObject { put("type", "integer"); put("minimum", 0); put("maximum", 10_000); put("description", "type on select: option index from read; no text required") })
                 put("key", buildJsonObject { put("type", "string"); put("description", "key: Enter, Tab, Escape, ArrowUp/Down/Left/Right, Space, Backspace, Delete, Home/End, PageUp/Down, or Ctrl/Alt/Shift/Meta combinations. Target required. System and clipboard shortcuts are excluded; use type for supplied text.") })
                 put("end_target", buildJsonObject { put("type", "string"); put("description", "drag destination reference or unique selector; both targets must be visible together") })
+                put("drag_input", buildJsonObject {
+                    put("type", "string"); put("enum", buildJsonArray { add("auto"); add("touch") })
+                    put("description", "drag: auto chooses HTML drop events, precise pointer movement or touch. Choose touch for a touch-only widget.")
+                })
+                for (axis in listOf("delta_x", "delta_y")) put(axis, buildJsonObject {
+                    put("type", "number"); put("minimum", -4096); put("maximum", 4096)
+                    put("description", "drag: CSS pixel offset from the start instead of end_target. Positive points right/down.")
+                })
                 put("timeout_ms", buildJsonObject { put("type", "integer"); put("minimum", 100); put("maximum", 15_000); put("description", "Maximum wait for a ready/stable target before dispatch; default 4000. No action is automatically replayed after dispatch.") })
-                put("duration_ms", buildJsonObject { put("type", "integer"); put("minimum", 100); put("maximum", 2_000); put("description", "swipe/drag duration; default 350") })
+                put("duration_ms", buildJsonObject { put("type", "integer"); put("minimum", 100); put("maximum", 2_000); put("description", "swipe/drag/hold duration before release; hold defaults to the system long-press interval plus 100 ms") })
                 put("dialog_text", buildJsonObject { put("type", "string"); put("description", "dialog_respond: explicit non-sensitive answer required when accepting a prompt (empty string allowed); omit for alert/confirm or dismiss; never credentials or tokens") })
                 put("full_page", buildJsonObject { put("type", "boolean"); put("description", "Default false captures the viewport. Use true only when required visual evidence spans the page; bounded tiled capture costs more work. Prefer read/find for text and inspect completeness/extent.") })
                 put("submit", buildJsonObject { put("type", "boolean") })

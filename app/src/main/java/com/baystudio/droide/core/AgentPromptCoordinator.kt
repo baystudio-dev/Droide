@@ -136,7 +136,7 @@ class AgentPromptCoordinator(
                 .map { AgentMessage("user", it.input.text, media = it.input.media) },
             apiEntries = promoted.mapIndexed { index, item ->
                 if (item.input.origin == AgentInputOrigin.USER) {
-                    VisionSupport.userMessage(AgentIdeContextProjection.forModel(AgentMediaPromptReceipt.forModel(item.input.text, item.input.media, item.input.images), item.input.ideContext, maxApiMessageChars), item.input.images, maxApiMessageChars)
+                    AgentIdeContextProjection.userMessage(AgentMediaPromptReceipt.forModel(item.input.text, item.input.media, item.input.images), item.input.ideContext, item.input.images, maxApiMessageChars)
                 } else SubagentDeliveryHistory.entry(
                     "[Background subagent completion; synthetic system event, not user-authored]\n${item.input.text}".take(maxApiMessageChars), receipts[index],
                 )
