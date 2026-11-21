@@ -79,15 +79,23 @@ object ModelCapabilityRegistry {
         )
 
     fun installRuntime(capability: ModelCapabilities) {
-        require(capability.source == ModelCapabilitySource.RUNTIME_PROVIDER) { "Runtime capability must identify its source" }
-        val provider = capability.providerId.trim().lowercase()
-        val model = capability.modelId.trim()
-        require(provider.isNotEmpty() && model.isNotEmpty()) { "Runtime capability identity is invalid" }
-        val normalized = capability.copy(providerId = provider, modelId = model)
-        val k = key(provider, model)
+        installRuntime(listOf(capability))
+    }
+
+    internal fun installRuntime(capabilities: List<ModelCapabilities>, replaceProvider: String? = null) {
+        val updates = capabilities.associate { capability ->
+            require(capability.source == ModelCapabilitySource.RUNTIME_PROVIDER) { "Runtime capability must identify its source" }
+            val provider = capability.providerId.trim().lowercase()
+            val model = capability.modelId.trim()
+            require(provider.isNotEmpty() && model.isNotEmpty() && (replaceProvider == null || replaceProvider == provider)) { "Runtime capability identity is invalid" }
+            key(provider, model) to capability.copy(providerId = provider, modelId = model)
+        }
+        if (updates.isEmpty() && replaceProvider == null) return
         while (true) {
             val current = runtime.get()
-            val next = current.toMutableMap().apply { put(k, current[k]?.let { merge(it, normalized) } ?: normalized) }.toMap()
+            val next = current.toMutableMap()
+            if (replaceProvider != null) next.keys.removeAll { it.startsWith(replaceProvider + "\u0000") }
+            updates.forEach { (id, value) -> next[id] = next[id]?.let { merge(it, value) } ?: value }
             if (runtime.compareAndSet(current, next)) break
         }
     }

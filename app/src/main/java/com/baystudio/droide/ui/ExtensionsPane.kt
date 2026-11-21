@@ -1,5 +1,19 @@
 package com.baystudio.droide.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
+import com.baystudio.droide.R
+import com.baystudio.droide.core.DeclarativeExtensionRuntime
+import com.baystudio.droide.core.ExecutionScope
+import com.baystudio.droide.core.ExtensionMarketplaceManager
+import com.baystudio.droide.core.MarketplaceExtensionSummary
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,7 +22,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
@@ -38,7 +55,13 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
-internal data class ExtensionSelection(val familyId: String, val version: String)
+internal data class ExtensionSelection(val familyId: String, val version: String, val scope: ExecutionScope? = null) : java.io.Serializable {
+    fun matches(item: ExtensionVersionState): Boolean =
+        item.family.id == familyId && item.version.version == version && (scope == null || scope == item.version.scope)
+    companion object {
+        fun from(item: ExtensionVersionState) = ExtensionSelection(item.family.id, item.version.version, item.version.scope)
+    }
+}
 
 /** Keep deep-link navigation pending until discovery replaces the initial detection placeholders. */
 @Composable
@@ -54,15 +77,13 @@ internal fun ExtensionNavigationEffects(
         if (initialFamilyId != null) {
             if (!initialSnapshotPending) {
                 extensionDefaultChoice(items.filter { it.family.id == initialFamilyId })?.let { choice ->
-                    onSelect(ExtensionSelection(choice.family.id, choice.version.version))
+                    onSelect(ExtensionSelection.from(choice))
                     onInitialFamilyHandled()
                 }
             }
-        } else if (selection != null && items.none {
-                it.family.id == selection.familyId && it.version.version == selection.version
-            }) {
+        } else if (selection != null && items.none(selection::matches)) {
             val replacement = extensionDefaultChoice(items.filter { it.family.id == selection.familyId })
-            onSelect(replacement?.let { ExtensionSelection(it.family.id, it.version.version) })
+            onSelect(replacement?.let(ExtensionSelection::from))
         }
     }
 }
@@ -113,10 +134,18 @@ fun ExtensionsPane(
     initialFamilyId: String? = null,
     environmentRevision: Long = 0L,
     onOpenTerminal: (() -> Unit)? = null,
+    onExit: (() -> Unit)? = null,
+    handleSystemBack: Boolean = true,
     onInitialFamilyHandled: () -> Unit = {},
 ) {
+    val dispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    val exitPage = onExit ?: { dispatcher?.onBackPressed(); Unit }
     manager.temporaryRecoveryReason?.let { reason ->
-        Text(reason + " Normal startup returns after the app process restarts.", modifier = Modifier.padding(16.dp))
+        BackHandler(enabled = handleSystemBack && onExit != null, onBack = exitPage)
+        Column {
+            ExtensionPageHeader(false, exitPage)
+            Text(reason + " Normal startup returns after the app process restarts.", modifier = Modifier.padding(16.dp))
+        }
         return
     }
 
@@ -125,224 +154,178 @@ fun ExtensionsPane(
     val marketplaceSnapshot by manager.marketplace.snapshot.collectAsState()
     val bridgeState by deviceBridge.state.collectAsState()
     val scope = rememberWorkspaceCoroutineScope()
-    var query by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf<ExtensionCategory?>(null) }
-    var selectedIdentity by remember(manager) { mutableStateOf<ExtensionSelection?>(null) }
-    var selectedMarketplace by remember { mutableStateOf<com.baystudio.droide.core.MarketplaceExtensionSummary?>(null) }
-    var refreshMessage by remember { mutableStateOf<String?>(null) }
+    var query by rememberSaveable(manager.workspaceId) { mutableStateOf("") }
+    var category by rememberSaveable(manager.workspaceId) { mutableStateOf<ExtensionCategory?>(null) }
+    var group by rememberSaveable(manager.workspaceId) { mutableStateOf<ExtensionBrowseGroup?>(null) }
+    var allCatalog by rememberSaveable(manager.workspaceId) { mutableStateOf(false) }
+    var installedOnly by rememberSaveable(manager.workspaceId) { mutableStateOf(false) }
+    var selectedIdentity by rememberSaveable(manager.workspaceId) { mutableStateOf<ExtensionSelection?>(null) }
+    var openedByDeepLink by rememberSaveable(manager.workspaceId) { mutableStateOf(false) }
+    var familyHistory by rememberSaveable(manager.workspaceId) { mutableStateOf(arrayListOf<ExtensionSelection>()) }
+    var openedFromInstalled by rememberSaveable(manager.workspaceId) { mutableStateOf(false) }
+    var marketplaceSelection by rememberSaveable(manager.workspaceId) { mutableStateOf<String?>(null) }
+    val selectedMarketplace = remember(marketplaceSelection) { marketplaceSelection?.let { Json.decodeFromString<MarketplaceExtensionSummary>(it) } }
+    var refreshMessage by remember(manager) { mutableStateOf<String?>(null) }
+    val focus = LocalFocusManager.current
+    val home = group == null && !allCatalog && !installedOnly && query.isBlank()
+    val listState = key(group, allCatalog, installedOnly, category, query.trim()) { rememberLazyListState() }
 
-    ExtensionNavigationEffects(
-        items = snapshot.items,
-        initialFamilyId = initialFamilyId,
-        initialSnapshotPending = snapshot.message == "Checking extensions…",
-        selection = selectedIdentity,
-        onSelect = { selectedIdentity = it; selectedMarketplace = null },
-        onInitialFamilyHandled = onInitialFamilyHandled,
-    )
-
-    // Keep detail status and actions tied to the same snapshot as the catalog.
-    val selection = selectedIdentity
-    val selected = selection?.let { identity ->
-        snapshot.items.firstOrNull { it.family.id == identity.familyId && it.version.version == identity.version }
+    fun back() {
+        when {
+            selectedMarketplace != null -> marketplaceSelection = null
+            selectedIdentity != null -> {
+                selectedIdentity = familyHistory.lastOrNull()
+                if (familyHistory.isEmpty() && openedByDeepLink) {
+                    openedByDeepLink = false
+                    exitPage()
+                } else familyHistory = ArrayList(familyHistory.dropLast(1))
+            }
+            query.isNotEmpty() -> { focus.clearFocus(); query = "" }
+            installedOnly -> installedOnly = false
+            category != null -> category = null
+            group != null || allCatalog -> { group = null; allCatalog = false }
+            else -> exitPage()
+        }
     }
+    BackHandler(enabled = handleSystemBack && (onExit != null || !home || selectedIdentity != null || selectedMarketplace != null), onBack = ::back)
+    ExtensionNavigationEffects(
+        items = snapshot.items, initialFamilyId = initialFamilyId,
+        initialSnapshotPending = snapshot.message == "Checking extensions…", selection = selectedIdentity,
+        onSelect = { selectedIdentity = it; marketplaceSelection = null },
+        onInitialFamilyHandled = { familyHistory = arrayListOf(); openedByDeepLink = true; onInitialFamilyHandled() },
+    )
+    val selected = selectedIdentity?.let { id -> snapshot.items.firstOrNull(id::matches) }
     ExtensionCatalogRefreshEffects(
         manager, activeFile, bridgeState.connected, installerState,
-        refresh = { manager.refresh(it); Unit },
-        environmentRevision = environmentRevision,
+        refresh = { manager.refresh(it); Unit }, environmentRevision = environmentRevision,
         onFailure = { refreshMessage = it },
     )
-
-    LaunchedEffect(manager, query, category) {
-        val remoteQuery = query.trim()
-        if (category == null && remoteQuery.length >= com.baystudio.droide.core.ExtensionMarketplaceManager.MIN_REMOTE_QUERY_CHARS) {
-            delay(350)
-            manager.marketplace.search(remoteQuery)
+    val remoteQuery = query.trim()
+    val searchRemote = !installedOnly && category == null && group == null &&
+        remoteQuery.length >= ExtensionMarketplaceManager.MIN_REMOTE_QUERY_CHARS
+    LaunchedEffect(manager, searchRemote, remoteQuery) {
+        if (searchRemote) { delay(350); manager.marketplace.search(remoteQuery) }
+    }
+    val refresh: () -> Unit = {
+        scope.launch {
+            runSuspendCatching { manager.refreshUserEnvironment(activeFile) }
+                .onSuccess { refreshMessage = null; if (searchRemote) manager.marketplace.search(remoteQuery) }
+                .onFailure { refreshMessage = it.message ?: "Extensions refresh failed" }
         }
     }
-
-    val filtered = remember(snapshot.items, query, category) {
-        extensionCatalogCards(snapshot.items, query, category)
-    }
-    val remoteQuery = query.trim()
-    val remoteResults = marketplaceSnapshot.page?.extensions
-        ?.takeIf { category == null && marketplaceSnapshot.query.equals(remoteQuery, ignoreCase = true) }
-        .orEmpty()
-
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it.take(120) },
-                modifier = Modifier.weight(1f),
-                label = { Text("Search extensions") },
-                singleLine = true,
+    val detail = selected != null || selectedMarketplace != null
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        ExtensionPageHeader(detail, ::back, if (detail) null else refresh)
+        if (installerState.running && selected?.family?.id != installerState.familyId) {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(installerState.message, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = { manager.installer.cancelInstallation() }) { Text(stringResource(R.string.ext_cancel_install)) }
+            }
+            if (installerState.log.isNotBlank()) Text(installerState.log.takeLast(800),
+                Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, maxLines = 2)
+        }
+        val notice = refreshMessage ?: marketplaceSnapshot.message.takeIf {
+            !detail && searchRemote && marketplaceSnapshot.query.equals(remoteQuery, ignoreCase = true) &&
+                (marketplaceSnapshot.loading || marketplaceSnapshot.offlineCache)
+        }
+        if (!notice.isNullOrBlank()) DismissibleNotice(notice, ownerKey = manager,
+            color = if (marketplaceSnapshot.offlineCache) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
+        when {
+            selectedMarketplace != null -> MarketplaceExtensionDetail(selectedMarketplace, manager, openedFromInstalled)
+            selected != null -> ExtensionDetail(
+                item = selected, manager = manager, onOpenTerminal = onOpenTerminal,
+                onSelectItem = { next ->
+                    if (next.family.id != selected.family.id) familyHistory = ArrayList(familyHistory + ExtensionSelection.from(selected))
+                    selectedIdentity = ExtensionSelection.from(next)
+                }, onRefresh = { scope.launch { runSuspendCatching { manager.refreshUserEnvironment(activeFile) } } },
             )
-            IconButton(onClick = {
-                scope.launch {
-                    runSuspendCatching { manager.refreshUserEnvironment(activeFile) }
-                        .onSuccess {
-                            refreshMessage = null
-                            if (category == null && remoteQuery.length >= com.baystudio.droide.core.ExtensionMarketplaceManager.MIN_REMOTE_QUERY_CHARS) {
-                                manager.marketplace.search(remoteQuery)
+            else -> {
+                ExtensionSearchControls(query, { query = it.take(120) }, installedOnly, group == null && !allCatalog && query.isBlank()) {
+                    focus.clearFocus()
+                    if (installedOnly != it) {
+                        installedOnly = it
+                    } else if (!it && (group != null || category != null)) {
+                        group = null
+                        category = null
+                        allCatalog = true
+                    }
+                }
+                val filtered = remember(snapshot.items, remoteQuery, category, group, installedOnly, home) {
+                    if (home) emptyList() else extensionCatalogCards(snapshot.items, remoteQuery, category.takeUnless { installedOnly }).filter { card ->
+                        (installedOnly || group?.includes(card.primary.family) != false) && (!installedOnly || card.installed.isNotEmpty())
+                    }
+                }
+                val marketplaceOperation by manager.marketplace.operation.collectAsState()
+                val marketItems = if (installedOnly) {
+                    remember(snapshot.items, marketplaceOperation.phase, remoteQuery) {
+                        DeclarativeExtensionRuntime.records().filter { record ->
+                            listOf(record.extensionId, record.displayName, record.publisher).any { it.contains(remoteQuery, true) }
+                        }.map { record ->
+                            MarketplaceExtensionSummary(record.extensionId, record.publisher, record.extensionId.substringAfter('.'),
+                                record.displayName, record.version, metadataUrl = "")
+                        }
+                    }
+                } else if (searchRemote && marketplaceSnapshot.query.equals(remoteQuery, ignoreCase = true)) {
+                    marketplaceSnapshot.page?.extensions.orEmpty()
+                } else emptyList()
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+                    item("heading") {
+                        Text(stringResource(when {
+                            installedOnly -> R.string.ext_offline_records
+                            query.isNotBlank() -> R.string.ext_results
+                            home -> R.string.ext_by_task
+                            else -> group?.title ?: R.string.ext_catalog
+                        }), Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 6.dp),
+                            style = MaterialTheme.typography.titleMedium)
+                    }
+                    if (home) {
+                        items(ExtensionBrowseGroup.entries.toList(), key = { it.name }) { task ->
+                            ExtensionTaskRow(task) { focus.clearFocus(); group = task }
+                        }
+                        item("all") { TextButton(onClick = { focus.clearFocus(); allCatalog = true },
+                            modifier = Modifier.padding(horizontal = 8.dp)) { Text(stringResource(R.string.ext_all_packages)) } }
+                    } else {
+                        if (allCatalog && group == null && !installedOnly) item("categories") {
+                            Box(Modifier.padding(horizontal = 8.dp)) { ExtensionCategoryMenu(category) { category = it } }
+                        }
+                        items(filtered, key = { "local:" + it.primary.family.id }) { card ->
+                            ExtensionRow(card) {
+                                focus.clearFocus()
+                                openedByDeepLink = false
+                                familyHistory = arrayListOf()
+                                selectedIdentity = ExtensionSelection.from(card.primary)
                             }
                         }
-                        .onFailure { refreshMessage = it.message ?: "Extensions refresh failed" }
-                }
-            }) { Icon(Icons.Default.Refresh, "Refresh extensions") }
-        }
-
-        if (installerState.running && selected?.family?.id != installerState.familyId) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(installerState.message, style = MaterialTheme.typography.bodySmall)
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                if (installerState.log.isNotBlank()) Text(installerState.log.takeLast(800),
-                    style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, maxLines = 5)
-                TextButton(onClick = { manager.installer.cancelInstallation() }) { Text("Cancel installation") }
-            }
-        }
-        val categories = listOf<ExtensionCategory?>(null) + ExtensionCategory.entries
-        ScrollableTabRow(
-            selectedTabIndex = categories.indexOf(category).coerceAtLeast(0),
-            edgePadding = 8.dp,
-        ) {
-            categories.forEach { item ->
-                Tab(
-                    selected = category == item,
-                    onClick = { category = item },
-                    text = { Text(item?.label ?: "All", maxLines = 1) },
-                )
-            }
-        }
-
-        val marketplaceNotice = if (
-            category == null &&
-            remoteQuery.length >= com.baystudio.droide.core.ExtensionMarketplaceManager.MIN_REMOTE_QUERY_CHARS &&
-            (marketplaceSnapshot.loading || marketplaceSnapshot.offlineCache)
-        ) marketplaceSnapshot.message else null
-        val notice = refreshMessage ?: marketplaceNotice
-        if (!notice.isNullOrBlank()) {
-            DismissibleNotice(notice, ownerKey = manager,
-                color = if (marketplaceSnapshot.offlineCache) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary)
-        }
-
-        when {
-            selectedMarketplace != null -> MarketplaceExtensionDetail(
-                summary = selectedMarketplace!!,
-                manager = manager,
-                onBack = { selectedMarketplace = null },
-            )
-            selected != null -> ExtensionDetail(
-                item = selected,
-                manager = manager,
-                onOpenTerminal = onOpenTerminal,
-                onSelectItem = { selectedIdentity = ExtensionSelection(it.family.id, it.version.version) },
-                onBack = { selectedIdentity = null },
-                onRefresh = {
-                    scope.launch {
-                        runSuspendCatching { manager.refreshUserEnvironment(activeFile) }
-                    }
-                },
-            )
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                if (filtered.isNotEmpty()) {
-                    items(filtered, key = { "local:${it.primary.family.id}" }) { card ->
-                        ExtensionRow(card = card, onClick = {
-                            selectedIdentity = ExtensionSelection(card.primary.family.id, card.primary.version.version)
-                        })
-                    }
-                }
-                if (category == null && remoteQuery.length >= com.baystudio.droide.core.ExtensionMarketplaceManager.MIN_REMOTE_QUERY_CHARS) {
-                    item(key = "open-vsx-heading") {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Open VSX · inspect compatibility before installing", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                            if (marketplaceSnapshot.loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        if (filtered.isEmpty() && marketItems.isEmpty()) item("empty") {
+                            Text(stringResource(if (installedOnly) R.string.ext_none_installed else R.string.ext_empty),
+                                Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                    }
-                    items(remoteResults, key = { "ovsx:${it.id}@${it.version}" }) { item ->
-                        MarketplaceExtensionRow(item = item, manager = manager, onClick = { selectedMarketplace = item })
-                    }
-                    if (!marketplaceSnapshot.loading && remoteResults.isEmpty()) {
-                        item(key = "open-vsx-empty") {
-                            Text(
-                                marketplaceSnapshot.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(12.dp),
-                            )
+                        if (searchRemote || marketItems.isNotEmpty()) {
+                            item("open-vsx-heading") {
+                                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(stringResource(if (installedOnly) R.string.ext_editor_extensions else R.string.ext_openvsx),
+                                        Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                                    if (searchRemote && marketplaceSnapshot.loading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                                }
+                            }
+                            items(marketItems, key = { "ovsx:" + it.id + "@" + it.version }) { offer ->
+                                MarketplaceExtensionRow(offer, manager, installedOnly) {
+                                    focus.clearFocus(); openedFromInstalled = installedOnly; marketplaceSelection = Json.encodeToString(offer)
+                                }
+                            }
+                            if (searchRemote && !marketplaceSnapshot.loading && marketItems.isEmpty() &&
+                                marketplaceSnapshot.query.equals(remoteQuery, true)) item("open-vsx-empty") {
+                                Text(marketplaceSnapshot.message, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }
             }
         }
     }
-}
-
-@Composable
-internal fun ExtensionRow(card: ExtensionCatalogCard, onClick: () -> Unit) {
-    val item = card.primary
-    OutlinedCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box {
-                ExtensionBrandIcon(family = item.family, size = 36.dp)
-                ExtensionStateBadge(
-                    state = item.state,
-                    modifier = Modifier.align(Alignment.BottomEnd),
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(item.family.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                    Text(if (item.family.category == ExtensionCategory.LANGUAGES) "Editor syntax" else item.version.version,
-                        modifier = Modifier.widthIn(max = 150.dp).padding(start = 8.dp),
-                        style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace)
-                }
-                val provenance = item.family.publisher.takeIf(String::isNotBlank)
-                    ?.let { "$it · ${item.family.category.label}" }
-                    ?: item.family.category.label
-                Text(provenance, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                extensionListStatus(item)?.let { status ->
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-                if (card.installed.any { it != item } || (item.state == ExtensionState.AVAILABLE && card.installed.isNotEmpty())) {
-                    extensionInstalledSummary(card)?.let { status ->
-                        Text(status, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-                    }
-                }
-                if (extensionSelectableChoices(card.choices).size > 1) {
-                    Text("Versions and environments available", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-    }
-}
-
-private fun extensionListStatus(item: ExtensionVersionState): String? = when (item.state) {
-    ExtensionState.BUILT_IN -> if (item.family.category == ExtensionCategory.LANGUAGES) LanguageRuntimePresentation.listStatus(item.family.id.removePrefix("language.")) else null
-    ExtensionState.INSTALLED -> "Installed"
-    ExtensionState.EXTERNAL -> "Installed"
-    ExtensionState.AVAILABLE -> "Not installed"
-    ExtensionState.MANUAL -> "Install in Terminal"
-    ExtensionState.PROJECT_DEPENDENCY -> "Project dependency"
-    ExtensionState.CHECKING -> "Checking…"
-    ExtensionState.UNAVAILABLE -> "Unavailable"
 }
 
 private fun extensionDetailStatus(item: ExtensionVersionState): String {
@@ -364,42 +347,24 @@ private fun extensionDetailStatus(item: ExtensionVersionState): String {
 private fun MarketplaceExtensionRow(
     item: com.baystudio.droide.core.MarketplaceExtensionSummary,
     manager: DevelopmentExtensionsManager,
+    installedLibrary: Boolean,
     onClick: () -> Unit,
 ) {
     val installedVersion = manager.marketplace.installedVersion(item.id)
-    OutlinedCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box {
-                MarketplaceBrandIcon(item, manager, 36.dp)
-                ExtensionStateBadge(
-                    state = if (installedVersion != null) ExtensionState.INSTALLED else ExtensionState.AVAILABLE,
-                    modifier = Modifier.align(Alignment.BottomEnd),
-                )
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(item.displayName, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                    Text(item.version, style = MaterialTheme.typography.labelMedium, fontFamily = FontFamily.Monospace)
-                }
-                val publisher = buildString {
-                    append(item.namespace)
-                    append(" · Open VSX")
-                    if (item.verifiedPublisher) append(" · verified")
-                }
-                Text(publisher, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, maxLines = 1)
-                Text(
-                    if (installedVersion != null && installedVersion != item.version) "Update available from $installedVersion · ${item.description}" else item.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                )
-            }
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 68.dp).padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        MarketplaceBrandIcon(item, manager, 32.dp)
+        Column(Modifier.weight(1f)) {
+            Text(item.displayName, style = MaterialTheme.typography.titleMedium)
+            Text(if (installedLibrary) item.namespace else "${item.namespace} · Open VSX",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (item.description.isNotBlank()) Text(item.description, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+            if (item.deprecated) Text("Deprecated", style = MaterialTheme.typography.labelMedium)
+            if (installedVersion != null) Text(stringResource(R.string.ext_installed_version, installedVersion), style = MaterialTheme.typography.labelMedium)
         }
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
     }
+    HorizontalDivider(Modifier.padding(start = 56.dp, end = 14.dp))
 }
 
 @Composable
@@ -433,7 +398,7 @@ private fun MarketplaceBrandIcon(
 private fun MarketplaceExtensionDetail(
     summary: com.baystudio.droide.core.MarketplaceExtensionSummary,
     manager: DevelopmentExtensionsManager,
-    onBack: () -> Unit,
+    fromInstalled: Boolean,
 ) {
     val scope = rememberWorkspaceCoroutineScope()
     val operation by manager.marketplace.operation.collectAsState()
@@ -443,23 +408,33 @@ private fun MarketplaceExtensionDetail(
     var confirmInstall by remember(summary.id) { mutableStateOf(false) }
     var confirmUninstall by remember(summary.id) { mutableStateOf(false) }
 
-    LaunchedEffect(summary.id) {
+    val installedVersion = remember(summary.id, operation.running) { manager.marketplace.installedVersion(summary.id) }
+    val owned by produceState<Boolean?>(null, summary.id, installedVersion, operation.running) {
+        if (operation.running) return@produceState
+        value = if (installedVersion == null) false else runSuspendCatching { manager.marketplace.ownsInstalledRecord(summary.id) }.getOrDefault(false)
+    }
+    val rollbackAvailable by produceState(false, summary.id, owned, operation.running) {
+        if (operation.running) return@produceState
+        value = owned == true && kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { manager.marketplace.rollbackAvailable(summary.id) }
+    }
+    LaunchedEffect(summary.id, fromInstalled, if (fromInstalled) owned else null) {
+        if (fromInstalled && owned != true) {
+            loading = owned == null
+            inspection = null
+            return@LaunchedEffect
+        }
         loading = true
         runSuspendCatching { manager.marketplace.inspect(summary.id) }
             .onSuccess { inspection = it }
             .onFailure { message = it.message ?: "Could not inspect marketplace extension" }
         loading = false
     }
-
     val current = inspection
-    val installedVersion = remember(summary.id, operation.phase, operation.message) { manager.marketplace.installedVersion(summary.id) }
-    val rollbackAvailable = remember(summary.id, operation.phase, operation.message) { manager.marketplace.rollbackAvailable(summary.id) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        TextButton(onClick = onBack) { Text("Back to Extensions") }
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -469,7 +444,7 @@ private fun MarketplaceExtensionDetail(
             Column(Modifier.weight(1f)) {
                 Text(current?.detail?.displayName ?: summary.displayName, style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "${current?.detail?.namespace ?: summary.namespace} · Open VSX",
+                    if (fromInstalled && owned != true) summary.namespace else "${current?.detail?.namespace ?: summary.namespace} · Open VSX",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -481,12 +456,14 @@ private fun MarketplaceExtensionDetail(
             Text("Checking extension…", style = MaterialTheme.typography.bodySmall)
         }
 
+        installedVersion?.let { DetailLine(stringResource(R.string.ext_installed), it) }
+        if (fromInstalled && owned == false && installedVersion != null) Text(stringResource(R.string.ext_external_editor))
+        message?.let { DismissibleNotice(it, color = MaterialTheme.colorScheme.primary) }
         current?.let { inspected ->
             val detail = inspected.detail
             Text(detail.description, style = MaterialTheme.typography.bodyMedium)
             HorizontalDivider()
             DetailLine("Version", detail.version)
-            installedVersion?.let { DetailLine("Installed", it) }
             DetailLine("Publisher", detail.namespace)
             DetailLine("Publisher status", if (detail.verifiedPublisher) "Verified" else "Not verified")
             DetailLine("Trusted publishing", if (detail.trustedPublishing) "Yes" else "Not reported")
@@ -527,9 +504,8 @@ private fun MarketplaceExtensionDetail(
                 Text(operation.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 if (operation.running) LinearProgressIndicator(Modifier.fillMaxWidth())
             }
-            message?.let { DismissibleNotice(it, color = MaterialTheme.colorScheme.error) }
 
-            val installLabel = if (installedVersion == null) "Install" else if (installedVersion != detail.version) "Update" else null
+            val installLabel = if (installedVersion == null) R.string.ext_install else if (installedVersion != detail.version) R.string.ext_update else null
             if (installLabel != null && inspected.installable) {
                 Button(
                     enabled = !operation.running,
@@ -546,7 +522,7 @@ private fun MarketplaceExtensionDetail(
                             }
                         } else confirmInstall = true
                     },
-                ) { Text(installLabel) }
+                ) { Text(stringResource(installLabel)) }
             }
             if (!inspected.installable) {
                 Text(
@@ -555,23 +531,23 @@ private fun MarketplaceExtensionDetail(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (installedVersion != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (rollbackAvailable) {
-                        OutlinedButton(
-                            enabled = !operation.running,
-                            onClick = {
-                                scope.launch {
-                                    message = null
-                                    runSuspendCatching { manager.marketplace.rollback(summary.id) }
-                                        .onSuccess { message = "Rolled back to ${it.version}" }
-                                        .onFailure { message = it.message ?: "Rollback failed" }
-                                }
-                            },
-                        ) { Text("Rollback") }
-                    }
-                    TextButton(enabled = !operation.running, onClick = { confirmUninstall = true }) { Text("Uninstall") }
+        }
+        if (owned == true && installedVersion != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (rollbackAvailable) {
+                    OutlinedButton(
+                        enabled = !operation.running,
+                        onClick = {
+                            scope.launch {
+                                message = null
+                                runSuspendCatching { manager.marketplace.rollback(summary.id) }
+                                    .onSuccess { message = "Rolled back to ${it.version}" }
+                                    .onFailure { message = it.message ?: "Rollback failed" }
+                            }
+                        },
+                    ) { Text("Rollback") }
                 }
+                TextButton(enabled = !operation.running, onClick = { confirmUninstall = true }) { Text("Uninstall") }
             }
         }
     }
@@ -597,7 +573,7 @@ private fun MarketplaceExtensionDetail(
                     },
                 ) { Text("Install data-only") }
             },
-            dismissButton = { TextButton(onClick = { confirmInstall = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmInstall = false }) { Text(stringResource(R.string.ext_cancel)) } },
         )
     }
 
@@ -620,7 +596,7 @@ private fun MarketplaceExtensionDetail(
                     },
                 ) { Text("Uninstall") }
             },
-            dismissButton = { TextButton(onClick = { confirmUninstall = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmUninstall = false }) { Text(stringResource(R.string.ext_cancel)) } },
         )
     }
 }
@@ -642,13 +618,13 @@ private fun ExtensionStateBadge(state: ExtensionState, modifier: Modifier = Modi
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ExtensionDetail(
     item: ExtensionVersionState,
     manager: DevelopmentExtensionsManager,
     onSelectItem: (ExtensionVersionState) -> Unit,
     onOpenTerminal: (() -> Unit)?,
-    onBack: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     val scope = rememberWorkspaceCoroutineScope()
@@ -656,10 +632,10 @@ private fun ExtensionDetail(
     val installState by manager.installer.state.collectAsState()
     val androidProviderState by manager.installer.androidProviderState.collectAsState()
     val packageProviderState by manager.installer.packageProviderState.collectAsState()
-    var plan by remember(item.family.id, item.version.version) { mutableStateOf<com.baystudio.droide.core.ExtensionInstallPlan?>(null) }
-    var installJob by remember(item.family.id, item.version.version) { mutableStateOf<Job?>(null) }
-    var installMessage by remember(item.family.id, item.version.version) { mutableStateOf<String?>(null) }
-    var confirmUninstall by remember(item.family.id, item.version.version) { mutableStateOf(false) }
+    var plan by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf<com.baystudio.droide.core.ExtensionInstallPlan?>(null) }
+    var installJob by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf<Job?>(null) }
+    var installMessage by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf<String?>(null) }
+    var confirmUninstall by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf(false) }
     var elpHealthRequest by remember(item.family.id,item.version.version) { mutableStateOf<Pair<com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor,com.baystudio.droide.core.ElpRuntimeHealthApprovalRequest>?>(null) }
     var showVersionRequest by remember(item.family.id) { mutableStateOf(false) }
     var requestedVersion by remember(item.family.id) { mutableStateOf("latest") }
@@ -679,182 +655,302 @@ private fun ExtensionDetail(
     }
     if (showVersionRequest) {
         AlertDialog(onDismissRequest = { showVersionRequest = false },
-            title = { Text("${item.family.name} version") },
+            title = { Text(stringResource(R.string.ext_version_of, item.family.name)) },
             text = { Column(Modifier.imePadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(if (reviewedAndroid != null)
-                    "Upstream latest or other versions require Android SDK command-line tools and accepted licenses in Terminal. " +
-                        "Use the reviewed ${reviewedAndroid.version.version} option for the built-in installer."
-                    else "Use latest or a version provided by the publisher.")
+                Text(if (reviewedAndroid != null) stringResource(R.string.ext_reviewed_hint, reviewedAndroid.version.version)
+                    else stringResource(R.string.ext_latest_hint))
                 OutlinedTextField(value = requestedVersion, onValueChange = { requestedVersion = it.take(100) },
-                    label = { Text("Version") }, singleLine = true)
+                    label = { Text(stringResource(R.string.ext_version)) }, singleLine = true)
             } },
-            confirmButton = { TextButton(onClick = { showVersionRequest = false; prepareVersion(requestedVersion) }, enabled = requestedVersion.isNotBlank()) { Text("Continue") } },
-            dismissButton = { TextButton(onClick = { showVersionRequest = false }) { Text("Cancel") } })
+            confirmButton = { TextButton(onClick = { showVersionRequest = false; prepareVersion(requestedVersion) }, enabled = requestedVersion.isNotBlank()) { Text(stringResource(R.string.ext_continue)) } },
+            dismissButton = { TextButton(onClick = { showVersionRequest = false }) { Text(stringResource(R.string.ext_cancel)) } })
     }
     val versionChoices = remember(snapshot.items, item.family.id) {
         extensionSelectableChoices(snapshot.items.filter { it.family.id == item.family.id })
     }
-    DisposableEffect(item.family.id, item.version.version) {
+    DisposableEffect(item.family.id, item.version.version, item.version.scope) {
         onDispose { installJob?.cancel() }
     }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        TextButton(onClick = onBack) { Text("Back to Extensions") }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    var showTechnical by rememberSaveable(item.family.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Box {
-                ExtensionBrandIcon(family = item.family, size = 48.dp)
-                ExtensionStateBadge(item.state, Modifier.align(Alignment.BottomEnd))
-            }
-            Column(Modifier.weight(1f)) {
-                Text(item.family.name, style = MaterialTheme.typography.headlineSmall)
-                if (item.family.publisher.isNotBlank()) {
-                    Text(item.family.publisher, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box {
+                    ExtensionBrandIcon(family = item.family, size = 48.dp)
+                    ExtensionStateBadge(item.state, Modifier.align(Alignment.BottomEnd))
                 }
-            }
-        }
-        Text(item.family.description, style = MaterialTheme.typography.bodyMedium)
-        if (updatePolicy.hasVersionPicker && versionChoices.any {
-                it.state == ExtensionState.AVAILABLE || it.state == ExtensionState.INSTALLED || it.state == ExtensionState.EXTERNAL
-            }) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (reviewedAndroid != null) {
-                    Button(onClick = { prepareVersion(reviewedAndroid.version.version) },
-                        enabled = reviewedAndroid.state == ExtensionState.AVAILABLE && installJob == null && !installState.running) {
-                        Text(if (reviewedAndroid.state == ExtensionState.INSTALLED) "Installed ${reviewedAndroid.version.version}"
-                            else "Install reviewed ${reviewedAndroid.version.version}")
+                Column(Modifier.weight(1f)) {
+                    Text(item.family.name, style = MaterialTheme.typography.headlineSmall)
+                    if (item.family.publisher.isNotBlank()) {
+                        Text(item.family.publisher, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                     }
-                } else {
-                    Button(onClick = { prepareVersion("latest") }, enabled = installJob == null && !installState.running) { Text("Update / install latest") }
                 }
-                OutlinedButton(onClick = { showVersionRequest = true }, enabled = installJob == null && !installState.running) { Text("Choose version") }
             }
-        }
-        Text(updatePolicy.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        for (relatedFamily in updatePolicy.relatedFamilies) {
-            val target = extensionDefaultChoice(snapshot.items.filter { it.family.id == relatedFamily })
-            if (target != null) TextButton(onClick = { onSelectItem(target) }, enabled = installJob == null && !installState.running) {
-                Text("Open ${target.family.name}")
-            }
-        }
-        updatePolicy.documentationUrl?.let { url ->
-            TextButton(onClick = { runCatching { uriHandler.openUri(url) }
-                .onFailure { installMessage = "Could not open update instructions: $url" } }) {
-                Text("Update instructions")
-            }
-        }
-        if (versionChoices.any { it.version.version != item.version.version || it.version.scope != item.version.scope }) {
-            ExtensionVersionChoices(
-                choices = versionChoices,
-                selected = item,
-                enabled = installJob == null && !installState.running,
-                onSelect = onSelectItem,
-            )
-        }
-        if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) {
-            Text(
-                "Managed Android components share one JDK/SDK/Build Tools pack. Removing any component removes the entire pack and its managed records; individual versions cannot be removed here.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-        }
-        HorizontalDivider()
-        DetailLine("Category", item.family.category.label)
-        DetailLine("Version", if (item.family.category == ExtensionCategory.LANGUAGES) "Editor syntax" else item.version.version)
-        DetailLine("Channel", item.version.channel)
-        DetailLine("Install mode", when (item.version.installKind) {
-            com.baystudio.droide.core.ExtensionInstallKind.BUILT_IN -> if (item.family.category == ExtensionCategory.LANGUAGES) "Editor syntax only" else "Bundled Droide feature"
-            com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN -> "Managed Android pack · shared removal"
-            com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT -> "Reviewed Android SDK component · local Ubuntu"
-            com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
-            com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
-            com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE -> "Reviewed managed tool"
-            com.baystudio.droide.core.ExtensionInstallKind.USER_MANAGED -> "User-managed upstream version"
-            com.baystudio.droide.core.ExtensionInstallKind.CATALOG_ONLY ->
-                if (item.state == ExtensionState.EXTERNAL) "Detected tool · managed outside Droide" else "Detection only · no managed recipe"
-        })
-        DetailLine("Execution", extensionExecutionLabel(item))
-        DetailLine("Status", if (item.family.category == ExtensionCategory.LANGUAGES) "Syntax available" else item.state.name.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() })
-        if (item.family.category == ExtensionCategory.LANGUAGES) {
-            val languageId = item.family.id.removePrefix("language.")
-            when (LanguageRuntimePresentation.kind(languageId)) {
-                LanguageRuntimePresentation.Kind.DATA_OR_DOCUMENT -> {
-                    DetailLine("Runtime / compiler", "No standalone runtime / compiler required")
-                    Text("Syntax highlighting is ready. Add a language server or formatter for more features.",
-                        style = MaterialTheme.typography.bodySmall)
+            Text(extensionPurpose(item.family), style = MaterialTheme.typography.bodyLarge)
+            HorizontalDivider()
+            DetailLine(stringResource(R.string.ext_version), if (item.family.category == ExtensionCategory.LANGUAGES) "Editor syntax" else item.version.version)
+            if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT) {
+                snapshot.androidDownloadBytes[item.family.id to item.version.version]?.let { bytes ->
+                    DetailLine(stringResource(R.string.ext_download), stringResource(R.string.ext_package_size, bytes / (1024.0 * 1024.0)))
                 }
-                LanguageRuntimePresentation.Kind.LINUX_SHELL -> {
-                    val shell = LanguageRuntimePresentation.shellStatus(snapshot.localLinuxExecutables)
-                    DetailLine("Linux shell", shell.detail)
-                    Text(shell.guidance, style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = onRefresh, enabled = !installState.running) { Text("Verify shell status") }
-                }
-                LanguageRuntimePresentation.Kind.SEPARATE_TOOL -> {
-                    val familyId = UbuntuAptCatalog.languageRuntime[languageId]
-                    val choices = snapshot.items.filter { it.family.id == familyId }
-                    val installed = choices.firstOrNull { it.state in setOf(ExtensionState.INSTALLED, ExtensionState.EXTERNAL) }
-                    DetailLine("Runtime / compiler", installed?.let { "${it.family.name}: ${it.detail}" }
-                        ?: if (familyId == null) "No managed runtime mapped" else "Not installed")
-                    val target = installed ?: choices.firstOrNull { it.state == ExtensionState.AVAILABLE && it.version.recommended }
-                        ?: choices.firstOrNull { it.state == ExtensionState.AVAILABLE }
-                    if (target != null) Button(onClick = { onSelectItem(target) }, enabled = !installState.running) {
-                        Text(if (installed != null) "Open runtime / compiler" else "Install runtime / compiler")
+            }
+            DetailLine(stringResource(R.string.ext_environment), extensionExecutionLabel(item))
+
+            if (updatePolicy.hasVersionPicker && versionChoices.any {
+                    it.state == ExtensionState.AVAILABLE || it.state == ExtensionState.INSTALLED || it.state == ExtensionState.EXTERNAL
+                }) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (reviewedAndroid != null) {
+                        if (!ExtensionSelection.from(reviewedAndroid).matches(item)) Button(onClick = { prepareVersion(reviewedAndroid.version.version) },
+                            enabled = reviewedAndroid.state == ExtensionState.AVAILABLE && installJob == null && !installState.running) {
+                            Text(stringResource(if (reviewedAndroid.state == ExtensionState.INSTALLED) R.string.ext_installed_version else R.string.ext_confirmed_review, reviewedAndroid.version.version))
+                        }
                     } else {
-                        OutlinedButton(onClick = {}, enabled = false) { Text("Runtime installer unavailable") }
-                        Text("Editor support is ready. Install a compatible compiler or runtime in the Linux terminal, if available.",
+                        Button(onClick = { prepareVersion("latest") }, enabled = installJob == null && !installState.running) { Text(stringResource(R.string.ext_updated)) }
+                    }
+                    OutlinedButton(onClick = { showVersionRequest = true }, enabled = installJob == null && !installState.running) { Text(stringResource(R.string.ext_pick)) }
+                }
+            }
+            for (relatedFamily in updatePolicy.relatedFamilies) {
+                val target = extensionDefaultChoice(snapshot.items.filter { it.family.id == relatedFamily })
+                if (target != null) TextButton(onClick = { onSelectItem(target) }, enabled = installJob == null && !installState.running) {
+                    Text("Open ${target.family.name}")
+                }
+            }
+            updatePolicy.documentationUrl?.let { url ->
+                TextButton(onClick = { runCatching { uriHandler.openUri(url) }
+                    .onFailure { installMessage = "Could not open update instructions: $url" } }) {
+                    Text(stringResource(R.string.ext_update_instructions))
+                }
+            }
+            if (versionChoices.any { it.version.version != item.version.version || it.version.scope != item.version.scope }) {
+                ExtensionVersionChoices(
+                    choices = versionChoices,
+                    selected = item,
+                    enabled = installJob == null && !installState.running,
+                    onSelect = onSelectItem,
+                )
+            }
+            if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) {
+                Text(
+                    "Managed Android components share one JDK/SDK/Build Tools pack. Removing any component removes the entire pack and its managed records; individual versions cannot be removed here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+            HorizontalDivider()
+            TextButton(onClick = { showTechnical = !showTechnical }) {
+                Text(stringResource(R.string.ext_technical))
+                Icon(if (showTechnical) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+            }
+            if (showTechnical) {
+                Text(updatePolicy.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (extensionPurpose(item.family) != item.family.description) Text(item.family.description, style = MaterialTheme.typography.bodySmall)
+                DetailLine("Category", item.family.category.label)
+                DetailLine("Channel", item.version.channel)
+                DetailLine("Install mode", when (item.version.installKind) {
+                    com.baystudio.droide.core.ExtensionInstallKind.BUILT_IN -> if (item.family.category == ExtensionCategory.LANGUAGES) "Editor syntax only" else "Bundled Droide feature"
+                    com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN -> "Managed Android pack · shared removal"
+                    com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT -> "Reviewed Android SDK component · local Ubuntu"
+                    com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
+                    com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
+                    com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE -> "Reviewed managed tool"
+                    com.baystudio.droide.core.ExtensionInstallKind.USER_MANAGED -> "User-managed upstream version"
+                    com.baystudio.droide.core.ExtensionInstallKind.CATALOG_ONLY ->
+                        if (item.state == ExtensionState.EXTERNAL) "Detected tool · managed outside Droide" else "Detection only · no managed recipe"
+                })
+                if (item.version.provides.isNotEmpty()) DetailLine("Provides", item.version.provides.sorted().joinToString(", "))
+                if (item.version.requires.isNotEmpty()) DetailLine("Requires", item.version.requires.sorted().joinToString(", "))
+            }
+            if (item.family.category == ExtensionCategory.LANGUAGES) {
+                val languageId = item.family.id.removePrefix("language.")
+                when (LanguageRuntimePresentation.kind(languageId)) {
+                    LanguageRuntimePresentation.Kind.DATA_OR_DOCUMENT -> {
+                        DetailLine("Runtime / compiler", "No standalone runtime / compiler required")
+                        Text("Syntax highlighting is ready. Add a language server or formatter for more features.",
                             style = MaterialTheme.typography.bodySmall)
                     }
+                    LanguageRuntimePresentation.Kind.LINUX_SHELL -> {
+                        val shell = LanguageRuntimePresentation.shellStatus(snapshot.localLinuxExecutables)
+                        DetailLine("Linux shell", shell.detail)
+                        Text(shell.guidance, style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(onClick = onRefresh, enabled = !installState.running) { Text("Verify shell status") }
+                    }
+                    LanguageRuntimePresentation.Kind.SEPARATE_TOOL -> {
+                        val familyId = UbuntuAptCatalog.languageRuntime[languageId]
+                        val choices = snapshot.items.filter { it.family.id == familyId }
+                        val installed = choices.firstOrNull { it.state in setOf(ExtensionState.INSTALLED, ExtensionState.EXTERNAL) }
+                        DetailLine("Runtime / compiler", installed?.let { "${it.family.name}: ${it.detail}" }
+                            ?: if (familyId == null) "No managed runtime mapped" else "Not installed")
+                        val target = installed ?: choices.firstOrNull { it.state == ExtensionState.AVAILABLE && it.version.recommended }
+                            ?: choices.firstOrNull { it.state == ExtensionState.AVAILABLE }
+                        if (target != null) Button(onClick = { onSelectItem(target) }, enabled = !installState.running) {
+                            Text(if (installed != null) "Open runtime / compiler" else "Install runtime / compiler")
+                        } else {
+                            OutlinedButton(onClick = {}, enabled = false) { Text("Runtime installer unavailable") }
+                            Text("Editor support is ready. Install a compatible compiler or runtime in the Linux terminal, if available.",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
             }
-        }
-        if (item.version.provides.isNotEmpty()) DetailLine("Provides", item.version.provides.sorted().joinToString(", "))
-        if (item.version.requires.isNotEmpty()) DetailLine("Requires", item.version.requires.sorted().joinToString(", "))
-        Text(
-            extensionDetailStatus(item),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-        )
+            Text(
+                extensionDetailStatus(item),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
 
-        if(item.family.id=="lsp.elp" && item.state==ExtensionState.INSTALLED) {
-            OutlinedButton(enabled=installJob==null&&!installState.running,onClick={
-                installJob=scope.launch { try {
-                    runSuspendCatching { manager.installer.prepare(item) as com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor }
-                        .onSuccess { prepared -> runSuspendCatching{manager.installer.requestElpHealthApproval(prepared)}
-                            .onSuccess{elpHealthRequest=prepared to it}.onFailure{installMessage=it.message} }
-                        .onFailure{installMessage=it.message}
-                } finally {installJob=null} }
-            }) {Text("Approve runtime health recheck")}
-        }
-        installMessage?.let { DismissibleNotice(it, color = MaterialTheme.colorScheme.primary) }
-        if (installState.familyId == item.family.id && installState.message.isNotBlank()) {
-            Text(installState.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-        }
-        if (installState.familyId == item.family.id && installState.running) {
-            LinearProgressIndicator(Modifier.fillMaxWidth())
-            TextButton(onClick = { manager.installer.cancelInstallation(); installJob?.cancel() }) { Text("Cancel") }
-        }
-        if (installState.familyId == item.family.id && installState.log.isNotBlank()) {
-            Text(installState.log, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
-        }
-        if (item.state == ExtensionState.UNAVAILABLE) {
-            Text(item.detail, style = MaterialTheme.typography.bodySmall)
-        }
-
-        when (item.state) {
-            ExtensionState.MANUAL, ExtensionState.PROJECT_DEPENDENCY -> onOpenTerminal?.let { open ->
-                Button(onClick = open) {
-                    Text(if (item.state == ExtensionState.PROJECT_DEPENDENCY) "Open project terminal" else "Open Terminal")
-                }
+            if(item.family.id=="lsp.elp" && item.state==ExtensionState.INSTALLED) {
+                OutlinedButton(enabled=installJob==null&&!installState.running,onClick={
+                    installJob=scope.launch { try {
+                        runSuspendCatching { manager.installer.prepare(item) as com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor }
+                            .onSuccess { prepared -> runSuspendCatching{manager.installer.requestElpHealthApproval(prepared)}
+                                .onSuccess{elpHealthRequest=prepared to it}.onFailure{installMessage=it.message} }
+                            .onFailure{installMessage=it.message}
+                    } finally {installJob=null} }
+                }) {Text("Approve runtime health recheck")}
             }
-            ExtensionState.AVAILABLE -> {
-                Button(
+            installMessage?.let { DismissibleNotice(it, color = MaterialTheme.colorScheme.primary) }
+            if (installState.familyId == item.family.id && installState.message.isNotBlank()) {
+                Text(installState.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            }
+            if (installState.familyId == item.family.id && installState.running) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                TextButton(onClick = { manager.installer.cancelInstallation(); installJob?.cancel() }) { Text(stringResource(R.string.ext_cancel)) }
+            }
+            if (installState.familyId == item.family.id && installState.log.isNotBlank()) {
+                Text(installState.log, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+            }
+            if (item.state == ExtensionState.UNAVAILABLE) {
+                Text(item.detail, style = MaterialTheme.typography.bodySmall)
+            }
+
+            when (item.state) {
+                ExtensionState.MANUAL, ExtensionState.PROJECT_DEPENDENCY -> onOpenTerminal?.let { open ->
+                    Button(onClick = open) {
+                        Text(if (item.state == ExtensionState.PROJECT_DEPENDENCY) "Open project terminal" else "Open Terminal")
+                    }
+                }
+                ExtensionState.INSTALLED -> {
+                    val record = manager.registry.find(item.family.id, item.version.version)
+                    val workspaceSelected = manager.workspaceVersion(item.family.id) == item.version.version
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = onRefresh, enabled = installJob == null && !installState.running) { Text("Verify status") }
+                        if (item.version.installKind in setOf(
+                                com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
+                                com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
+                                com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
+                                com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
+                            ) && record != null && !record.active) {
+                            Button(
+                                enabled = installJob == null && !installState.running,
+                                onClick = {
+                                    installJob = scope.launch {
+                                        try {
+                                            runSuspendCatching { manager.unifiedAuthority.activate(item.family.id, item.version.version) }
+                                                .onSuccess { installMessage = it.message; if (it.success) onRefresh() }
+                                                .onFailure { installMessage = it.message ?: "Activation failed" }
+                                        } finally {
+                                            installJob = null
+                                        }
+                                    }
+                                },
+                            ) { Text("Set global default") }
+                        }
+                    }
+                    if (item.version.installKind in setOf(
+                            com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
+                            com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
+                            com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
+                            com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
+                        ) && record != null) {
+                        OutlinedButton(
+                            enabled = installJob == null && !installState.running,
+                            onClick = {
+                                installJob = scope.launch {
+                                    try {
+                                        runSuspendCatching {
+                                            if (workspaceSelected) {
+                                                manager.clearWorkspaceVersion(item.family.id)
+                                                "Workspace override cleared."
+                                            } else {
+                                                val result = manager.unifiedAuthority.activate(item.family.id, item.version.version, manager.workspaceId)
+                                                check(result.success) { result.message }
+                                                result.message
+                                            }
+                                        }.onSuccess { installMessage = it; onRefresh() }
+                                            .onFailure { installMessage = it.message ?: "Workspace toolchain selection failed" }
+                                    } finally {
+                                        installJob = null
+                                    }
+                                }
+                            },
+                        ) { Text(if (workspaceSelected) "Use global default" else "Use in workspace") }
+                    }
+                    if (item.version.installKind in setOf(
+                            com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
+                            com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
+                            com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
+                            com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
+                            com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN,
+                        )
+                    ) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                enabled = installJob == null && !installState.running,
+                                onClick = {
+                                    installJob = scope.launch {
+                                        try {
+                                            runSuspendCatching { manager.unifiedAuthority.repairVersion(item.family.id, item.version.version) }
+                                                .onSuccess { txResult ->
+                                                    if (txResult.success) {
+                                                        installMessage = txResult.message
+                                                        onRefresh()
+                                                    } else {
+                                                        installMessage = txResult.message
+                                                    }
+                                                }
+                                                .onFailure { installMessage = it.message ?: "Repair failed" }
+                                        } finally {
+                                            installJob = null
+                                        }
+                                    }
+                                },
+                            ) { Text("Repair") }
+                            TextButton(
+                                enabled = installJob == null && !installState.running,
+                                onClick = { confirmUninstall = true },
+                            ) { Text(if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) "Remove Android pack" else if (item.version.version == UbuntuAptCatalog.VERSION) "Remove integration" else "Uninstall") }
+                        }
+                    }
+                }
+                ExtensionState.EXTERNAL -> {
+                    Text("This command is detected in its environment. Droide does not own this installation or remove it.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton(onClick = onRefresh, enabled = installJob == null && !installState.running) { Text("Verify detection") }
+                    versionChoices.firstOrNull { it.state == ExtensionState.AVAILABLE }?.let { managed ->
+                        Button(onClick = { onSelectItem(managed) }, enabled = installJob == null && !installState.running) { Text("Install managed version") }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        if (item.state == ExtensionState.AVAILABLE) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                if (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp >= 500) {
+                    Text(stringResource(R.string.ext_review_hint), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Button(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small,
                     enabled = installJob == null && !installState.running,
                     onClick = {
                         installJob = scope.launch {
@@ -869,112 +965,11 @@ private fun ExtensionDetail(
                     },
                 ) { Text(if (installState.familyId == item.family.id && installState.phase in setOf(
                     com.baystudio.droide.core.ManagedExtensionInstaller.Phase.FAILED,
-                    com.baystudio.droide.core.ManagedExtensionInstaller.Phase.CANCELED)) "Retry" else "Install") }
+                    com.baystudio.droide.core.ManagedExtensionInstaller.Phase.CANCELED)) stringResource(R.string.ext_retry) else stringResource(R.string.ext_review)) }
             }
-            ExtensionState.INSTALLED -> {
-                val record = manager.registry.find(item.family.id, item.version.version)
-                val workspaceSelected = manager.workspaceVersion(item.family.id) == item.version.version
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onRefresh, enabled = installJob == null && !installState.running) { Text("Verify status") }
-                    if (item.version.installKind in setOf(
-                            com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
-                            com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
-                            com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
-                            com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
-                        ) && record != null && !record.active) {
-                        Button(
-                            enabled = installJob == null && !installState.running,
-                            onClick = {
-                                installJob = scope.launch {
-                                    try {
-                                        runSuspendCatching { manager.unifiedAuthority.activate(item.family.id, item.version.version) }
-                                            .onSuccess { installMessage = it.message; if (it.success) onRefresh() }
-                                            .onFailure { installMessage = it.message ?: "Activation failed" }
-                                    } finally {
-                                        installJob = null
-                                    }
-                                }
-                            },
-                        ) { Text("Set global default") }
-                    }
-                }
-                if (item.version.installKind in setOf(
-                        com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
-                        com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
-                        com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
-                        com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
-                    ) && record != null) {
-                    OutlinedButton(
-                        enabled = installJob == null && !installState.running,
-                        onClick = {
-                            installJob = scope.launch {
-                                try {
-                                    runSuspendCatching {
-                                        if (workspaceSelected) {
-                                            manager.clearWorkspaceVersion(item.family.id)
-                                            "Workspace override cleared."
-                                        } else {
-                                            val result = manager.unifiedAuthority.activate(item.family.id, item.version.version, manager.workspaceId)
-                                            check(result.success) { result.message }
-                                            result.message
-                                        }
-                                    }.onSuccess { installMessage = it; onRefresh() }
-                                        .onFailure { installMessage = it.message ?: "Workspace toolchain selection failed" }
-                                } finally {
-                                    installJob = null
-                                }
-                            }
-                        },
-                    ) { Text(if (workspaceSelected) "Use global default" else "Use in workspace") }
-                }
-                if (item.version.installKind in setOf(
-                        com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
-                        com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
-                        com.baystudio.droide.core.ExtensionInstallKind.GUEST_PACKAGE,
-                        com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
-                        com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN,
-                    )
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            enabled = installJob == null && !installState.running,
-                            onClick = {
-                                installJob = scope.launch {
-                                    try {
-                                        runSuspendCatching { manager.unifiedAuthority.repairVersion(item.family.id, item.version.version) }
-                                            .onSuccess { txResult -> 
-                                                if (txResult.success) {
-                                                    installMessage = txResult.message
-                                                    onRefresh()
-                                                } else {
-                                                    installMessage = txResult.message
-                                                }
-                                            }
-                                            .onFailure { installMessage = it.message ?: "Repair failed" }
-                                    } finally {
-                                        installJob = null
-                                    }
-                                }
-                            },
-                        ) { Text("Repair") }
-                        TextButton(
-                            enabled = installJob == null && !installState.running,
-                            onClick = { confirmUninstall = true },
-                        ) { Text(if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) "Remove Android pack" else if (item.version.version == UbuntuAptCatalog.VERSION) "Remove integration" else "Uninstall") }
-                    }
-                }
-            }
-            ExtensionState.EXTERNAL -> {
-                Text("This command is detected in its environment. Droide does not own this installation or remove it.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedButton(onClick = onRefresh, enabled = installJob == null && !installState.running) { Text("Verify detection") }
-                versionChoices.firstOrNull { it.state == ExtensionState.AVAILABLE }?.let { managed ->
-                    Button(onClick = { onSelectItem(managed) }, enabled = installJob == null && !installState.running) { Text("Install managed version") }
-                }
-            }
-            else -> Unit
         }
     }
+
 
     elpHealthRequest?.let { (healthPlan,request) ->
         AlertDialog(onDismissRequest={request.decline();elpHealthRequest=null;installMessage="ELP health declined; no selected tool was run."},
@@ -1041,11 +1036,11 @@ private fun ExtensionDetail(
         val recipePlan = currentPlan as? com.baystudio.droide.core.ExtensionInstallPlan.Recipe
         AlertDialog(
             onDismissRequest = { if (installJob == null && !installState.running) plan = null },
-            title = { Text("Install ${currentPlan.familyName}") },
+            title = { Text(stringResource(R.string.ext_review_title, currentPlan.familyName)) },
             text = {
                 Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Version ${currentPlan.resolvedVersion}", style = MaterialTheme.typography.bodyMedium)
-                    Text("Will install:", style = MaterialTheme.typography.labelMedium)
+                    Text(stringResource(R.string.ext_will_install), style = MaterialTheme.typography.labelMedium)
                     currentPlan.components.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
                     manager.installer.externalDownloadNotice(currentPlan)?.let { notice ->
                         Text(notice, style = MaterialTheme.typography.bodyMedium)
@@ -1158,15 +1153,15 @@ private fun ExtensionDetail(
                             }
                         }
                     },
-                ) { Text(if (needsLicense) "Accept license" else if (installState.familyId == item.family.id && installState.phase in setOf(
+                ) { Text(stringResource(if (needsLicense) R.string.ext_license else if (installState.familyId == item.family.id && installState.phase in setOf(
                     com.baystudio.droide.core.ManagedExtensionInstaller.Phase.FAILED,
-                    com.baystudio.droide.core.ManagedExtensionInstaller.Phase.CANCELED)) "Retry" else "Install") }
+                    com.baystudio.droide.core.ManagedExtensionInstaller.Phase.CANCELED)) R.string.ext_retry else R.string.ext_install)) }
             },
             dismissButton = {
                 if (installState.running) {
-                    TextButton(onClick = { manager.installer.cancelInstallation(); installJob?.cancel() }) { Text("Cancel") }
+                    TextButton(onClick = { manager.installer.cancelInstallation(); installJob?.cancel() }) { Text(stringResource(R.string.ext_cancel)) }
                 } else {
-                    TextButton(onClick = { plan = null }) { Text("Close") }
+                    TextButton(onClick = { plan = null }) { Text(stringResource(R.string.ext_close)) }
                 }
             },
         )
@@ -1183,7 +1178,7 @@ internal fun ExtensionVersionChoices(
 ) {
     var expanded by remember(selected.family.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        TextButton(onClick = { expanded = !expanded }, enabled = enabled) { Text("Versions and environments") }
+        TextButton(onClick = { expanded = !expanded }, enabled = enabled) { Text(stringResource(R.string.ext_versions)) }
         if (expanded) {
             Column(Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1196,8 +1191,8 @@ internal fun ExtensionVersionChoices(
                     ) {
                         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(extensionChoiceLabel(choice), style = MaterialTheme.typography.labelMedium)
-                            if (current) Text("Selected", style = MaterialTheme.typography.labelSmall)
-                            else if (choice.version.recommended) Text("Recommended", style = MaterialTheme.typography.labelSmall)
+                            if (current) Text(stringResource(R.string.ext_selected), style = MaterialTheme.typography.labelSmall)
+                            else if (choice.version.recommended) Text(stringResource(R.string.ext_recommended), style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
@@ -1209,7 +1204,8 @@ internal fun ExtensionVersionChoices(
 @Composable
 private fun DetailLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, modifier = Modifier.weight(1f).padding(start = 16.dp), style = MaterialTheme.typography.bodySmall)
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, modifier = Modifier.weight(1f).padding(start = 8.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            style = MaterialTheme.typography.bodyMedium)
     }
 }

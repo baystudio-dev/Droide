@@ -183,4 +183,24 @@ class ExplorerWorkspaceCacheTest {
         assertEquals(listOf("src", "src/main.kt", null), rows.map { it.entry?.path })
         assertEquals("src", rows.last().parent)
     }
+
+    @Test fun scrollingReusesDisplayedRowsAndDirectoryChangesInvalidateThem() {
+        val state = populated()
+        val observed = state.observeVisibleTreeRows()
+        val initial = observed.value
+        repeat(120) {
+            state.treeFirstVisibleItemScrollOffset = it
+            state.searchFirstVisibleItemIndex = it
+            state.selectedPath = "selection-$it"
+            assertSame(initial, observed.value)
+        }
+        state.children["other"] = listOf(file("other/renamed.kt"), file(".droide/hidden"))
+        val updated = observed.value
+        assertTrue(updated.any { it.entry?.path == "other/renamed.kt" })
+        assertFalse(updated.any { it.entry?.path == "other/keep.kt" || it.entry?.path == ".droide/hidden" })
+        state.moreAfter.remove("other")
+        assertFalse(observed.value.any { it.entry == null && it.parent == "other" })
+        state.collapseDirectory("other")
+        assertFalse(observed.value.any { it.entry?.path == "other/renamed.kt" })
+    }
 }

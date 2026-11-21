@@ -565,12 +565,12 @@ fun DroideCompactNavigation(selected: Int, onSelect: (Int) -> Unit) =
 @Composable
 fun DroideCompactNavigation(selected: Int, enabled: Boolean, onSelect: (Int) -> Unit) {
     val items = listOf(
-        Triple(0, "Files", Icons.Default.Folder),
+        Triple(0, androidx.compose.ui.res.stringResource(com.baystudio.droide.R.string.ext_files), Icons.Default.Folder),
         Triple(1, "Editor", Icons.Default.Edit),
         Triple(2, "Terminal", Icons.Default.Terminal),
         Triple(3, "Git", Icons.Default.Source),
         Triple(4, "Web", Icons.Default.Language),
-        Triple(6, "Extensions", Icons.Default.Extension),
+        Triple(6, androidx.compose.ui.res.stringResource(com.baystudio.droide.R.string.ext_screen), Icons.Default.Extension),
     )
     Surface(color = DroideColors.Surface) {
         Row(Modifier.fillMaxWidth().navigationBarsPadding().selectableGroup()) {

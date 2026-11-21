@@ -84,7 +84,11 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             if (failure is SerializationException) throw ProviderStreamFailure.fromUnsafeMessage(
                 "Provider returned malformed JSON.", emptyList(), httpStatus, progress.snapshot(secrets),
             )
-            val message = failure.message ?: "Provider response was interrupted."
+            if (httpStatus == null && failure is java.io.IOException) {
+                throw LlmProviderStreamException(ProviderStreamFailureKind.UNKNOWN, null, null, "",
+                    ProviderFailure.message(failure, secrets), progress.snapshot(secrets))
+            }
+            val message = ProviderFailure.message(failure, secrets)
             throw ProviderStreamFailure.fromUnsafeMessage(message, secrets, httpStatus, progress.snapshot(secrets))
         }
     }
@@ -210,8 +214,8 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         val provider = requireRuntimeProvider(providerId, baseUrl, model)
         val spec = ProviderTransportV2.spec(provider, model)
         if (spec.protocol != ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS || provider.authScheme == ProviderAuthScheme.AWS_SIGV4_BEDROCK) return null
-        val target = NetworkSecurity.validateProviderTarget(provider, "${baseUrl.trimEnd('/')}${spec.chatPath}")
-        return ProviderReplayTarget(provider.id, model, ProviderReplayTarget.Protocol.OPENAI_CHAT, OwnedChatEndpointIdentity.fromValidatedUrl(target.url))
+        val uri = NetworkSecurity.validateProviderUrl(provider, "${baseUrl.trimEnd('/')}${spec.chatPath}")
+        return ProviderReplayTarget(provider.id, model, ProviderReplayTarget.Protocol.OPENAI_CHAT, OwnedChatEndpointIdentity.fromValidatedUrl(uri.toASCIIString()))
     }
 
     /** Source-backed Chat route only. Legacy String APIs and their allocation guards are unchanged. Caller owns

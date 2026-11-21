@@ -70,7 +70,12 @@ object NetworkSecurity {
         ProviderNetworkScope.LOOPBACK_ONLY -> validateLoopbackTarget(raw)
     }
 
-    private fun validateLoopbackTarget(raw: String): ValidatedNetworkTarget {
+    internal fun validateProviderUrl(provider: AiProvider, raw: String): URI = when (provider.networkScope) {
+        ProviderNetworkScope.PUBLIC_HTTPS -> validatePublicHttpsUrl(raw)
+        ProviderNetworkScope.LOOPBACK_ONLY -> validateLoopbackUrl(raw)
+    }
+
+    private fun validateLoopbackUrl(raw: String): URI {
         val uri = URI(raw.trim())
         require(uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) { "Loopback provider must use HTTP(S)" }
         require(uri.userInfo == null) { "User-info in URLs is not allowed" }
@@ -79,6 +84,12 @@ object NetworkSecurity {
         require(host.equals("localhost", true) || host == "127.0.0.1" || host == "::1" || host == "[::1]" || host == "0:0:0:0:0:0:0:1") {
             "Loopback provider target must stay on localhost"
         }
+        return uri
+    }
+
+    private fun validateLoopbackTarget(raw: String): ValidatedNetworkTarget {
+        val uri = validateLoopbackUrl(raw)
+        val host = uri.host
         val addresses = InetAddress.getAllByName(host).toList()
         require(addresses.isNotEmpty() && addresses.all { it.isLoopbackAddress }) { "Loopback provider resolved outside loopback" }
         return ValidatedNetworkTarget(uri.toASCIIString(), host, addresses, allowLoopback = true)

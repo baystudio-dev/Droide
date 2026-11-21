@@ -36,6 +36,7 @@ internal data class EnvironmentSetupState(
 
 internal data class EnvironmentSetupInspection(
     val existingEnvironment: Boolean, val deferred: Boolean = false, val recoveryRequired: Boolean = false,
+    val checkLater: Boolean = false,
 )
 
 /** The process owns one install; observing this controller never starts or restarts it. */
@@ -75,11 +76,9 @@ internal class EnvironmentSetupController(
                 try {
                     val found = inspect()
                     publish(id) { old ->
-                        if (installationUnconfirmed) old.copy(presented = old.presented || showRequested)
-                        else if (found.existingEnvironment) old.copy(
-                            progress = EnvironmentSetupProgress(EnvironmentSetupPhase.READY),
-                            presented = false, enteredWorkspace = true, error = null, recoveryRequired = false,
-                        ) else old.copy(
+                        if (found.existingEnvironment || found.checkLater) enterWorkspace(old, found)
+                        else if (installationUnconfirmed) old.copy(presented = old.presented || showRequested)
+                        else old.copy(
                             progress = EnvironmentSetupProgress(EnvironmentSetupPhase.AVAILABLE),
                             presented = showRequested || !found.deferred, recoveryRequired = found.recoveryRequired,
                             enteredWorkspace = old.enteredWorkspace || (found.deferred && !showRequested), error = null,
@@ -106,23 +105,17 @@ internal class EnvironmentSetupController(
             operation = scope.launch(start = CoroutineStart.LAZY) {
                 try {
                     val found = inspect()
-                    val needsValidation = synchronized(lock) {
-                        val required = !found.existingEnvironment || installationUnconfirmed ||
-                            current.phase == EnvironmentSetupPhase.FAILED
-                        if (required) installationUnconfirmed = true
-                        required
-                    }
-                    if (needsValidation) install { progress ->
-                        publish(id) { old ->
-                            if (old.phase == EnvironmentSetupPhase.CANCELLING) old else old.copy(progress = progress)
+                    val result = if (found.existingEnvironment || found.checkLater) found else {
+                        synchronized(lock) { installationUnconfirmed = true }
+                        install { progress ->
+                            publish(id) { old ->
+                                if (old.phase == EnvironmentSetupPhase.CANCELLING) old else old.copy(progress = progress)
+                            }
                         }
+                        inspect()
                     }
-                    check(inspect().existingEnvironment) { "Environment setup did not finish. Your existing data was kept." }
-                    publish(id) {
-                        installationUnconfirmed = false
-                        it.copy(progress = EnvironmentSetupProgress(EnvironmentSetupPhase.READY),
-                            presented = false, enteredWorkspace = true, busy = false, error = null, recoveryRequired = false)
-                    }
+                    check(result.existingEnvironment || result.checkLater) { "Environment setup did not finish. Your existing data was kept." }
+                    publish(id) { enterWorkspace(it, result) }
                 } catch (cancelled: CancellationException) {
                     publish(id) { it.copy(progress = EnvironmentSetupProgress(EnvironmentSetupPhase.AVAILABLE),
                         busy = false, error = "Installation paused. You can continue when you are ready.") }
@@ -162,6 +155,13 @@ internal class EnvironmentSetupController(
     suspend fun closeAndJoin() {
         val pending = synchronized(lock) { closed = true; generation++; operation }
         pending?.cancelAndJoin()
+    }
+
+    private fun enterWorkspace(old: EnvironmentSetupState, found: EnvironmentSetupInspection): EnvironmentSetupState {
+        if (found.existingEnvironment) installationUnconfirmed = false
+        val phase = if (found.existingEnvironment) EnvironmentSetupPhase.READY else EnvironmentSetupPhase.CHECKING
+        return old.copy(progress = EnvironmentSetupProgress(phase), presented = false, enteredWorkspace = true,
+            busy = false, error = null, recoveryRequired = false)
     }
 
     private fun failed(id: Long, failure: Throwable) = publish(id) { it.copy(

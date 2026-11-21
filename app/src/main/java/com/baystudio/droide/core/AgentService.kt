@@ -2221,7 +2221,7 @@ class AgentService(
         } catch (e: Exception) {
             checkpointMixedInterrupted(e)
             if (isRunCurrent(generation, runSessionId)) {
-                val msg = e.message ?: "Unknown error"
+                val msg = ProviderFailure.message(e, listOf(config.apiKey))
                 withRunPublication(owner) { terminateOpenStreamParts(AgentStreamPartState.ERROR, msg.take(240)) }
                 closeUnresolvedApiToolCalls(unresolvedApiToolCalls, "Tool execution was interrupted by agent error: ${msg.take(240)}", AgentStreamPartState.ERROR, owner,
                     interruptedSourceResults, unknownSourceExecutions)

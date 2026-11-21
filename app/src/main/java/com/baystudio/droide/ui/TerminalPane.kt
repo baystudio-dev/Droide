@@ -154,10 +154,9 @@ private fun NativePtyTerminalPane(
 
         // Keep the touch gutter outside the Android surface. Both rendering and PTY resize must use the same
         // smaller viewport; View padding would not change upstream Termux's cell geometry.
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(theme.ui.background)) {
-          val bottomClearance = bottomTouchClearance(maxHeight)
+        Box(Modifier.weight(1f).fillMaxWidth().background(theme.ui.background)) {
           AndroidView(
-            modifier = Modifier.fillMaxSize().padding(bottom = bottomClearance),
+            modifier = Modifier.fillMaxSize().terminalBottomTouchClearance(),
             factory = { context ->
                 val view = DroideNativeTerminalView(context)
                 viewRef = view
@@ -256,10 +255,9 @@ private fun DevicePtyTerminalPane(
             accessoryHandle = { TerminalAccessoryHandle(accessoryFocusOwner, accessoryInputFocus,
                 accessoryKeysExpanded, onAccessoryKeysExpandedChange) })
 
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(theme.ui.background)) {
-          val bottomClearance = bottomTouchClearance(maxHeight)
+        Box(Modifier.weight(1f).fillMaxWidth().background(theme.ui.background)) {
           AndroidView(
-            modifier = Modifier.fillMaxSize().padding(bottom = bottomClearance),
+            modifier = Modifier.fillMaxSize().terminalBottomTouchClearance(),
             factory = { context ->
                 DeviceTerminalView(context).apply {
                     applyKeyboardMode(codingKeyboardMode)

@@ -123,7 +123,10 @@ class DeviceTerminalEmulator(
     }
 
     fun setUiListener(value: UiListener?) {
-        synchronized(lock) { listener = value }
+        synchronized(lock) {
+            if (listener === value) return
+            listener = value
+        }
         value?.onScreenChanged()
     }
 

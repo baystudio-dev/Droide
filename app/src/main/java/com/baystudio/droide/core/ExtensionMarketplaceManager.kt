@@ -201,6 +201,11 @@ class ExtensionMarketplaceManager(context: Context) {
         .firstOrNull { it.extensionId == extensionId.lowercase() }
         ?.version
 
+    internal suspend fun ownsInstalledRecord(extensionId: String): Boolean = withContext(Dispatchers.IO) {
+        val installed = DeclarativeExtensionRuntime.records().firstOrNull { it.extensionId == extensionId } ?: return@withContext false
+        store.activeArtifact(extensionId)?.sha256 == installed.sourceSha256
+    }
+
     fun rollbackAvailable(extensionId: String): Boolean = runCatching {
         store.previousArtifact(extensionId) != null
     }.getOrDefault(false)

@@ -15,7 +15,7 @@ data class UserProviderDefinition(
 ) {
     fun normalized(): UserProviderDefinition {
         val key = id.trim().lowercase()
-        require(key.matches(Regex("user\\.[a-z0-9][a-z0-9._-]{0,79}"))) {
+        require(key == NineRouterProvider.ID || key.matches(Regex("user\\.[a-z0-9][a-z0-9._-]{0,79}"))) {
             "Provider ID must use letters, numbers, dots, underscores or hyphens (up to 80 characters)."
         }
         val label = name.trim()
@@ -30,11 +30,18 @@ data class UserProviderDefinition(
         require(uri.scheme.equals("https", true) || (uri.scheme.equals("http", true) && isLoopback(uri.host))) {
             "Use HTTPS for a remote provider, or HTTP for localhost."
         }
-        require(!url.endsWith("/chat/completions") && !url.endsWith("/responses") && !url.endsWith("/messages")) {
+        val base = if (key == NineRouterProvider.ID) NineRouterProvider.baseUrl(url, uri) else url
+        require(!base.endsWith("/chat/completions") && !base.endsWith("/responses") && !base.endsWith("/messages")) {
             "Enter the API base URL, for example https://api.example.com/v1, without the request path."
         }
         require(models.size <= MAX_MODELS) { "Configure at most $MAX_MODELS model IDs." }
-        return copy(id = key, name = label, baseUrl = url, models = models.map(ProviderModelIdentity::normalize).distinct())
+        if (key == NineRouterProvider.ID) {
+            require(protocol == ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS && models.isEmpty()) {
+                "9Router discovers its chat models from the server."
+            }
+        }
+        return copy(id = key, name = if (key == NineRouterProvider.ID) NineRouterProvider.NAME else label,
+            baseUrl = base, models = models.map(ProviderModelIdentity::normalize).distinct())
     }
 
     internal fun provider(): AiProvider {
@@ -42,7 +49,8 @@ data class UserProviderDefinition(
         val local = isLoopback(URI(value.baseUrl).host)
         return AiProvider(
             id = value.id, name = value.name, baseUrl = value.baseUrl, model = "", free = local,
-            needsKey = value.requiresKey, helpUrl = "", note = "Custom provider · ${value.protocol.label}",
+            needsKey = value.requiresKey, helpUrl = "",
+            note = if (value.id == NineRouterProvider.ID) "Connect your 9Router server and choose from its models." else "Custom provider · ${value.protocol.label}",
             wireProtocol = value.protocol,
             authScheme = if (!value.requiresKey) ProviderAuthScheme.NONE else when (value.protocol) {
                 ProviderWireProtocol.ANTHROPIC_MESSAGES -> ProviderAuthScheme.ANTHROPIC_X_API_KEY

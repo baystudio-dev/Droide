@@ -43,7 +43,7 @@ class AgentChatDisclosureJumpTest {
         compose.setContent { DroideTheme {
             scope = rememberCoroutineScope()
             viewport=rememberAgentChatViewport(ui,AgentChatConversationKey("droide","disclosure-jump"),null,
-                (0..20).map { "row:$it" }, activity,false)
+                { (0..20).map { "row:$it" } }, activity,false)
             val density=LocalDensity.current
             val space=with(density) { viewport.disclosureSpacePx.toDp() }.coerceAtMost(viewportHeight)
             SideEffect { viewport.measuredDisclosurePadding(with(density) { basePadding.roundToPx() }, with(density) { space.roundToPx() }) }

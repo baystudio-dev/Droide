@@ -3,8 +3,32 @@ package com.baystudio.droide.core
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.nio.file.attribute.PosixFileAttributes
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+
+internal fun ubuntuBinaryAttributes(binary: Path, store: Path): PosixFileAttributes? {
+    var path = binary
+    try {
+        // PRoot can encode one hard link as two links into the guest's own .l2s directory.
+        repeat(3) { depth ->
+            val entry = Files.readAttributes(path, PosixFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+            if (entry.isRegularFile) return entry
+            if (!entry.isSymbolicLink || depth == 2 || !Files.isDirectory(store, LinkOption.NOFOLLOW_LINKS)) return null
+            val target = Files.readSymbolicLink(path)
+            val name = target.fileName ?: return null
+            if (!name.toString().startsWith(".l2s.")) return null
+            val owned = store.resolve(name)
+            if (target != owned && target != path.parent.relativize(owned)) return null
+            path = owned
+        }
+    } catch (_: NoSuchFileException) {
+        return null
+    }
+    return null
+}
 
 /** Short, process-local admission reuse. Callers serialize through the Ubuntu mutation gate. */
 internal class UbuntuGuestReadinessCache(private val nanoTime: () -> Long = System::nanoTime) {
@@ -26,7 +50,7 @@ internal class UbuntuGuestReadinessCache(private val nanoTime: () -> Long = Syst
     companion object {
         const val MAX_AGE_NANOS = 30_000_000_000L
 
-        /** Unknown, interrupted, replaced or symlinked admission state always takes the full path. */
+        /** An interrupted or unrecognized guest must pass full admission. */
         fun fingerprint(guest: File, engine: File, expectedLauncher: String, recoveryPaths: List<File>, retainedPrevious: File? = null): String? = runCatching {
             val noFollow = LinkOption.NOFOLLOW_LINKS
             require(recoveryPaths.none { Files.exists(it.toPath(), noFollow) })
@@ -35,15 +59,17 @@ internal class UbuntuGuestReadinessCache(private val nanoTime: () -> Long = Syst
             add(guest.canonicalPath)
             add(expectedLauncher)
             val directories = listOf(guest.parentFile, guest, File(guest, "rootfs"), File(guest, "rootfs/usr"), File(guest, "rootfs/usr/bin"))
-            val binaries = listOf(engine, File(guest, "rootfs/usr/bin/apt-get"), File(guest, "rootfs/usr/bin/dpkg"), File(guest, "rootfs/usr/bin/bash"))
-            for (file in directories + binaries) {
-                val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, noFollow)
+            val binaries = listOf(File(guest, "rootfs/usr/bin/apt-get"), File(guest, "rootfs/usr/bin/dpkg"), File(guest, "rootfs/usr/bin/bash"))
+            val linkStore = guest.toPath().resolve("rootfs/.l2s")
+            for (file in directories + engine + binaries) {
+                val attrs = if (file in binaries) ubuntuBinaryAttributes(file.toPath(), linkStore) ?: return null
+                    else Files.readAttributes(file.toPath(), PosixFileAttributes::class.java, noFollow)
                 require(!attrs.isSymbolicLink && if (file in directories) attrs.isDirectory else attrs.isRegularFile)
                 add(file.path)
                 // Bind directory admission to stable identity and mode, not child metadata changed by installation.
                 add(if (file in directories && attrs.fileKey() != null) "${attrs.fileKey()}"
                     else "${attrs.fileKey()}:${attrs.creationTime()}:${attrs.lastModifiedTime()}:${attrs.size()}")
-                add(Files.getPosixFilePermissions(file.toPath(), noFollow).toString())
+                add(attrs.permissions().toString())
             }
             // A retained backup is not an active transaction while the current root exists. The bootstrap
             // reconciler never restores it over that root.

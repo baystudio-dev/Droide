@@ -372,8 +372,14 @@ class UbuntuGuestGroupNamesTest {
         // Structural guard only: this does not instantiate the Android manager or prove a device startup.
         val relative = "src/main/java/com/baystudio/droide/core/FoundryUbuntuGuestEnvironment.kt"
         val source = listOf(File(relative), File("app/$relative")).first { it.isFile }.readText()
-        assertEquals(3, Regex("repairGuestGroupNamesUnlocked\\(checkCancelled\\)\\s+readinessCache\\.admit").findAll(source).count())
-        val fastPath = source.indexOf("if (packageAttachAdmission.mayAttach()) return@withContext finalRoot")
+        val admission = source.substringAfter("private suspend fun admitHealthyGuest(").substringBefore("private fun installGuestDefaults")
+        val repair = admission.indexOf("repairGuestGroupNamesUnlocked(")
+        assertTrue(repair >= 0 && admission.indexOf("readinessCache.admit(") > repair)
+        val callers = source.substringAfter("private suspend fun ensureInstalledUnlocked").substringBefore("private suspend fun admitHealthyGuest(")
+        for (entry in listOf("if (isHealthy())", "if (isLegacyHealthyUnlocked())", "Activated Ubuntu guest environment failed health verification")) {
+            assertTrue(entry, callers.substringAfter(entry, "").substringBefore("return finalRoot").contains("admitHealthyGuest("))
+        }
+        val fastPath = source.indexOf("packageAttachAdmission.mayAttach()) return@withContext finalRoot")
         val gate = source.indexOf("FoundryUbuntuGuestMutationGate.mutex.withLock", fastPath)
         assertTrue(fastPath >= 0 && gate > fastPath)
         assertFalse(source.substring(fastPath, gate).contains("guestGroupNames"))

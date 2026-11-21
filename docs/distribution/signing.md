@@ -10,9 +10,9 @@ This configuration does not establish F-Droid acceptance. The official applicati
 
 ## Published release and packaging recipe
 
-The GitHub release tag `v1.03` and packaging tag `v1.03-fdroid` identify the same application source. The signed APK is `Droide-1.03-release.apk`, version 1.03 (47). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03)
+The GitHub release tag `v1.03.1` and packaging tag `v1.03.1-fdroid` identify the same application source. The signed APK is `Droide-1.03.1-release.apk`, version 1.03.1 (48). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.1)
 
-For the preceding release, `v1.02` and `v1.02-fdroid` identify commit `ad75df7763aa6458b0c102818b891e0898af3a58`.
+For the historical 1.02 release, `v1.02` and `v1.02-fdroid` identify commit `ad75df7763aa6458b0c102818b891e0898af3a58`.
 
 The [current recipe](../../tools/fdroid/com.baystudio.droide.yml) is maintained independently of those immutable tags. Use that recipe for the packaging submission; do not move an existing release tag to update metadata. Its `Binaries` URL identifies each version's signed release, while `AllowedAPKSigningKeys` restricts the accepted certificate. The recipe covers the latest release. Previous releases and their inputs remain available at their original tags.
 
@@ -36,10 +36,10 @@ Use the current repository's verifier with the rebuilt artifact:
 
 ```sh
 python3 tools/verify_upstream_apk.py \
-  --signed-apk /absolute/path/Droide-1.03-release.apk \
+  --signed-apk /absolute/path/Droide-1.03.1-release.apk \
   --unsigned-apk /absolute/path/normalized-unsigned.apk \
   --apksigner /absolute/path/android-sdk/build-tools/36.0.0/apksigner \
-  --version-code 47 \
+  --version-code 48 \
   --output /absolute/path/new-verification.json
 ```
 
@@ -48,7 +48,7 @@ The verifier checks the enabled recipe, package/version, allowed certificate, a 
 Real-artifact regressions require explicit inputs:
 
 ```sh
-DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03-release.apk \
+DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03.1-release.apk \
 DROIDE_UPSTREAM_UNSIGNED_APK=/absolute/path/normalized-unsigned.apk \
 DROIDE_APKSIGNER=/absolute/path/android-sdk/build-tools/36.0.0/apksigner \
 python3 -B -m unittest discover -s tools/tests -p 'test_upstream_apk_verification.py' -v

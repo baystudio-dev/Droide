@@ -66,7 +66,7 @@ class AgentChatReturnToLatestTest {
                 val key = AgentChatConversationKey("droide", session)
                 val count = rowCount
                 val keys = (0 until count).map { "row:$it" }
-                viewport = rememberAgentChatViewport(ui, key, ui.chatPosition(key), keys,
+                viewport = rememberAgentChatViewport(ui, key, ui.chatPosition(key), { keys },
                     AgentChatActivity(count, 0, 0, 0, 0, 0, 0, null, false), false)
                 val density = LocalDensity.current
                 val extra = with(density) { viewport.disclosureSpacePx.toDp() }

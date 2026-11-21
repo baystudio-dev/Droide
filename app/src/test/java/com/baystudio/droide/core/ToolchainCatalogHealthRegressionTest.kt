@@ -138,7 +138,7 @@ class ToolchainCatalogHealthRegressionTest {
         assertFalse(result.identityVerified); assertTrue(result.summary.contains("upstream freshness"))
         f.tool("echo 'openjdk version \"2.0.21\"' >&2")
         val unparsed = UserToolUpdateHealth.verify(kotlinRecipe(), f::execute)
-        assertFalse(unparsed.identityVerified); assertTrue(unparsed.summary.contains("verification pending"))
+        assertFalse(unparsed.identityVerified); assertTrue(unparsed.summary.contains("Not verified"))
     } }
     @Test fun unreviewedCommandsNeverReceiveGuessedVersionFlags() = host { f -> runBlocking {
         val family = ExtensionFamily("test.unknown", "Unknown", ExtensionCategory.CLI_TOOLS, "", listOf(ExtensionVersion("x")), "")
@@ -146,7 +146,7 @@ class ToolchainCatalogHealthRegressionTest {
         val recipe = ToolUpdatePlanner.recipe(family, "1.0.0", source)
         assertNull(recipe.selectedCommandChecks.single().arguments)
         val pending = UserToolUpdateHealth.verify(recipe.copy(selectedCommandChecks = emptyList()), f::execute)
-        assertFalse(pending.identityVerified); assertTrue(pending.summary.contains("verification pending"))
+        assertFalse(pending.identityVerified); assertTrue(pending.summary.contains("Not verified"))
     } }
     @Test fun requestedVersionIsLiteralAndCannotInjectShellWhileCheckingProvider() = host { f -> runBlocking {
         val version = "2.0.21'; touch ${File(f.root, "injected").path}; '"
@@ -193,9 +193,22 @@ class ToolchainCatalogHealthRegressionTest {
         assertEquals("Ubuntu APT", original.provider)
         assertEquals("/usr/bin/kotlinc", original.selectedCommandChecks.single().expectedPath)
         val fixture = original.copy(selectedCommandChecks = original.selectedCommandChecks.map { it.copy(expectedPath = f.provider.path) })
-        val result = UserToolUpdateHealth.verify(fixture, f::execute)
+        f.tool("echo 'info: kotlinc-jvm 1.3-SNAPSHOT (JRE 17.0.12)' >&2")
+        f.aptStatus()
+        val commands = mutableListOf<String>()
+        val result = UserToolUpdateHealth.verify(fixture) { commands += it; f.execute(it) }
         assertFalse(result.identityVerified)
-        assertTrue(result.summary.contains("upstream/package-version equivalence"))
+        assertTrue(result.summary, result.summary.contains("kotlin 1.3.31+ds1-1"))
+        assertTrue(result.summary, result.summary.contains("openjdk-17-jdk-headless 17.0.12+7"))
+        assertTrue(result.summary, result.summary.contains("kotlinc 1.3-SNAPSHOT"))
+        assertFalse(result.summary.contains("pending", ignoreCase = true))
+        assertEquals(1, commands.count { "/usr/bin/dpkg-query" in it })
+        assertFalse(commands.any { "apt-get" in it })
+        for ((requested, state) in listOf("kotlin" to "half-configured", "kotlin=2.1.0" to "installed")) {
+            f.aptStatus(state)
+            val wrong = fixture.copy(aptPackageRequests = listOf(requested))
+            assertTrue(runCatching { UserToolUpdateHealth.verify(wrong, f::execute) }.exceptionOrNull() is IllegalStateException)
+        }
         File(f.bin, "kotlinc").delete(); f.script(File(f.bin, "kotlinc"), "exit 0")
         assertTrue(runCatching { UserToolUpdateHealth.verify(fixture, f::execute) }.exceptionOrNull() is IllegalStateException)
     } }
@@ -240,6 +253,16 @@ class ToolchainCatalogHealthRegressionTest {
             Files.createSymbolicLink(File(bin, "kotlinc").toPath(), provider.toPath())
             script(File(bin, "mise"), "printf '%s\\n' \"\$@\" >> \"\$MISE_CALLS\"; case \"\$*\" in *--tool*) printf '%s\\n' \"\$PROVIDER\";; *) printf '%s\\n' \"\$CURRENT\";; esac")
         }
+        fun aptStatus(kotlinState: String = "installed") {
+            val status = File(root, "dpkg/status")
+            status.parentFile.mkdirs()
+            val packages = listOf(Triple("kotlin", "1.3.31+ds1-1", kotlinState),
+                Triple("openjdk-17-jdk-headless", "17.0.12+7", "installed"))
+            status.writeText(packages.joinToString("\n") { (name, version, state) ->
+                "Package: $name\nStatus: install ok $state\nArchitecture: arm64\nVersion: $version\n" +
+                    "Maintainer: Fixture <test@example.invalid>\nDescription: local test package\n"
+            })
+        }
         fun tool(body: String) = script(provider, "printf '%s\\n' \"\$@\" >> \"\$CALLS\"; $body")
         fun script(file: File, body: String) { file.parentFile.mkdirs(); file.writeText("#!/bin/sh\n$body\n"); file.setExecutable(true) }
         fun useShim() { shim = File(root, "custom-mise/shims/kotlinc"); script(shim!!, "exec \"\$PROVIDER\" \"\$@\"") }
@@ -248,6 +271,7 @@ class ToolchainCatalogHealthRegressionTest {
             val process = ProcessBuilder("/bin/sh", "-c", command).directory(root).redirectErrorStream(true).redirectOutput(output).apply {
                 environment()["PATH"] = listOfNotNull(shim?.parent, bin.path, "/usr/bin", "/bin").joinToString(":")
                 environment()["HOME"] = root.path; environment()["MISE_DATA_DIR"] = File(root, "custom-mise").path
+                if (File(root, "dpkg/status").isFile) environment()["DPKG_ADMINDIR"] = File(root, "dpkg").path
                 environment()["PROVIDER"] = provider.path; environment()["CURRENT"] = current
                 environment()["CALLS"] = calls.path; environment()["MISE_CALLS"] = miseCalls.path
             }.start()

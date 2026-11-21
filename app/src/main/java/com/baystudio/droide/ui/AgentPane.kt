@@ -210,17 +210,20 @@ fun AgentPane(
         sessionTitle = runSuspendCatching { agent.currentSessionId?.let { agent.sessions.getSummary(it)?.title } }
             .getOrNull() ?: "New agent session"
     }
-    val streamTextChars = streamParts.sumOf { if (it.kind == AgentStreamPartKind.TEXT) it.text.length else 0 }
-    val streamOutputChars = streamParts.sumOf { if (it.kind == AgentStreamPartKind.TOOL) it.output.length else 0 }
-    val streamTerminalCount = streamParts.count { it.state == AgentStreamPartState.COMPLETED || it.state == AgentStreamPartState.ERROR || it.state == AgentStreamPartState.CANCELLED }
-    val parallelActivityBucket = parallelAgents.tasks.sumOf { task ->
-        ((task.updatedAtMs / 1_000L) % 10_000L).toInt() + task.activityStep + task.activity.hashCode() + task.state.ordinal * 17 + task.integration.ordinal * 31
+    val activeParts = if (usingExternalAgent) externalState.streamParts else streamParts
+    val activityCounts = remember(activeParts, usingExternalAgent) {
+        streamActivityCounts(activeParts, usingExternalAgent)
+    }
+    val parallelActivityBucket = if (usingExternalAgent) 0 else remember(parallelAgents.tasks) {
+        parallelAgents.tasks.sumOf { task ->
+            ((task.updatedAtMs / 1_000L) % 10_000L).toInt() + task.activityStep + task.activity.hashCode() + task.state.ordinal * 17 + task.integration.ordinal * 31
+        }
     }
     val showActivityTail = (!usingExternalAgent && (busy || streamParts.isNotEmpty())) ||
             (usingExternalAgent && (externalController.activeRun?.agentId == agentBackendId ||
                 externalController.lifecycleBusyAgentId == agentBackendId))
     val activityTailKey = if (usingExternalAgent) "external-status-tail:$agentBackendId" else "native-status-tail:${streamState.runId}"
-    val chatKeys = buildList {
+    fun restoreChatKeys(): List<String> = buildList {
         if (transcriptMessages.isEmpty()) add("welcome")
         addAll(transcriptKeys)
         if (!usingExternalAgent && parallelAgents.tasks.isNotEmpty()) add("parallel-agents:${parallelAgents.parentSessionId}")
@@ -236,15 +239,15 @@ fun AgentPane(
     val chatActivity = AgentChatActivity(
         messages = if (usingExternalAgent) transcriptMessages.size else baseDisplayedMessages.size,
         parts = if (usingExternalAgent) externalState.streamParts.size + externalState.liveMedia.size else streamParts.size + nativeLiveMedia.total,
-        textBucket = if (usingExternalAgent) (externalState.liveText.length + externalState.liveThought.length) / 160 else streamTextChars / 160,
-        outputBucket = if (usingExternalAgent) externalState.streamParts.sumOf { it.output.length } / 1024 else streamOutputChars / 1024,
-        terminalParts = if (usingExternalAgent) externalState.streamParts.count { it.state in setOf(AgentStreamPartState.COMPLETED, AgentStreamPartState.ERROR, AgentStreamPartState.CANCELLED) } else streamTerminalCount,
-        parallel = if (usingExternalAgent) 0 else parallelActivityBucket,
+        textBucket = if (usingExternalAgent) (externalState.liveText.length + externalState.liveThought.length) / 160 else activityCounts.textChars / 160,
+        outputBucket = activityCounts.outputChars / 1024,
+        terminalParts = activityCounts.finished,
+        parallel = parallelActivityBucket,
         external = if (usingExternalAgent) 31 * externalState.activity.hashCode() + externalState.liveMedia.hashCode() else 0,
         runId = if (usingExternalAgent) externalController.activeRun?.runId?.toString() else streamState.runId.toString(),
         busy = effectiveBusy,
     )
-    val chatViewport = rememberAgentChatViewport(uiState, conversationKey, savedChatPosition, chatKeys, chatActivity, showStreamDetails)
+    val chatViewport = rememberAgentChatViewport(uiState, conversationKey, savedChatPosition, ::restoreChatKeys, chatActivity, showStreamDetails)
     val listState = chatViewport.listState
     val newActivityCount = chatViewport.unread
     val activityEntrances = remember(uiState, conversationKey) {
@@ -1292,4 +1295,21 @@ internal fun AgentTaskDock(todos: List<Todo>, taskDockMaxHeight: Dp, denseCompos
         }
     }
 
+}
+
+internal data class StreamActivityCounts(val textChars: Int, val outputChars: Int, val finished: Int)
+
+internal fun streamActivityCounts(parts: List<AgentStreamPart>, external: Boolean): StreamActivityCounts {
+    var textChars = 0
+    var outputChars = 0
+    var finished = 0
+    for (part in parts) {
+        if (!external && part.kind == AgentStreamPartKind.TEXT) textChars += part.text.length
+        if (external || part.kind == AgentStreamPartKind.TOOL) outputChars += part.output.length
+        when (part.state) {
+            AgentStreamPartState.COMPLETED, AgentStreamPartState.ERROR, AgentStreamPartState.CANCELLED -> finished++
+            else -> Unit
+        }
+    }
+    return StreamActivityCounts(textChars, outputChars, finished)
 }

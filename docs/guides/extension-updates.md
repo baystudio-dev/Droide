@@ -6,6 +6,12 @@ installable package. `ExtensionUpdatePolicy` gives each family an explicit updat
 The same policy controls the detail pane and rejects unsupported version requests from
 agent/toolchain callers; a request for `latest` must never silently become an old release.
 
+## Installing a tool
+
+Search Extensions or choose a category, open the tool, then review the source and version before installing. Use Back to return to the catalog. You can reopen progress for an installation already in flight.
+
+Extensions uses the Ubuntu environment that the terminal opens. Once it is ready, installing another package uses the existing guest. An interrupted first setup can still be repaired. For an Ubuntu APT tool, `latest` selects the version available from the configured Ubuntu repositories. Kotlin’s package version and the compiler banner can differ. Droide reports the installed package and the compiler it found.
+
 ## Routes
 
 | Route | Update owner | Behavior |

@@ -62,6 +62,10 @@ object ReasoningSupport {
             return catalogWire(providerId, model, effort, protocol)
         }
 
+        if (providerId == NineRouterProvider.ID) {
+            return if (capability?.reasoning == true && effort in setOf(ReasoningEffort.LOW, ReasoningEffort.HIGH))
+                ReasoningWire.OpenAiCompatible(effort.wireValue) else null
+        }
         return fallbackWire(providerId, model, effort, protocol)
     }
 
@@ -69,6 +73,7 @@ object ReasoningSupport {
         ReasoningEffort.entries.filter { wire(providerId, model, it) != null }
 
     fun defaultFor(providerId: String, model: String): ReasoningEffort? {
+        if (providerId == NineRouterProvider.ID) return null
         val supported = supported(providerId, model)
         return when {
             ReasoningEffort.HIGH in supported -> ReasoningEffort.HIGH

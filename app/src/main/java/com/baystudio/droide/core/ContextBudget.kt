@@ -36,6 +36,7 @@ object ModelContextRegistry {
 
     internal fun contextLimitFromModel(model: JsonObject): Int? = minimum(
         model["context_length"], model["context_window"], model["max_context_length"],
+        (model["capabilities"] as? JsonObject)?.get("contextWindow"),
         (model["top_provider"] as? JsonObject)?.get("context_length"),
         (model["limit"] as? JsonObject)?.get("context"),
     )
@@ -48,6 +49,7 @@ object ModelContextRegistry {
 
     internal fun outputLimitFromModel(model: JsonObject): Int? = minimum(
         model["outputTokenLimit"], model["output_token_limit"], model["max_output_tokens"],
+        (model["capabilities"] as? JsonObject)?.get("maxOutput"),
         model["max_completion_tokens"], (model["limit"] as? JsonObject)?.get("output"),
         (model["top_provider"] as? JsonObject)?.get("max_completion_tokens"),
     )

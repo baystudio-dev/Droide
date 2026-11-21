@@ -21,6 +21,13 @@ class ExtensionCatalogPresentationTest {
         return ExtensionVersionState(family, entry, state, detail)
     }
 
+    @Test fun selectionRetainsEnvironmentWhenTwoOffersHaveTheSameVersion() {
+        val workstation = item("1.0", ExtensionState.AVAILABLE, scope = ExecutionScope.LOCAL)
+        val ubuntu = item("1.0", ExtensionState.AVAILABLE, scope = ExecutionScope.LOCAL_LINUX_ARM64)
+        val selection = ExtensionSelection.from(ubuntu)
+        assertEquals(ubuntu, listOf(workstation, ubuntu).single(selection::matches))
+    }
+
     @Test fun screenshotDetectionPlaceholdersBecomeOneInstallableFamilyCard() {
         val available = item("Latest npm", ExtensionState.AVAILABLE, true, ExtensionInstallKind.REVIEWED_RECIPE)
         val cards = extensionCatalogCards(listOf(item("Local", ExtensionState.UNAVAILABLE, scope = ExecutionScope.LOCAL),

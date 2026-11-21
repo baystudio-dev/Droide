@@ -176,7 +176,7 @@ class ProviderConnectionBackend(context: Context) {
                 if (ProviderModelCertificationRegistry.revoke(provider.id)) bumpRevision()
                 return@withLock Result.failure(failure)
             }
-            val certifiedModels = runCatching { ProviderModelCertificationRegistry.validatedModels(models) }.getOrElse { failure ->
+            val certifiedModels = runCatching { ProviderModelCertificationRegistry.validatedModels(models, provider.id) }.getOrElse { failure ->
                 if (ProviderModelCertificationRegistry.revoke(provider.id)) bumpRevision()
                 return@withLock Result.failure(failure)
             }
@@ -332,7 +332,7 @@ class ProviderConnectionBackend(context: Context) {
             return Result.failure(t)
         }
         val models = validateOnly(provider, selected, candidate).getOrElse { return Result.failure(it) }
-        val certifiedModels = runCatching { ProviderModelCertificationRegistry.validatedModels(models) }
+        val certifiedModels = runCatching { ProviderModelCertificationRegistry.validatedModels(models, provider.id) }
             .getOrElse { return Result.failure(it) }
 
         // OAuth callers additionally claim their exact still-current attempt immediately before durable writes.

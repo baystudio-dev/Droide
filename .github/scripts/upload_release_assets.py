@@ -78,6 +78,12 @@ def existing_matches(asset, row):
     return asset.get('state') == 'uploaded' and asset.get('size') == row['bytes'] and asset.get('digest') == 'sha256:' + row['sha256']
 
 
+def release_version(tag):
+    if not re.fullmatch(r'v[0-9]+\.[0-9]+(?:\.[0-9]+)?', tag):
+        raise ValueError('Expected a published version tag')
+    return tag[1:]
+
+
 def main():
     repo, tag, commit = (os.environ[key] for key in ('GH_REPO', 'RELEASE_TAG', 'RELEASE_COMMIT'))
     release_id = os.environ['RELEASE_ID']
@@ -85,10 +91,8 @@ def main():
         raise ValueError('Invalid repository or expected source commit')
     if not re.fullmatch(r'[1-9][0-9]*', release_id):
         raise ValueError('Invalid draft release ID')
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+', tag):
-        raise ValueError('Expected a published version tag')
+    version = release_version(tag)
     rows = validate_manifest(os.environ['RELEASE_ASSETS'])
-    version = tag[1:]
     allowed = {f'Droide-{version}-release.apk', f'Droide-{version}-Official-Source.zip',
                f'Droide-{version}-Verification.zip', 'droide-release-certificate.pem',
                'VERIFICATION-SUMMARY.json', 'SHA256SUMS'}

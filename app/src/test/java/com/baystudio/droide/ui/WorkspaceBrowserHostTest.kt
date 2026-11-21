@@ -561,4 +561,31 @@ class WorkspaceBrowserHostTest {
         assertNull(placement.bounds(WorkspaceBrowserSlot.MAIN))
         assertEquals(positive, placement.lastGeometry?.viewport)
     }
+
+    @Test fun translatedAndResizedSlotKeepsItsRendererAndExactViewport() {
+        val owner = Any()
+        val slot = WorkspaceBrowserSlot.MAIN
+        placement.claim(slot, owner)
+        placement.update(slot, owner, Rect(1f, 2f, 101f, 82f))
+        compose.setContent {
+            Box(Modifier.fillMaxSize()) {
+                WorkspaceBrowserHost(placement, slot, false, false) { presented, ready -> FakeBrowser(presented, ready) }
+            }
+        }
+        compose.waitForIdle()
+        val renderer = currentToken
+        assertTrue(renderer != null)
+        for (step in 1..18) {
+            val x = step * 2f
+            val y = step * 3f
+            val expected = Rect(x, y, x + 100f + step, y + 80f + step)
+            compose.runOnIdle { placement.update(slot, owner, expected) }
+            compose.waitForIdle()
+            assertEquals(expected, measuredBounds.last())
+            assertSame(renderer, currentToken)
+            assertEquals(true, currentCaptureReady)
+        }
+        assertEquals(1, created.size)
+        assertTrue(disposed.isEmpty())
+    }
 }

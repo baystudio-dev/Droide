@@ -106,11 +106,13 @@ class WorkspaceStartupRecoveryUiTest {
                 discovery = { error("No discovery") },
             ))
             ownedBridge = bridge
-            var resolutions = 0; var starts = 0
+            val resolved = mutableListOf<String>()
+            val expected = WorkspaceAgentPluginCatalog.entries.flatMap { listOf(it.command, it.cliCommand).distinct() }
+            var starts = 0
             val processHost = object : StdioProcessHost {
                 override val executionScope = ProcessExecutionScope.LOCAL_LINUX_ARM64
                 override suspend fun resolveExecutable(command: String): String? {
-                    resolutions++
+                    resolved += command
                     return "/fixture/bin/$command"
                 }
                 override suspend fun start(argv: List<String>, environment: Map<String, String>, resourceLimits: ProcessResourceLimits?): HostedStdioProcess {
@@ -130,12 +132,12 @@ class WorkspaceStartupRecoveryUiTest {
                 val availability = rememberWorkspaceAgentAvailability(selected, expanded) { selected?.availability().orEmpty() }
                 androidx.compose.material3.Text("${availability.size} available Agent entries")
             }
-            compose.runOnIdle { assertEquals(0, resolutions); assertEquals(0, starts); expanded = true }
-            compose.runOnIdle { assertEquals(0, resolutions); assertEquals(0, starts); enabled = true }
-            compose.runOnIdle { assertEquals(7, resolutions); assertEquals(0, starts); expanded = false }
-            compose.runOnIdle { assertEquals(7, resolutions); enabled = false }
-            compose.runOnIdle { assertEquals(7, resolutions); expanded = true }
-            compose.runOnIdle { assertEquals(7, resolutions); assertEquals(0, starts) }
+            compose.runOnIdle { assertTrue(resolved.isEmpty()); assertEquals(0, starts); expanded = true }
+            compose.runOnIdle { assertTrue(resolved.isEmpty()); assertEquals(0, starts); enabled = true }
+            compose.runOnIdle { assertEquals(expected, resolved); assertEquals(0, starts); expanded = false }
+            compose.runOnIdle { assertEquals(expected, resolved); enabled = false }
+            compose.runOnIdle { assertEquals(expected, resolved); expanded = true }
+            compose.runOnIdle { assertEquals(expected, resolved); assertEquals(0, starts) }
         } finally {
             try { ownedHost?.close(); ownedBridge?.close() }
             finally { scope.cancel(); PathSecurity.deleteTreeNoFollow(root) }

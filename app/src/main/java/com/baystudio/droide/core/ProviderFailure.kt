@@ -5,6 +5,14 @@ import kotlinx.serialization.json.*
 internal object ProviderFailure {
     private val json = Json { ignoreUnknownKeys = true }
 
+    fun message(failure: Throwable, secrets: Collection<String> = emptyList()): String = when (failure) {
+        is java.net.UnknownHostException -> "Could not resolve the provider host. Check the server address and DNS."
+        is java.net.ConnectException -> "Could not connect to the provider. Check that the server is running and its port is reachable."
+        is javax.net.ssl.SSLHandshakeException -> "The provider's TLS handshake failed. Check its HTTPS certificate."
+        else -> failure.message?.takeIf { it.isNotBlank() }?.let { redact(it, secrets) }
+            ?: "The request failed (${failure.javaClass.simpleName.ifEmpty { "provider error" }})."
+    }
+
     fun describe(status: Int, body: String): String {
         val detail = runCatching {
             val root = json.parseToJsonElement(body) as? JsonObject

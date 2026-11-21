@@ -18,7 +18,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.liveRegion
@@ -31,6 +32,7 @@ import kotlin.math.roundToInt
 import com.baystudio.droide.core.AgentBrowserController
 
 internal data class WorkspaceBrowserGeometry(val viewport: Rect, val visible: Rect) {
+    val hasVisibleArea: Boolean get() = visible.width > 0f && visible.height > 0f
     val fullyVisible: Boolean get() = visible.left <= viewport.left + 1f && visible.top <= viewport.top + 1f &&
         visible.right >= viewport.right - 1f && visible.bottom >= viewport.bottom - 1f
 }
@@ -110,23 +112,30 @@ internal fun BoxScope.WorkspaceBrowserHost(
     browser: @Composable (presented: Boolean, captureReady: Boolean) -> Unit,
 ) {
     SideEffect { placement.select(selectedSlot) }
-    val currentGeometry = placement.geometry(selectedSlot)
-    val visibleGeometry = currentGeometry?.takeIf { it.visible.width > 0f && it.visible.height > 0f }
-    val geometry = visibleGeometry ?: placement.lastGeometry ?: return
-    val bounds = geometry.visible
-    if (selectedSlot == null && !keepActive && !stopping) return
-    // A known fully clipped pane is intentionally hidden. Missing destination
-    // measurement during a placement move is only transient and keeps one host.
-    if (currentGeometry != null && visibleGeometry == null && !keepActive && !stopping) return
-    val presented = selectedTab && selectedSlot != null && visibleGeometry != null
-    val density = LocalDensity.current
-    val width = with(density) { bounds.width.toDp() }
-    val height = with(density) { bounds.height.toDp() }
-    val root = placement.rootBounds
+    val current by remember(placement, selectedSlot) { derivedStateOf { placement.geometry(selectedSlot) } }
+    val geometry by remember(placement, selectedSlot) {
+        derivedStateOf { current?.takeIf { it.hasVisibleArea } ?: placement.lastGeometry }
+    }
+    val mounted by remember(placement, selectedSlot, keepActive, stopping) {
+        derivedStateOf {
+            geometry != null && (keepActive || stopping || (selectedSlot != null && current?.hasVisibleArea != false))
+        }
+    }
+    if (!mounted) return
+    val presented by remember(placement, selectedSlot, selectedTab) {
+        derivedStateOf { selectedTab && current?.hasVisibleArea == true }
+    }
+    val captureReady by remember(placement, selectedSlot, selectedTab) {
+        derivedStateOf { presented && current?.fullyVisible == true }
+    }
     var modifier = Modifier
         .align(AbsoluteAlignment.TopLeft)
-        .absoluteOffset { IntOffset((bounds.left - root.left).roundToInt(), (bounds.top - root.top).roundToInt()) }
-        .requiredSize(width, height)
+        .absoluteOffset {
+            val bounds = geometry?.visible ?: return@absoluteOffset IntOffset.Zero
+            val root = placement.rootBounds
+            IntOffset((bounds.left - root.left).roundToInt(), (bounds.top - root.top).roundToInt())
+        }
+        .browserBoundsSize { geometry?.visible }
         .clipToBounds()
         .zIndex(if (presented) 1f else -1f)
         .graphicsLayer { alpha = if (presented) 1f else 0f }
@@ -138,14 +147,22 @@ internal fun BoxScope.WorkspaceBrowserHost(
             while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
         }
     }
-    val viewport = geometry.viewport
     Box(modifier) {
         Box(Modifier.wrapContentSize(AbsoluteAlignment.TopLeft, unbounded = true)
-            .absoluteOffset { IntOffset((viewport.left - bounds.left).roundToInt(), (viewport.top - bounds.top).roundToInt()) }
-            .requiredSize(with(density) { viewport.width.toDp() }, with(density) { viewport.height.toDp() })) {
-            browser(presented, presented && geometry.fullyVisible)
+            .absoluteOffset {
+                val frame = geometry ?: return@absoluteOffset IntOffset.Zero
+                IntOffset((frame.viewport.left - frame.visible.left).roundToInt(), (frame.viewport.top - frame.visible.top).roundToInt())
+            }
+            .browserBoundsSize { geometry?.viewport }) {
+            browser(presented, captureReady)
         }
     }
+}
+
+private fun Modifier.browserBoundsSize(bounds: () -> Rect?): Modifier = layout { measurable, _ ->
+    val rect = bounds() ?: Rect.Zero
+    val child = measurable.measure(Constraints.fixed(rect.width.roundToInt(), rect.height.roundToInt()))
+    layout(child.width, child.height) { child.place(0, 0) }
 }
 
 @Composable

@@ -174,6 +174,8 @@ class FoundryUbuntuGuestEnvironmentManager(
 
     override suspend fun isHealthy(): Boolean = healthyProfile(FoundryUbuntuGuestEnvironmentSpec.PROFILE_REVISION)
 
+    internal val mutationInProgress: Boolean get() = FoundryUbuntuGuestMutationGate.mutex.isLocked
+
     internal suspend fun verifyExistingForSetup(): Boolean? = withContext(Dispatchers.IO) {
         LocalExecutionSubstrate.initializeIfNeeded(appContext)
         val gate = FoundryUbuntuGuestMutationGate.mutex
@@ -226,9 +228,6 @@ class FoundryUbuntuGuestEnvironmentManager(
         if (setupProgress == null && packageAttachAdmission.mayAttach()) return@withContext finalRoot
         FoundryUbuntuGuestMutationGate.mutex.withLock {
             val installed = ensureInstalledUnlocked(attempt, checkCancelled, setupProgress)
-            UbuntuAptCacheDefaults.install(File("$finalRoot/rootfs"))
-            UbuntuSshClientDefaults.install(File("$finalRoot/rootfs"))
-            PackagedWorkstationRootfs.evict(appContext, FoundryUbuntuGuestEnvironmentSpec.rootfsArtifact.fileName, FoundryUbuntuGuestEnvironmentSpec.rootfsArtifact.sha256)
             if (setupProgress != null) UbuntuEnvironmentSetup.confirmActivation(appContext, File(installed))
             else if (BuildConfig.FDROID_DISTRIBUTION) UbuntuEnvironmentSetup.confirmPendingActivation(appContext, File(installed))
             installed
@@ -255,17 +254,13 @@ class FoundryUbuntuGuestEnvironmentManager(
         reconcileInterruptedLegacyCompactionUnlocked()
         repairExistingLauncher(attempt, checkCancelled)
         if (isHealthy()) {
-            repairGuestLoopbackHostsUnlocked(checkCancelled)
-            repairGuestGroupNamesUnlocked(checkCancelled)
-            readinessCache.admit(readinessSeal(attempt = attempt, checkCancelled = checkCancelled))
+            admitHealthyGuest(attempt, checkCancelled)
             return finalRoot
         }
         if (isLegacyHealthyUnlocked()) {
             migrateLegacyProfileInPlaceUnlocked()
             check(isHealthy()) { "Migrated Ubuntu guest failed layered-profile health verification" }
-            repairGuestLoopbackHostsUnlocked(checkCancelled)
-            repairGuestGroupNamesUnlocked(checkCancelled)
-            readinessCache.admit(readinessSeal(attempt = attempt, checkCancelled = checkCancelled))
+            admitHealthyGuest(attempt, checkCancelled)
             return finalRoot
         }
         if (existingGuestPresent()) {
@@ -342,12 +337,10 @@ class FoundryUbuntuGuestEnvironmentManager(
             )
             check(move.exitCode == 0) { "Could not activate Ubuntu guest environment: ${move.output}" }
             check(isHealthy()) { "Activated Ubuntu guest environment failed health verification" }
-            repairGuestLoopbackHostsUnlocked(checkCancelled)
-            repairGuestGroupNamesUnlocked(checkCancelled)
-            readinessCache.admit(readinessSeal(attempt = attempt, checkCancelled = checkCancelled))
             // A legacy `.previous` recovery anchor is intentionally retained. Fresh creation does
             // not create one, and automatic cleanup never deletes a user-recoverable guest tree.
             withContext(NonCancellable) { LocalExecutionSubstrate.shell("rm -rf ${q(stage)}") }
+            admitHealthyGuest(attempt, checkCancelled)
             return finalRoot
         } catch (failure: Throwable) {
             // Cleanup only the staging tree. Current/previous guests are recovery state and are never
@@ -377,7 +370,21 @@ class FoundryUbuntuGuestEnvironmentManager(
         )
     }
 
-    /** Refresh the APK-owned launcher after an app update without replacing the user's guest. */
+    private suspend fun admitHealthyGuest(attempt: PackagedNativeAdmissionAttempt?, checkCancelled: () -> Unit) {
+        repairGuestLoopbackHostsUnlocked(checkCancelled)
+        repairGuestGroupNamesUnlocked(checkCancelled)
+        installGuestDefaults()
+        val archive = FoundryUbuntuGuestEnvironmentSpec.rootfsArtifact
+        PackagedWorkstationRootfs.evict(appContext, archive.fileName, archive.sha256)
+        readinessCache.admit(readinessSeal(attempt = attempt, checkCancelled = checkCancelled))
+    }
+
+    private fun installGuestDefaults() {
+        val rootfs = File("$finalRoot/rootfs")
+        UbuntuAptCacheDefaults.install(rootfs)
+        UbuntuSshClientDefaults.install(rootfs)
+    }
+
     private fun readinessSeal(engine: File? = null, attempt: PackagedNativeAdmissionAttempt? = null, checkCancelled: () -> Unit = {}): String? = UbuntuGuestReadinessCache.fingerprint(
         guest = File(finalRoot), engine = engine ?: attempt?.require(checkCancelled)?.launcher ?: PackagedLinuxEngine.requireReady(appContext),
         expectedLauncher = launcherScript(attempt, checkCancelled),
@@ -543,16 +550,13 @@ class FoundryUbuntuGuestEnvironmentManager(
         FoundryUbuntuGuestMutationGate.mutex.withLock {
             progress("Checking shared Ubuntu runtime…\n")
             if (!allowSharedRepair && existingGuestPresent()) {
-                check(isHealthy()) { "Managed Ubuntu requires its explicit repair before this reviewed installation" }
+                val admitted = readinessCache.mayReuse(readinessSeal())
+                if (!admitted) check(isHealthy()) { "Managed Ubuntu requires its explicit repair before this reviewed installation" }
                 aptDependencies.requireNoPendingConfiguration()
+                if (!admitted) installGuestDefaults()
             } else ensureInstalledUnlocked()
-            UbuntuAptCacheDefaults.install(File("$finalRoot/rootfs"))
-            UbuntuSshClientDefaults.install(File("$finalRoot/rootfs"))
             val layerId = layerId(normalized)
-            // Pin the admitted packaged-engine path once. Attach probes stat that file;
-            // they must not rehash all APK-native binaries during a long download.
-            val admittedEngine = PackagedLinuxEngine.requireReady(appContext)
-            packageAttachAdmission.duringPackageOperation({ readinessSeal(admittedEngine) }) {
+            withPackageAttachments {
                 aptStorage.operation(progress) {
                     val reclaimed = aptStorage.pruneAbandoned()
                     if (reclaimed > 0) progress("Removed $reclaimed abandoned installer download cache(s).\n")
@@ -561,6 +565,18 @@ class FoundryUbuntuGuestEnvironmentManager(
                 }
             }
         }
+    }
+
+    internal suspend fun <T> runAptUpdate(update: suspend () -> T): T = withContext(Dispatchers.IO) {
+        FoundryUbuntuGuestMutationGate.mutex.withLock {
+            ensureInstalledUnlocked()
+            withPackageAttachments(update)
+        }
+    }
+
+    private suspend fun <T> withPackageAttachments(operation: suspend () -> T): T {
+        val engine = PackagedLinuxEngine.requireReady(appContext)
+        return packageAttachAdmission.duringPackageOperation({ readinessSeal(engine) }, operation)
     }
 
     fun layerRecordKey(packages: List<String>): String? {

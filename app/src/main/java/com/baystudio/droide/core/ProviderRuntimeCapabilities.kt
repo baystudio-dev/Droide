@@ -12,6 +12,7 @@ internal object ProviderRuntimeCapabilities {
         val parameters = strings(metadata["supported_parameters"])
         val reasoning = reasoningOptions(provider, metadata)
         val input = strings(metadata["input_modalities"]) ?: strings(architecture?.get("input_modalities")) ?: strings(modalities?.get("input"))
+            ?: routerInputs(capabilities)
         val output = strings(metadata["output_modalities"]) ?: strings(architecture?.get("output_modalities")) ?: strings(modalities?.get("output"))
         return ModelCapabilities(
             providerId = provider.id, modelId = entry.id,
@@ -79,6 +80,17 @@ internal object ProviderRuntimeCapabilities {
 
     private fun bool(root: JsonObject?, key: String): Boolean? =
         (root?.get(key) as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+
+    private fun routerInputs(capabilities: JsonObject?): Set<String>? {
+        if (capabilities == null || bool(capabilities, "vision") == null) return null
+        return buildSet {
+            add("text")
+            if (bool(capabilities, "vision") == true) add("image")
+            if (bool(capabilities, "pdf") == true) add("pdf")
+            if (bool(capabilities, "audioInput") == true) add("audio")
+            if (bool(capabilities, "videoInput") == true) add("video")
+        }
+    }
 
     private fun strings(raw: JsonElement?): Set<String>? {
         val values = raw as? JsonArray ?: return null

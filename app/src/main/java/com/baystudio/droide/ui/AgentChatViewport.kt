@@ -202,13 +202,16 @@ internal fun rememberAgentChatViewport(
     owner: AgentWorkspaceUiState,
     conversation: AgentChatConversationKey,
     saved: AgentChatPosition?,
-    keys: List<String>,
+    restoreKeys: () -> List<String>,
     activity: AgentChatActivity,
     showDetails: Boolean,
 ): AgentChatViewport {
     val viewport = remember(owner, conversation) {
-        val index = saved?.anchorKey?.let(keys::indexOf)?.takeIf { it >= 0 }
-            ?: (saved?.index ?: 0).coerceIn(0, keys.lastIndex.coerceAtLeast(0))
+        val index = if (saved == null) 0 else {
+            val keys = restoreKeys()
+            saved.anchorKey?.let(keys::indexOf)?.takeIf { it >= 0 }
+                ?: saved.index.coerceIn(0, keys.lastIndex.coerceAtLeast(0))
+        }
         AgentChatViewport(LazyListState(index, saved?.offset ?: 0), saved, activity)
     }
     val currentDetails by rememberUpdatedState(showDetails)
@@ -220,8 +223,9 @@ internal fun rememberAgentChatViewport(
             viewport.position()?.let { owner.saveChatPosition(conversation, it) }
         }
     }
-    LaunchedEffect(viewport, keys) {
-        if (viewport.ready) return@LaunchedEffect
+    val pendingKeys = if (viewport.ready) null else restoreKeys()
+    LaunchedEffect(viewport, pendingKeys) {
+        val keys = pendingKeys ?: return@LaunchedEffect
         // An existing session may publish its messages after its ID. Do not overwrite its anchor
         // with a temporary welcome row while restore is still preparing the real transcript.
         if (saved?.anchorKey != null && saved.anchorKey != "welcome" && keys == listOf("welcome")) return@LaunchedEffect

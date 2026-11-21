@@ -1250,10 +1250,9 @@ internal fun EditorPane(
                     highlightControllerRef[0]?.updateCodeStyle(codeStyle, document.content)
                     view.applyReviewMode(document.reviewMode)
                     if (view.isWordwrap != effectiveWordWrap) view.setWordwrap(effectiveWordWrap, true, false)
-                    view.setLineNumberEnabled(true)
-                    view.setPinLineNumber(true)
+                    if (!view.isLineNumberEnabled) view.setLineNumberEnabled(true)
+                    if (!view.isLineNumberPinned) view.setPinLineNumber(true)
                     view.setHorizontalScrollBarEnabled(!effectiveWordWrap)
-                    view.setInterceptParentHorizontalScrollIfNeeded(false)
                     view.props.cacheRenderNodeForLongLines = !document.largeFileOptimized
                     if (view.editorLanguage !== completionLanguage) {
                         view.languageId = languageId

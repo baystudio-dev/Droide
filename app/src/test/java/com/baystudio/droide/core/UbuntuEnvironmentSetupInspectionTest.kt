@@ -163,8 +163,53 @@ class UbuntuEnvironmentSetupInspectionTest {
         controller.installFromUser()
         controller.show()
         kotlinx.coroutines.yield()
-        assertTrue(controller.state.value.presented && controller.state.value.recoveryRequired)
+        assertFalse(controller.state.value.presented || controller.state.value.recoveryRequired)
+        assertEquals(EnvironmentSetupPhase.CHECKING, controller.state.value.phase)
         controller.closeAndJoin()
+    }
+
+    @Test fun retryAfterAnotherOwnerVerifiedTheGuestSkipsInstaller() = runBlocking {
+        val files = temporary.newFolder()
+        var receipt: String? = null
+        var installs = 0
+        val controller = EnvironmentSetupController(this, true, {
+            UbuntuEnvironmentSetup.inspect(files, receipt, false, { error("Unexpected health probe") }, { error("Unexpected receipt") })
+        }, { installs++; error("First attempt interrupted") }, {})
+        kotlinx.coroutines.yield()
+        controller.installFromUser()
+        kotlinx.coroutines.yield()
+        assertEquals(EnvironmentSetupPhase.FAILED, controller.state.value.phase)
+        populatedGuest(files)
+        inspect(files, health = { true }, record = { receipt = it })
+        controller.installFromUser()
+        kotlinx.coroutines.yield()
+        assertEquals(1, installs)
+        assertEquals(EnvironmentSetupPhase.READY, controller.state.value.phase)
+        controller.closeAndJoin()
+    }
+
+    @Test fun changedBinariesDuringAProbeDoNotTriggerSetupOrInheritTheOldReceipt() = runBlocking {
+        val files = temporary.newFolder()
+        val guest = populatedGuest(files)
+        val found = UbuntuEnvironmentSetup.inspect(files, null, false, {
+            guest.resolve("rootfs/usr/bin/dpkg").appendText("new revision")
+            true
+        }, { error("Unstable receipt") })
+        assertTrue(found.checkLater)
+        assertFalse(found.existingEnvironment || found.recoveryRequired)
+        assertTrue(inspect(files, health = { true }).existingEnvironment)
+    }
+
+    @Test fun aTemporarilyMissingBinaryWaitsForAnOngoingGuestMutation() = runBlocking {
+        val files = temporary.newFolder()
+        val guest = populatedGuest(files)
+        var receipt: String? = null
+        inspect(files, health = { true }, record = { receipt = it })
+        guest.resolve("rootfs/usr/bin/bash").delete()
+        val busy = UbuntuEnvironmentSetup.inspect(files, receipt, false, { error("Unexpected probe") },
+            { error("Unverified receipt") }, mutationInProgress = { true })
+        assertTrue(busy.checkLater)
+        assertTrue(inspect(files, receipt).recoveryRequired)
     }
 
     @Test fun aReplacedRootfsCannotInheritAReceiptEvenWhenItsContentsLookIdentical() {

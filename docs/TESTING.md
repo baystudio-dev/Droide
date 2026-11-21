@@ -31,9 +31,9 @@ Use the selected build lane's verified classpath to run `:app:testDebugUnitTest 
 
 An environment that can compile only selected test sources must report that selection. It must still compile unchanged production sources and fail if a selected suite is missing. Restore global registries/admission state, dispose Compose views and join owned work between tests. Never disable production lifecycle guards to repair a fixture.
 
-## Current action audit
+## Workbench regression checks
 
-The [workbench audit](verification/workbench-actions-20261114/AUDIT.md) and [machine-readable results](verification/workbench-actions-20261114/RESULTS.json) record the explicit suite selection and verification limits for the action repairs. They are historical evidence for those measured inputs, not blanket certification of later commits. Raw logs, source snapshots and cleanup archives are maintained outside the application source.
+Exercise the action through its normal entry point and check its destination, file selection and cancellation behavior. For Extensions, include navigation back to the catalog, version selection and reopening an installation in progress. Record the source revision and APK tested. [Workbench actions](guides/workbench-actions.md)
 
 ## Android acceptance
 

@@ -8,13 +8,12 @@ import kotlinx.serialization.json.*
 /** Collect reviewed native catalogs without accepting URLs or inventing gateway cursor semantics. */
 internal object ProviderModelPagination {
     private const val MAX_PAGES = 32
-    private const val MAX_MODELS = 1_000
-    private const val MAX_TOTAL_BYTES = 8L * 1024L * 1024L
     private const val MAX_CURSOR_CHARS = 4_096
 
     suspend fun collect(provider: AiProvider, json: Json, fetch: suspend (String) -> String): List<ProviderModelCatalog.Entry> {
         val firstPath = ProviderModelCatalog.modelsPath(provider)
         val models = LinkedHashMap<String, ProviderModelCatalog.Entry>()
+        val modelLimit = ProviderModelCatalog.limit(provider)
         val seen = HashSet<String>()
         var path = firstPath
         var bytes = 0L
@@ -23,14 +22,14 @@ internal object ProviderModelPagination {
             val body = fetch(path)
             currentCoroutineContext().ensureActive()
             bytes += body.toByteArray(Charsets.UTF_8).size
-            require(bytes <= MAX_TOTAL_BYTES) { "Provider model catalog exceeds the aggregate pagination budget" }
+            require(bytes <= ProviderModelCatalog.GATEWAY_RESPONSE_BYTES) { "Provider model catalog exceeds the aggregate pagination budget" }
             val root = json.parseToJsonElement(body) as? JsonObject
                 ?: throw IllegalArgumentException("Provider model catalog must be an object")
-            ProviderModelCatalog.parse(body, provider, json).forEach { entry ->
-                if (models.size < MAX_MODELS) models.putIfAbsent(entry.id, entry)
+            ProviderModelCatalog.parse(root, provider).forEach { entry ->
+                if (models.size < modelLimit) models.putIfAbsent(entry.id, entry)
+                else require(modelLimit == ProviderModelCatalog.DEFAULT_LIMIT || entry.id in models) { "Provider catalog exceeds the limit of $modelLimit distinct model IDs." }
             }
-            // The existing model-picker/certification cap is intentional, not an unlimited census.
-            if (models.size == MAX_MODELS) return models.values.toList()
+            if (models.size == modelLimit && modelLimit == ProviderModelCatalog.DEFAULT_LIMIT) return models.values.toList()
             val cursor = nextCursor(root, provider.wireProtocol) ?: return models.values.toList()
             require(seen.add(cursor.second)) { "Provider repeated a model catalog cursor" }
             val encoded = URLEncoder.encode(cursor.second, Charsets.UTF_8.name()).replace("+", "%20")

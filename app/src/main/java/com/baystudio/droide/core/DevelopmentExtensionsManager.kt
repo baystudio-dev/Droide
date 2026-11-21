@@ -19,6 +19,7 @@ data class DevelopmentExtensionsSnapshot(
     val workstationReady: Boolean,
     val message: String = "",
     val localLinuxExecutables: Map<String, String> = emptyMap(),
+    val androidDownloadBytes: Map<Pair<String, String>, Long> = emptyMap(),
 )
 
 /** Request identity only; all access uses the installer's existing close/publication monitor. */
@@ -311,6 +312,9 @@ class DevelopmentExtensionsManager internal constructor(
                         deviceConnected = connected,
                         workstationReady = workstation != null,
                         localLinuxExecutables = externalExecutableMap,
+                        androidDownloadBytes = localAndroidComponents.associate { entry ->
+                            (entry.familyId to entry.version) to (entry.sizeBytes + entry.nativeTools.sumOf { it.sizeBytes })
+                        },
                         message = when {
                             localRecoveryProblem != null -> localRecoveryProblem
                             localRuntime.ready -> "Local Ubuntu ready · ${externalCommands.size} command(s) detected"

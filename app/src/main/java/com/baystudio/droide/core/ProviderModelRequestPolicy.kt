@@ -4,6 +4,7 @@ package com.baystudio.droide.core
 internal object ProviderModelRequestPolicy {
     fun protocol(provider: AiProvider, modelId: String?): ProviderWireProtocol {
         if (provider.wireProtocol != ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS || modelId == null) return provider.wireProtocol
+        if (provider.id == NineRouterProvider.ID) return provider.wireProtocol
         val endpoints = ModelCapabilityRegistry.resolve(provider.id, modelId)?.supportedEndpoints.orEmpty().map(::endpoint).toSet()
         if ("responses" in endpoints) return ProviderWireProtocol.OPENAI_RESPONSES
         if (endpoints.isNotEmpty()) return provider.wireProtocol

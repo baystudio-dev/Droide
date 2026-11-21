@@ -91,7 +91,7 @@ class AgentImeObservationTest {
         var compositions = 0
         compose.setContent {
             DroideTheme {
-                val current = rememberAgentChatViewport(ui, AgentChatConversationKey("ime", "follow"), null, keys, activity, false)
+                val current = rememberAgentChatViewport(ui, AgentChatConversationKey("ime", "follow"), null, { keys }, activity, false)
                 SideEffect { viewport = current; compositions++ }
                 LazyColumn(state = current.listState, contentPadding = PaddingValues(bottom = 24.dp),
                     modifier = Modifier.width(360.dp).layout { measurable, constraints ->
@@ -123,7 +123,7 @@ class AgentImeObservationTest {
             DroideTheme {
                 val rows = keys.value
                 val activity = AgentChatActivity(rows.size, 0, 0, 0, 0, 0, 0, null, false)
-                val current = rememberAgentChatViewport(ui, AgentChatConversationKey("ime", "reading"), null, rows, activity, false)
+                val current = rememberAgentChatViewport(ui, AgentChatConversationKey("ime", "reading"), null, { rows }, activity, false)
                 val currentScope = rememberCoroutineScope()
                 SideEffect { viewport = current; scope = currentScope }
                 LazyColumn(state = current.listState, modifier = Modifier.width(360.dp).height(height.intValue.dp)) {
@@ -151,11 +151,12 @@ class AgentImeObservationTest {
     @Test fun activityPublishedBeforeNewRowMeasurementStillFollowsTheMeasuredRow() {
         val keys = mutableStateOf((0..59).map { "row-$it" })
         val count = mutableIntStateOf(60)
+        var restores = 0
         lateinit var viewport: AgentChatViewport
         compose.setContent {
             DroideTheme {
                 val activity = AgentChatActivity(count.intValue, 0, 0, 0, 0, 0, 0, null, false)
-                val current = rememberAgentChatViewport(ui, AgentChatConversationKey("ime", "late-layout"), null, keys.value, activity, false)
+                val current = rememberAgentChatViewport(ui, AgentChatConversationKey("ime", "late-layout"), null, { restores++; keys.value }, activity, false)
                 SideEffect { viewport = current }
                 LazyColumn(state = current.listState, modifier = Modifier.width(360.dp).height(240.dp)) {
                     itemsIndexed(keys.value, key = { _, key -> key }) { index, _ -> Text("Result $index", Modifier.height(30.dp)) }
@@ -163,6 +164,8 @@ class AgentImeObservationTest {
             }
         }
         compose.waitUntil(5_000) { compose.waitForIdle(); viewport.ready && !viewport.listState.canScrollForward }
+        val afterMount = restores
+        assertTrue(afterMount > 0)
         compose.runOnIdle { count.intValue = 61 }
         compose.waitForIdle()
         compose.runOnIdle { keys.value = keys.value + "row-60" }
@@ -170,6 +173,7 @@ class AgentImeObservationTest {
             compose.waitForIdle()
             viewport.listState.layoutInfo.totalItemsCount == 61 && !viewport.listState.canScrollForward
         }
+        assertEquals(afterMount, restores)
         assertTrue(viewport.following)
         assertEquals(0, viewport.unread)
     }

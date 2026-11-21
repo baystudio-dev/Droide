@@ -27,6 +27,7 @@ import androidx.core.content.edit
 import com.baystudio.droide.core.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -87,7 +88,7 @@ private fun WorkspaceFileExplorer(
     val treeLabelStyle = entryStyle.label
     val searchResultMinHeight = if (portrait) 40.dp else 32.dp
     val workspaceKey = files.root.absolutePath
-    val children = state.children
+    val visibleTreeRows by remember(state) { state.observeVisibleTreeRows() }
     val treeListState = rememberLazyListState(
         initialFirstVisibleItemIndex = state.treeFirstVisibleItemIndex,
         initialFirstVisibleItemScrollOffset = state.treeFirstVisibleItemScrollOffset,
@@ -366,8 +367,11 @@ private fun WorkspaceFileExplorer(
     }
     LaunchedEffect(treeListState, treeMode, refreshController, refreshLease) {
         if (!treeMode) { refreshController.updateViewport(refreshLease, emptySet()); return@LaunchedEffect }
-        snapshotFlow { explorerViewportPages(state, treeListState.layoutInfo.visibleItemsInfo.map { it.key.toString() }.toSet()) }
-            .collect { pages -> refreshController.updateViewport(refreshLease, pages) }
+        snapshotFlow { treeListState.layoutInfo.visibleItemsInfo.mapTo(linkedSetOf()) { it.key.toString() } }
+            .collectLatest { keys ->
+                snapshotFlow { explorerViewportPages(state, keys) }
+                    .collect { pages -> refreshController.updateViewport(refreshLease, pages) }
+            }
     }
     LaunchedEffect(workspaceKey, state.refreshToken, state.sortPreferenceLoaded, refreshController, refreshLease) {
         if (state.sortPreferenceLoaded) refreshController.requestRefresh(refreshLease, state.refreshToken)
@@ -420,7 +424,7 @@ private fun WorkspaceFileExplorer(
             }
             parent = path
         }
-        val rows = flattenExplorerRows(state.children, state.expandedPaths, state.moreAfter)
+        val rows = visibleTreeRows
         val index = rows.indexOfFirst { it.entry?.path == target }
         if (index >= 0) {
             // Like Explorer reveal, jump directly to the result, including across many directory pages.
@@ -610,8 +614,7 @@ private fun WorkspaceFileExplorer(
                     if (!searchBusy && state.searchResults.isEmpty() && state.searchNotice?.startsWith("File search failed") != true) item { Text("No matching files in the first 20 folder levels", Modifier.padding(12.dp), style = MaterialTheme.typography.labelSmall, color = DroideColors.Muted) }
                 }
             } else {
-                val rows = flattenExplorerRows(children, state.expandedPaths, state.moreAfter)
-                    .filterNot { row -> ExplorerFilePolicy.isDroideInternalPath(row.entry?.path ?: row.parent) }
+                val rows = visibleTreeRows
                 LazyColumn(Modifier.fillMaxSize(), state = treeListState) {
                     items(rows, key = { row -> row.entry?.let { "entry:${it.path}" } ?: "more:${row.parent}" }) { row ->
                         val entry = row.entry

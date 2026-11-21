@@ -1,5 +1,6 @@
 package com.baystudio.droide.ui
 
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -82,6 +83,11 @@ class ExplorerWorkspaceState {
             else -> null
         }
     var expandedPaths by mutableStateOf<List<String>>(emptyList())
+    private val expandedDirectories by derivedStateOf { expandedPaths.toHashSet() }
+    internal fun observeVisibleTreeRows() = derivedStateOf {
+        flattenExplorerRows(children, expandedPaths, moreAfter)
+            .filterNot { row -> ExplorerFilePolicy.isDroideInternalPath(row.entry?.path ?: row.parent) }
+    }
     var activeDirectory by mutableStateOf("")
     var sortOrder by mutableStateOf(ExplorerSortOrder.NAME_ASC)
         private set
@@ -143,10 +149,11 @@ class ExplorerWorkspaceState {
         private set
     fun requestRefresh() { refreshToken++ }
 
-    var treeFirstVisibleItemIndex by mutableIntStateOf(0)
-    var treeFirstVisibleItemScrollOffset by mutableIntStateOf(0)
-    var searchFirstVisibleItemIndex by mutableIntStateOf(0)
-    var searchFirstVisibleItemScrollOffset by mutableIntStateOf(0)
+    // Scroll bookmarks seed a new list when its pane reopens. The live list owns scrolling.
+    var treeFirstVisibleItemIndex = 0
+    var treeFirstVisibleItemScrollOffset = 0
+    var searchFirstVisibleItemIndex = 0
+    var searchFirstVisibleItemScrollOffset = 0
 
     /** A collapsed subtree keeps its expansion intent, never its potentially large directory pages. */
     internal fun collapseDirectory(path: String) {
@@ -164,7 +171,7 @@ class ExplorerWorkspaceState {
         pageGeneration++
     }
 
-    internal fun isDirectoryPageVisible(path: String): Boolean = isDirectoryPageVisible(path, expandedPaths.toHashSet())
+    internal fun isDirectoryPageVisible(path: String): Boolean = isDirectoryPageVisible(path, expandedDirectories)
 
     private fun isDirectoryPageVisible(path: String, expanded: Set<String>): Boolean {
         if (path.isEmpty()) return true
@@ -180,19 +187,19 @@ class ExplorerWorkspaceState {
     }
 
     internal fun visibleExpandedDirectories(): List<String> {
-        val expanded = expandedPaths.toHashSet()
+        val expanded = expandedDirectories
         return expanded.filter { isDirectoryPageVisible(it, expanded) }
     }
 
     internal fun firstMissingExpandedDirectory(excluded: Set<String> = emptySet()): String? {
-        val expanded = expandedPaths.toHashSet()
+        val expanded = expandedDirectories
         return expanded.asSequence()
             .filter { it !in excluded && it !in children && isDirectoryPageVisible(it, expanded) }
             .minWithOrNull(compareBy<String>({ it.count { character -> character == '/' } }, { it }))
     }
 
     internal fun pruneInvisibleDirectoryPages() {
-        val expanded = expandedPaths.toHashSet()
+        val expanded = expandedDirectories
         children.keys.filterNot { isDirectoryPageVisible(it, expanded) }.forEach(children::remove)
         moreAfter.keys.filterNot { isDirectoryPageVisible(it, expanded) }.forEach(moreAfter::remove)
         pruneRefreshMetadata()

@@ -43,28 +43,29 @@ object ProviderAuthManager {
                 ProviderTransportV2.applyAuth(builder, provider, apiKey)
                 val req = ProviderRequestAuthorizer.authorize(builder.get().build(), provider, apiKey)
                 client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req).awaitResponse().use { response ->
-                    val body = boundedBody(response)
+                    val responseLimit = if (ProviderModelCatalog.limit(provider) > ProviderModelCatalog.DEFAULT_LIMIT)
+                        ProviderModelCatalog.GATEWAY_RESPONSE_BYTES else MAX_MODEL_RESPONSE_BYTES
+                    val body = boundedBody(response, responseLimit)
                     if (!response.isSuccessful) throw IllegalStateException(ProviderFailure.describe(response.code,
                         ProviderFailure.redact(body, listOf(apiKey) + ProviderFailure.requestSecrets(req::header))))
                     body
                 }
             }
-            val liveModels = entries.mapNotNull { entry ->
-                ProviderRuntimeCapabilities.parse(provider, entry)?.let(ModelCapabilityRegistry::installRuntime)
-                if (!ProviderModelRequestPolicy.isConversational(provider, entry.id)) return@mapNotNull null
-                entry.id
-            }
-            val catalogModels = if (provider.wireProtocol == ProviderWireProtocol.GOOGLE_GENERATE_CONTENT) emptyList()
+            val router = provider.id == NineRouterProvider.ID
+            val capabilities = entries.mapNotNull { ProviderRuntimeCapabilities.parse(provider, it) }
+            ModelCapabilityRegistry.installRuntime(capabilities, if (router) provider.id else null)
+            val liveModels = entries.map { it.id }
+            val catalogModels = if (router || provider.wireProtocol == ProviderWireProtocol.GOOGLE_GENERATE_CONTENT) emptyList()
                 else ModelCapabilityRegistry.catalogModels(provider.id)
             val liveAndCatalog = (liveModels.asSequence() + catalogModels.asSequence()).distinct()
             val models = (liveAndCatalog + provider.configuredModels.asSequence())
-                .distinct().filter { ProviderModelRequestPolicy.isConversational(provider, it) }.take(1_000).toList()
+                .distinct().filter { ProviderModelRequestPolicy.isConversational(provider, it) }.take(ProviderModelCatalog.limit(provider)).toList()
             if (models.isEmpty()) Result.failure(Exception("Provider returned no usable chat/generation model IDs"))
             else Result.success(models)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (e: Exception) {
-            Result.failure(Exception("Connection failed: ${e.message}", e))
+            Result.failure(Exception("Connection failed: ${ProviderFailure.message(e, listOf(apiKey))}", e))
         }
     }
 
@@ -92,9 +93,9 @@ object ProviderAuthManager {
         }
     }
 
-    private fun boundedBody(response: okhttp3.Response): String = response.body?.source()?.let { source ->
-        source.request(MAX_MODEL_RESPONSE_BYTES + 1L)
-        if (source.buffer.size > MAX_MODEL_RESPONSE_BYTES) throw IllegalStateException("Provider model catalog is too large")
+    private fun boundedBody(response: okhttp3.Response, limit: Long = MAX_MODEL_RESPONSE_BYTES): String = response.body?.source()?.let { source ->
+        source.request(limit + 1L)
+        if (source.buffer.size > limit) throw IllegalStateException("Provider model catalog is too large")
         source.buffer.readUtf8()
     } ?: ""
 

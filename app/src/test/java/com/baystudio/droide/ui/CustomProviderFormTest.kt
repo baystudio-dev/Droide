@@ -105,4 +105,16 @@ class CustomProviderFormTest {
         compose.onNodeWithText("Use HTTPS for a remote provider, or HTTP for localhost.").performScrollTo().assertIsDisplayed()
         assertNull(ProviderRegistry.findById("user.bad"))
     }
+
+    @Test fun nineRouterSetupIsSearchableAndSavesTheEnteredServer() {
+        show()
+        compose.onNodeWithText("Search provider…").performTextInput("9router")
+        compose.onNodeWithText("9Router").performClick()
+        compose.onNodeWithText("Provider ID").assertDoesNotExist()
+        compose.onNodeWithText("API base URL").performScrollTo()
+            .performTextReplacement("https://router.example/api/v1/chat/completions")
+        compose.onNodeWithText("Save & connect").performScrollTo().performClick()
+        compose.waitUntil(10000) { ProviderRegistry.findById("9router")?.baseUrl == "https://router.example/api/v1" }
+        compose.onNodeWithText("API key").performScrollTo().assertIsDisplayed()
+    }
 }

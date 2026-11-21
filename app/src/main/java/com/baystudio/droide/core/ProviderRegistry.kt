@@ -56,7 +56,8 @@ object ProviderRegistry {
     private val configured = AtomicReference<List<AiProvider>>(emptyList())
     private val managedRuntime = AtomicReference<List<AiProvider>>(emptyList())
     private data class UserSnapshot(val definitions: List<UserProviderDefinition>, val providers: List<AiProvider>)
-    private val user = AtomicReference(UserSnapshot(emptyList(), emptyList()))
+    private val defaultRouter = NineRouterProvider.defaults.provider()
+    private val user = AtomicReference(UserSnapshot(emptyList(), listOf(defaultRouter)))
     private val _userRevision = MutableStateFlow(0L)
     val userRevision = _userRevision.asStateFlow()
     private val bootstrap = listOf(
@@ -99,7 +100,7 @@ object ProviderRegistry {
             val managed = managedRuntime.get()
             val dynamic = discovered.get()
             val users = user.get().providers
-            if (runtime.isEmpty() && managed.isEmpty() && dynamic.isEmpty() && users.isEmpty()) return bootstrap
+            if (runtime.isEmpty() && managed.isEmpty() && dynamic.isEmpty()) return bootstrap + users
             val reserved = bootstrap.asSequence().map { it.id.lowercase() }.toMutableSet()
             val safeUser = users.filter { reserved.add(it.id) }
             val safeRuntime = runtime.asSequence().filter { reserved.add(it.id.lowercase()) }.toList()
@@ -114,7 +115,8 @@ object ProviderRegistry {
         val safe = definitions.map { definition ->
             definition.normalized().let { it.copy(models = Collections.unmodifiableList(ArrayList(it.models))) }
         }
-        val providers = safe.map { it.provider() }
+        val providers = safe.mapTo(ArrayList()) { it.provider() }
+        if (providers.none { it.id == NineRouterProvider.ID }) providers.add(defaultRouter)
         user.set(UserSnapshot(Collections.unmodifiableList(safe), Collections.unmodifiableList(providers)))
         _userRevision.update { if (it == Long.MAX_VALUE) 0L else it + 1L }
     }
@@ -207,14 +209,14 @@ object ProviderRegistry {
 
     internal fun isBootstrapProvider(id: String): Boolean = bootstrap.any { it.id.equals(id, ignoreCase = true) }
 
-    fun findById(id: String): AiProvider? = all.firstOrNull { it.id.equals(id.trim(), ignoreCase = true) }
+    fun findById(id: String): AiProvider? = findById(id, null)
 
     /** Runtime-owned work must never fall through to another project's configured entries. */
     internal fun findById(id: String, snapshot: ConfiguredSnapshot?): AiProvider? {
-        if (snapshot == null) return findById(id)
         val normalized = id.trim()
         fun List<AiProvider>.find() = firstOrNull { it.id.equals(normalized, ignoreCase = true) }
-        return bootstrap.find() ?: user.get().providers.find() ?: snapshot.providers.find() ?: managedRuntime.get().find() ?: discovered.get().find()
+        return bootstrap.find() ?: user.get().providers.find() ?: (snapshot?.providers ?: configured.get()).find()
+            ?: managedRuntime.get().find() ?: discovered.get().find()
     }
 
     internal fun findByCatalogId(id: String): AiProvider? = findById(id) ?: when (id.trim().lowercase()) {

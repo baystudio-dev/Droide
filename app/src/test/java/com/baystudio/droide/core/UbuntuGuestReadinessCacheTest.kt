@@ -31,6 +31,52 @@ class UbuntuGuestReadinessCacheTest {
         assertTrue("A dependency install discarded a still-valid Ubuntu admission", cache.mayReuse(seal()))
     }
 
+    @Test fun guestLocalHardLinksKeepTerminalsAvailableDuringPackageInstallation() = guestFixture { _, guest, engine ->
+        val bin = guest.toPath().resolve("rootfs/usr/bin/dpkg")
+        val store = Files.createDirectory(guest.toPath().resolve("rootfs/.l2s"))
+        val middle = store.resolve(".l2s.dpkg")
+        val payload = store.resolve(".l2s.dpkg.0001")
+        Files.move(bin, payload)
+        Files.createSymbolicLink(middle, payload.fileName)
+        fun seal() = UbuntuGuestReadinessCache.fingerprint(guest, engine, "launcher", emptyList())
+        for (target in listOf(middle, bin.parent.relativize(middle))) {
+            Files.createSymbolicLink(bin, target)
+            val first = seal()
+            assertNotNull(first)
+            val cache = UbuntuGuestReadinessCache { 0L }.also { it.admit(first) }
+            val admission = UbuntuPackageAttachAdmission()
+            kotlinx.coroutines.runBlocking {
+                admission.duringPackageOperation(::seal) {
+                    repeat(4) { assertTrue(admission.mayAttach()); assertTrue(cache.mayReuse(seal())) }
+                    payload.toFile().appendText("new")
+                    assertFalse(admission.mayAttach())
+                    assertFalse(cache.mayReuse(seal()))
+                }
+            }
+            Files.delete(bin)
+        }
+    }
+
+    @Test fun externalCyclicAndRedirectedHardLinkStoresCannotCertifyAGuest() = guestFixture { base, guest, engine ->
+        val root = guest.toPath().resolve("rootfs")
+        val bin = root.resolve("usr/bin/dpkg")
+        val store = Files.createDirectory(root.resolve(".l2s"))
+        val target = store.resolve(".l2s.dpkg")
+        fun seal() = UbuntuGuestReadinessCache.fingerprint(guest, engine, "launcher", emptyList())
+        Files.delete(bin)
+        Files.createSymbolicLink(bin, target)
+        Files.createSymbolicLink(target, bin)
+        assertNull(seal())
+        Files.delete(target)
+        Files.createSymbolicLink(target, engine.toPath())
+        assertNull(seal())
+        Files.delete(target)
+        Files.delete(store)
+        Files.createSymbolicLink(store, base.toPath())
+        base.resolve(".l2s.dpkg").writeText("outside")
+        assertNull(seal())
+    }
+
     @Test fun replacingAGuestDirectoryInvalidatesAdmissionEvenWithRestoredDirectoryTimes() = guestFixture { base, guest, engine ->
         fun seal() = UbuntuGuestReadinessCache.fingerprint(guest, engine, "launcher", emptyList())
         val admitted = seal()

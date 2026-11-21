@@ -11,16 +11,17 @@ class ExplorerRefreshSourceContractTest {
         return listOf(File(relative), File("app/$relative")).first { it.isFile }.readText()
     }
 
-    private data class RefreshBranch(val name: String, val start: String, val end: String)
+    private val refreshAndSearch = "refreshLocalTreeAfterMutation(); searchRevision++"
+    private val renameThroughMove = "performMove(files.observeMove(old, newPath), entry, renaming = true)"
+    private data class RefreshBranch(val name: String, val start: String, val end: String, val delegatesTo: String? = null)
     private val mutationBranches = listOf(
         RefreshBranch("committed move", "if (observation.committed) {", "} else if (observation.uncertain) {"),
         RefreshBranch("uncertain move", "} else if (observation.uncertain) {", "failure?.let {"),
         RefreshBranch("create file", "if (showNewFile) AlertDialog(", "if (showNewFolder) AlertDialog("),
         RefreshBranch("create folder", "if (showNewFolder) AlertDialog(", "if (showRename != null) AlertDialog("),
-        RefreshBranch("rename", "if (showRename != null) AlertDialog(", "showDelete?.let { target ->"),
+        RefreshBranch("rename", "if (showRename != null) AlertDialog(", "showDelete?.let { target ->", renameThroughMove),
         RefreshBranch("delete", "showDelete?.let { target ->", "private fun savedFileSyncMessage("),
     )
-    private val refreshAndSearch = "refreshLocalTreeAfterMutation(); searchRevision++"
 
     private fun branchRange(text: String, branch: RefreshBranch): IntRange {
         fun unique(anchor: String): Int {
@@ -38,7 +39,7 @@ class ExplorerRefreshSourceContractTest {
     private fun requireMutationRefreshes(text: String) {
         mutationBranches.forEach { branch ->
             assertTrue("${branch.name} must refresh the tree and invalidate search",
-                text.substring(branchRange(text, branch)).contains(refreshAndSearch))
+                text.substring(branchRange(text, branch)).contains(branch.delegatesTo ?: refreshAndSearch))
         }
     }
 
@@ -47,8 +48,9 @@ class ExplorerRefreshSourceContractTest {
         mutationBranches.forEach { branch ->
             val range = branchRange(text, branch)
             val body = text.substring(range)
-            assertTrue(body.contains(refreshAndSearch))
-            for (missing in listOf("refreshLocalTreeAfterMutation()", "searchRevision++")) {
+            assertTrue(body.contains(branch.delegatesTo ?: refreshAndSearch))
+            val required = branch.delegatesTo?.let(::listOf) ?: listOf("refreshLocalTreeAfterMutation()", "searchRevision++")
+            for (missing in required) {
                 val changed = text.replaceRange(range, body.replace(missing, "/* omitted in negative fixture */"))
                 assertTrue("Missing $missing in ${branch.name} must be detected",
                     runCatching { requireMutationRefreshes(changed) }.exceptionOrNull() is AssertionError)

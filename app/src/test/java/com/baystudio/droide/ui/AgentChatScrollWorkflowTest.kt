@@ -492,7 +492,7 @@ class AgentChatScrollWorkflowTest {
         val conversation = AgentChatConversationKey("droide", "drag-fixture")
         val keys = (0..39).map { "item:$it" }
         compose.setContent { DroideTheme {
-            viewport = rememberAgentChatViewport(ui, conversation, null, keys, activity, false)
+            viewport = rememberAgentChatViewport(ui, conversation, null, { keys }, activity, false)
             val density = LocalDensity.current
             val space = with(density) { viewport.disclosureSpacePx.toDp() }
             SideEffect { viewport.measuredDisclosurePadding(0, with(density) { space.roundToPx() }) }

@@ -1,5 +1,8 @@
 package com.baystudio.droide.ui
 
+import com.baystudio.droide.core.AgentStreamPart
+import com.baystudio.droide.core.AgentStreamPartKind
+import com.baystudio.droide.core.AgentStreamPartState
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -92,5 +95,14 @@ class AgentActivityMotionPolicyTest {
         assertEquals(180, AgentActivityMotion.DisclosureMillis)
         assertTrue(AgentActivityMotion.InitialAlpha in .7f..1f)
         assertEquals(1024, AgentActivityMotion.MaxRememberedEntrances)
+    }
+
+    @Test fun nativeAndExternalActivityRetainTheirOwnOutputAndCompletionCounts() {
+        val parts = AgentStreamPartState.entries.mapIndexed { i, state ->
+            val kind = if (i % 2 == 0) AgentStreamPartKind.TEXT else AgentStreamPartKind.TOOL
+            AgentStreamPart("part-$i", 1, kind, state, text = "text", output = "out")
+        }
+        assertEquals(StreamActivityCounts(12, 6, 3), streamActivityCounts(parts, external = false))
+        assertEquals(StreamActivityCounts(0, 15, 3), streamActivityCounts(parts, external = true))
     }
 }

@@ -108,7 +108,14 @@ internal fun IdeScreen(
     var showGoToLine by rememberSaveable(workspaceKey) { mutableStateOf(false) }
     var goToLineInput by rememberSaveable(workspaceKey) { mutableStateOf("") }
     var showSessions by rememberSaveable { mutableStateOf(false) }
-    var showSettings by rememberSaveable { mutableStateOf(false) }; var settingsInitialCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var settingsInitialCategoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    val settingsNavigation = key(workspaceKey) { androidx.compose.runtime.saveable.rememberSaveableStateHolder() }
+    fun openSettings(category: String? = null) {
+        settingsNavigation.removeState(workspaceKey)
+        settingsInitialCategoryName = category
+        showSettings = true
+    }
     var showAndroidDevelopment by rememberSaveable { mutableStateOf(false) }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var showConnect by rememberSaveable { mutableStateOf(false) }
@@ -152,6 +159,11 @@ internal fun IdeScreen(
     var agentPanelWidthDp by rememberSaveable { mutableFloatStateOf(336f) }
     var expandedWorkbench by remember { mutableStateOf(false) }
     var sidePanelsCanShare by remember(workspaceKey) { mutableStateOf(true) }
+    var extensionReturnTab by rememberSaveable(workspaceKey) { mutableIntStateOf(if (initialFile.isBlank()) 0 else 1) }
+    var extensionReturnSearch by rememberSaveable(workspaceKey) { mutableStateOf(false) }
+    var extensionReturnRail by rememberSaveable(workspaceKey) { mutableStateOf(DroideRailTool.Files.name) }
+    var extensionReturnRailVisible by rememberSaveable(workspaceKey) { mutableStateOf(false) }
+    var extensionReturnOverlay by rememberSaveable(workspaceKey) { mutableStateOf<String?>(null) }
     fun openSidebarTool(tool: DroideRailTool, selectForApproval: Boolean = true) {
         if (tool == DroideRailTool.Web && selectForApproval) viewingAgentTab = false
         if (selectForApproval) approvalAttention = if (tool == DroideRailTool.Web) WorkspaceApprovalSurface.BROWSER else WorkspaceApprovalSurface.OTHER
@@ -171,6 +183,36 @@ internal fun IdeScreen(
         }
         sidebarToolName = tool.name
         sidebarVisible = true
+    }
+    fun openExtensions(fromAgent: Boolean = false, fromSettings: Boolean = false) {
+        val alreadyOpen = if (expandedWorkbench) sidebarVisible && sidebarToolName == DroideRailTool.Extensions.name
+            else workspaceTab == 6 && !isChatVisible
+        if (alreadyOpen && !fromAgent && !fromSettings) return
+        if (workspaceTab != 6) { extensionReturnTab = workspaceTab; extensionReturnSearch = showSearch }
+        if (sidebarToolName != DroideRailTool.Extensions.name || !sidebarVisible) {
+            extensionReturnRail = sidebarToolName
+            extensionReturnRailVisible = sidebarVisible
+        }
+        extensionReturnOverlay = when {
+            fromSettings -> "settings"
+            fromAgent || isChatVisible -> "agent"
+            else -> null
+        }
+        if (expandedWorkbench || (isChatVisible && !fromAgent)) openSidebarTool(DroideRailTool.Extensions)
+        else { isChatVisible = false; showSearch = false; workspaceTab = 6 }
+    }
+    fun leaveExtensions(sidebar: Boolean) {
+        agentExtensionFamilyId = null
+        if (sidebar || sidebarToolName == DroideRailTool.Extensions.name) {
+            sidebarToolName = extensionReturnRail
+            sidebarVisible = extensionReturnRailVisible
+        }
+        if (!sidebar || workspaceTab == 6) { workspaceTab = extensionReturnTab; showSearch = extensionReturnSearch }
+        when (extensionReturnOverlay) {
+            "settings" -> showSettings = true
+            "agent" -> { isChatVisible = true; approvalAttention = WorkspaceApprovalSurface.AGENT }
+        }
+        extensionReturnOverlay = null
     }
     fun openAgentPane() {
         approvalAttention = WorkspaceApprovalSurface.AGENT
@@ -1125,7 +1167,7 @@ internal fun IdeScreen(
                     onStartDebug = { config, sourcePath -> execution.debugPreparedConfiguration(sourcePath, config) },
                     onStopDebug = { execution.stopDebug() },
                     onOpenLocation = ::openLocation,
-                    onOpenExtensions = { if (expanded || isChatVisible) { openSidebarTool(DroideRailTool.Extensions) } else workspaceTab = 6 },
+                    onOpenExtensions = { openExtensions() },
                 )
             }
             @Composable
@@ -1164,7 +1206,8 @@ internal fun IdeScreen(
                         )
                         5 -> DebugSurface()
                         6 -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision,
-                            onOpenTerminal = { openBottomTool(DroideBottomTool.Terminal) }) { agentExtensionFamilyId = null }
+                            onOpenTerminal = { openBottomTool(DroideBottomTool.Terminal) }, onExit = { leaveExtensions(false) },
+                            handleSystemBack = !hasTransientUi && !browserExpanded && !isChatVisible && !(sidebarRendered && sidebarTool == DroideRailTool.Extensions)) { agentExtensionFamilyId = null }
                         else -> EditorSurface()
                     }
                 }
@@ -1209,7 +1252,8 @@ internal fun IdeScreen(
                             DroideRailTool.Run -> DebugSurface()
                             DroideRailTool.Web -> WorkspaceBrowserPlaceholder(browserPlacement, WorkspaceBrowserSlot.SIDEBAR)
                             DroideRailTool.Extensions -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision,
-                            onOpenTerminal = { openBottomTool(DroideBottomTool.Terminal) }) { agentExtensionFamilyId = null }
+                                onOpenTerminal = { openBottomTool(DroideBottomTool.Terminal) }, onExit = { leaveExtensions(true) },
+                                handleSystemBack = sidebarRendered && imePresentation.sidebarVisible && !hasTransientUi && !browserExpanded && !isChatVisible) { agentExtensionFamilyId = null }
                         }
                     }
                 }
@@ -1242,20 +1286,20 @@ internal fun IdeScreen(
             fun AgentSurface() {
                 Box(Modifier.fillMaxSize().workspaceApprovalAttention(WorkspaceApprovalSurface.AGENT) { approvalAttention = it }.droideContentMotion("agent", enabled = physicalLandscape && !typingImeActive)) {
                     AgentPane(agent = agent, uiState = agentUiState, providerConnections = providerConnections, localLlamaModels = localLlamaModels, agentPlugins = workspaceAgentPluginsForStartup(extensions.installedComponentsEnabled, agentPlugins), approvals = approvals, captureIdeContext = { editorBridge.capture(); captureAgentIdeContext(files.root, activeFile, activeLanguageName, openFiles, editorState, editorBridge.currentCursorLocation(), diagnostics, androidBuildDiagnostics) }, onSessions = { showSessions = true }, onUiError = { message -> scope.launchUiCatching { snackbarHostState.showSnackbar(message) } }, onComposerFocusChanged = { agentComposerFocused = it; if (physicalLandscape) accessoryInputFocus.onFocusChanged(agentFocusOwner, it); if (it) { editorBridge.yieldToAgentComposer(); approvalAttention = WorkspaceApprovalSurface.AGENT } }, onClose = { isChatVisible = false },
-                        onManageMcp = { settingsInitialCategoryName = "TOOLS"; showSettings = true },
-                        onManagePlugins = { settingsInitialCategoryName = "PLUGINS"; showSettings = true },
-                        onManageSkills = { settingsInitialCategoryName = "SKILLS"; showSettings = true },
+                        onManageMcp = { openSettings("TOOLS") },
+                        onManagePlugins = { openSettings("PLUGINS") },
+                        onManageSkills = { openSettings("SKILLS") },
                         onOpenResult = { path -> if (open(path) && !expandedWorkbench) isChatVisible = false },
                         onExportResult = if (ExportRolloutPolicy.newExportsEnabled) ({ path -> exportUi.open(path, false) }) else null,
                         onOpenAgentExtensions = { familyId ->
-                        agentExtensionFamilyId = familyId
-                        if (expanded) { openSidebarTool(DroideRailTool.Extensions) }
-                        else { isChatVisible = false; workspaceTab = 6 }
-                    })
+                            agentExtensionFamilyId = familyId
+                            openExtensions(fromAgent = true)
+                        })
                 }
             }
             fun selectRail(tool: DroideRailTool) {
                 if (sidebarTool == tool && sidebarVisible) { sidebarVisible = false; approvalAttention = WorkspaceApprovalSurface.OTHER }
+                else if (tool == DroideRailTool.Extensions) openExtensions()
                 else openSidebarTool(tool)
             }
             fun selectMediumTool(tool: DroideRailTool) {
@@ -1266,7 +1310,7 @@ internal fun IdeScreen(
                     DroideRailTool.Git -> workspaceTab = 3
                     DroideRailTool.Run -> workspaceTab = 5
                     DroideRailTool.Web -> { viewingAgentTab = false; workspaceTab = 4 }
-                    DroideRailTool.Extensions -> workspaceTab = 6
+                    DroideRailTool.Extensions -> openExtensions()
                 }
             }
             @Composable
@@ -1311,13 +1355,13 @@ internal fun IdeScreen(
                         onCommandPalette = { showPalette = true },
                         onRunDebug = { if (expanded || isChatVisible) { openSidebarTool(DroideRailTool.Run) } else workspaceTab = 5 },
                         onSessions = { showSessions = true },
-                        onExtensions = { if (expanded || isChatVisible) { openSidebarTool(DroideRailTool.Extensions) } else workspaceTab = 6 },
+                        onExtensions = { openExtensions() },
                         onConnectProvider = { showConnect = true },
                         onModels = { showModels = true },
                         onBilling = { showBilling = true },
-                        onSettings = { settingsInitialCategoryName = null; showSettings = true },
-                        onMcpRetry = { settingsInitialCategoryName = "TOOLS"; showSettings = true },
-                        onManageMcp = { settingsInitialCategoryName = "TOOLS"; showSettings = true },
+                        onSettings = { openSettings() },
+                        onMcpRetry = { openSettings("TOOLS") },
+                        onManageMcp = { openSettings("TOOLS") },
                         onNotificationSettings = onNotificationSettings,
                     ),
                 )
@@ -1365,7 +1409,7 @@ internal fun IdeScreen(
                                     onTool = ::selectRail,
                                     onTerminal = { approvalAttention = WorkspaceApprovalSurface.OTHER; bottomToolName = DroideBottomTool.Terminal.name; bottomPanelVisible = !bottomPanelVisible },
                                     onProjects = { drawer = true },
-                                    onSettings = { settingsInitialCategoryName = null; showSettings = true },
+                                    onSettings = { openSettings() },
                                 )
                                 Row(Modifier.weight(1f).fillMaxHeight()) {
                                     if (sidebarRendered || (physicalLandscape && focusLayout.sidebarRegionVisible)) {
@@ -1454,7 +1498,7 @@ internal fun IdeScreen(
                         }
                         isChatVisible && !agentFullscreen -> {
                             Row(Modifier.weight(1f).fillMaxWidth()) {
-                                DroideActivityRail(sidebarTool, imePresentation.sidebarVisible, false, ::selectRail, { approvalAttention = WorkspaceApprovalSurface.OTHER; workspaceTab = 2 }, { drawer = true }, { settingsInitialCategoryName = null; showSettings = true })
+                                DroideActivityRail(sidebarTool, imePresentation.sidebarVisible, false, ::selectRail, { approvalAttention = WorkspaceApprovalSurface.OTHER; workspaceTab = 2 }, { drawer = true }, { openSettings() })
                                 Row(Modifier.weight(1f).fillMaxHeight()) {
                                     if (sidebarRendered) { DroideClippedPaneRegion({ focusLayout.sidebarRegionWidth }, focusLayout.sidebarRegionVisible, userPaneFit.sidebarWidth + 1.dp) { Row { SidebarSurface(userPaneFit.sidebarWidth); VerticalDivider(color = DroideColors.Border) } } }
                                     Column(Modifier.weight(1f).fillMaxHeight()) { Box(Modifier.weight(1f).fillMaxWidth()) { FocusedWorkspace() } }
@@ -1463,7 +1507,7 @@ internal fun IdeScreen(
                             }
                         }
                         medium -> Row(Modifier.weight(1f).fillMaxWidth()) {
-                            DroideActivityRail(when (workspaceTab) { 3 -> DroideRailTool.Git; 4 -> DroideRailTool.Web; 5 -> DroideRailTool.Run; 6 -> DroideRailTool.Extensions; else -> if (showSearch) DroideRailTool.Search else DroideRailTool.Files }, true, workspaceTab == 2, ::selectMediumTool, { approvalAttention = WorkspaceApprovalSurface.OTHER; workspaceTab = 2 }, { drawer = true }, { settingsInitialCategoryName = null; showSettings = true })
+                            DroideActivityRail(when (workspaceTab) { 3 -> DroideRailTool.Git; 4 -> DroideRailTool.Web; 5 -> DroideRailTool.Run; 6 -> DroideRailTool.Extensions; else -> if (showSearch) DroideRailTool.Search else DroideRailTool.Files }, true, workspaceTab == 2, ::selectMediumTool, { approvalAttention = WorkspaceApprovalSurface.OTHER; workspaceTab = 2 }, { drawer = true }, { openSettings() })
                             Column(Modifier.weight(1f).fillMaxHeight()) { Box(Modifier.weight(1f)) { FocusedWorkspace() } }
                         }
                         else -> {
@@ -1472,7 +1516,13 @@ internal fun IdeScreen(
                                 typingTarget = accessoryInputFocus.activeTarget.keyProfile() != null,
                                 inputEnabled = !navigationTypingImeActive,
                             ) {
-                                DroideCompactNavigation(workspaceTab, enabled = !navigationTypingImeActive) { id -> if (id == 4) viewingAgentTab = false; showSearch = false; workspaceTab = id; approvalAttention = if (id == 4) WorkspaceApprovalSurface.BROWSER else WorkspaceApprovalSurface.OTHER }
+                                DroideCompactNavigation(workspaceTab, enabled = !navigationTypingImeActive) { id ->
+                                    if (id == 6) openExtensions() else {
+                                        if (id == 4) viewingAgentTab = false
+                                        showSearch = false; workspaceTab = id
+                                    }
+                                    approvalAttention = if (id == 4) WorkspaceApprovalSurface.BROWSER else WorkspaceApprovalSurface.OTHER
+                                }
                             }
                         }
                     }
@@ -1606,7 +1656,7 @@ internal fun IdeScreen(
                 "workspace-symbols" -> { showWorkspaceSymbols = true }
                 "search" -> { if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Search) } else { showSearch = true; workspaceTab = 0 } }
                 "problems" -> { if (expandedWorkbench) openBottomTool(DroideBottomTool.Problems) else showProblems = true }
-                "settings" -> { showSettings = true }
+                "settings" -> openSettings()
                 "explorer" -> { showSearch = false; if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Files) } else workspaceTab = 0 }
                 "editor-recovery-copies" -> runUiCatching(onError = { showActionFailure("Cannot capture current editor", it) }) {
                     editorBridge.captureForSave(); showEditorRecoveryCopies = true
@@ -1617,7 +1667,7 @@ internal fun IdeScreen(
                 "debug" -> { if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Run) } else workspaceTab = 5 }
                 "browser" -> { if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Web) } else workspaceTab = 4 }
                 "tasks" -> { professionalSheet = ProfessionalSheet.TASKS }
-                "extensions" -> { if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Extensions) } else workspaceTab = 6 }
+                "extensions" -> { openExtensions() }
                 "android-development" -> { showAndroidDevelopment = true }
                 "android-build-debug" -> launchUserAction { runAndroidTask("Android: Build Debug APK") { execution.buildDebug() } }
                 "android-debug-app" -> launchUserAction { debugAndroidApp() }
@@ -1722,7 +1772,7 @@ internal fun IdeScreen(
                 onPluginDeleted = { entry -> agentUiState.externalController.resetDeletedConversation(entry.id, entry.agentId, agentPlugins) },
             )
         }
-        if (showSettings) key(activeProject) { SettingsScreen(
+        if (showSettings) settingsNavigation.SaveableStateProvider(workspaceKey) { SettingsScreen(
             themes = themes, formatters = formatters, wordwrap = wordwrap, hardwareShortcuts = hardwareShortcuts,
             accessoryKeysComfortable = workbenchPrefs.accessoryKeysComfortable, codeStyleDefaults = workbenchPrefs.codeStyleDefaults, androidDevelopment = androidDevelopment,
             codingKeyboardMode = workbenchPrefs.codingKeyboardMode,
@@ -1741,7 +1791,7 @@ internal fun IdeScreen(
             onContinuationIndent = { value -> WorkbenchPreferences.setContinuationIndent(ctx, value) },
             onTheme = { theme -> withContext(Dispatchers.IO) { themes.select(theme) }; themeTick++ }, onPermissionRuleChange = onPermissionRuleChange,
             onOpenProviders = { showSettings = false; showConnect = true }, onOpenModels = { showSettings = false; showModels = true },
-            onOpenExtensions = { showSettings = false; if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Extensions) } else workspaceTab = 6 },
+            onOpenExtensions = { showSettings = false; openExtensions(fromSettings = true) },
             onOpenFiles = { showSettings = false; showSearch = false; if (expandedWorkbench || isChatVisible) { openSidebarTool(DroideRailTool.Files) } else workspaceTab = 0 },
             onExportWorkspace = if (ExportRolloutPolicy.newExportsEnabled) ({ showSettings = false; exportUi.open("", true) }) else null,
             onExportStatus = exportUi.showStatus?.let { status -> { showSettings = false; status() } },

@@ -109,4 +109,26 @@ class ProviderModelRoutingTest {
             }
         }
     }
+
+    @Test fun directLookupPreservesPriorityAndCapturedWorkspaceAuthority() {
+        val base = ProviderRegistry.byId("openai")
+        val discovered = base.copy(id = "priority-fixture", name = "Discovery", catalogDiscovered = true)
+        val first = discovered.copy(name = "First workspace")
+        val second = discovered.copy(name = "Second workspace")
+        val captured = ProviderRegistry.prepareConfigured(listOf(first))
+        try {
+            ProviderRegistry.installDiscovered(listOf(discovered))
+            ProviderRegistry.installConfigured(listOf(second))
+            assertEquals(second, ProviderRegistry.findById(" PRIORITY-FIXTURE "))
+            assertEquals(first, ProviderRegistry.findById(discovered.id, captured))
+            assertEquals(base, ProviderRegistry.findById(" OPENAI "))
+            for (provider in ProviderRegistry.all) assertEquals(provider, ProviderRegistry.findById(provider.id))
+            ProviderRegistry.installConfigured(emptyList())
+            assertEquals(discovered, ProviderRegistry.findById(discovered.id))
+            assertNull(ProviderRegistry.findById("missing-priority-fixture"))
+        } finally {
+            ProviderRegistry.installConfigured(emptyList())
+            ProviderRegistry.installDiscovered(emptyList())
+        }
+    }
 }

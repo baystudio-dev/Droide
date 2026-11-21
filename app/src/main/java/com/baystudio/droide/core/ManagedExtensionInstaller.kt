@@ -444,11 +444,13 @@ class ManagedExtensionInstaller(
         }
         _state.value = State(Phase.INSTALLING, "Updating ${plan.familyName} with ${plan.update.provider}…", plan.familyId, plan.requestedVersion)
         val launch = LocalExecutionSubstrate.linuxLaunchSpec(projectRoot)
-        val result = withInstallerOutputHeartbeat(::progress, ::activity) { output ->
+        suspend fun update() = withInstallerOutputHeartbeat(::progress, ::activity) { output ->
             OwnedInstallerCommand.capture(launch, projectRoot, listOf(launch.shell, "-c", plan.update.command),
                 maxOutputBytes = 24_000, timeoutMs = InstallerExecutionPolicy.INSTALL_OPERATION_DEADLINE_MS,
                 onOutput = output)
         }
+        val result = if (plan.update.aptPackageRequests.isNotEmpty()) localUbuntuEnvironment.runAptUpdate(::update)
+            else update()
         check(!result.timedOut && result.exitCode == 0) {
             "${plan.update.provider} update failed (exit ${result.exitCode}). " + result.output.takeLast(4_000)
         }

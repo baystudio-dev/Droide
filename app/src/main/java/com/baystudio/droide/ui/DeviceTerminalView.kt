@@ -73,6 +73,7 @@ class DeviceTerminalView @JvmOverloads constructor(
         },
         update = ::updateScreen,
     )
+    private var appliedPalette: DroideTerminalPalette? = null
     private var terminalBackgroundColor = Color.BLACK
     internal var accessoryModifiers: AccessoryModifierController? = null
     private val codingKeyboard = CodingKeyboardController()
@@ -167,8 +168,12 @@ class DeviceTerminalView @JvmOverloads constructor(
     }
 
     fun applyTheme(palette: DroideTerminalPalette) {
-        terminalBackgroundColor = palette.background
-        setBackgroundColor(terminalBackgroundColor)
+        if (appliedPalette == palette) return
+        appliedPalette = palette
+        if (terminalBackgroundColor != palette.background) {
+            terminalBackgroundColor = palette.background
+            setBackgroundColor(terminalBackgroundColor)
+        }
         invalidate()
     }
 

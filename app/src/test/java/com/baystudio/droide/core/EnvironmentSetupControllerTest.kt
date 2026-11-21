@@ -146,7 +146,7 @@ class EnvironmentSetupControllerTest {
 
     @Test fun retainedDataAfterFailedActivationStillRequiresSuccessfulValidationOnRetry() = runTest {
         var exists = false; var attempts = 0
-        val controller = EnvironmentSetupController(this, true, inspect = { EnvironmentSetupInspection(exists) },
+        val controller = EnvironmentSetupController(this, true, inspect = { EnvironmentSetupInspection(false, recoveryRequired = exists) },
             install = { attempts++; exists = true; error("Existing environment needs repair") }, defer = {})
         runCurrent(); controller.installFromUser(); runCurrent()
         controller.installFromUser(); runCurrent()
@@ -167,7 +167,7 @@ class EnvironmentSetupControllerTest {
     @Test fun cancelledActivationMustBeValidatedBeforeRetryCanReportSuccess() = runTest {
         var exists = false; var attempts = 0
         val controller = EnvironmentSetupController(this, true,
-            inspect = { EnvironmentSetupInspection(exists) },
+            inspect = { EnvironmentSetupInspection(false, recoveryRequired = exists) },
             install = {
                 attempts++
                 exists = true
@@ -186,7 +186,7 @@ class EnvironmentSetupControllerTest {
     @Test fun setupRequestCannotTurnFailedActivationIntoSuccessByFindingItsDirectory() = runTest {
         var exists = false; var attempts = 0
         val controller = EnvironmentSetupController(this, true,
-            inspect = { EnvironmentSetupInspection(exists) },
+            inspect = { EnvironmentSetupInspection(false, recoveryRequired = exists) },
             install = { attempts++; exists = true; error("Health check failed") }, defer = {})
         runCurrent(); controller.installFromUser(); runCurrent(); controller.show(); runCurrent()
         assertTrue(controller.state.value.presented)
@@ -213,10 +213,10 @@ class EnvironmentSetupControllerTest {
     }
 
     @Test fun successfulResumeClearsIncompleteActivationAndReusesInstalledEnvironment() = runTest {
-        var exists = false; var attempts = 0
+        var exists = false; var verified = false; var attempts = 0
         val controller = EnvironmentSetupController(this, true,
-            inspect = { EnvironmentSetupInspection(exists) },
-            install = { attempts++; exists = true; if (attempts == 1) awaitCancellation() }, defer = {})
+            inspect = { EnvironmentSetupInspection(verified, recoveryRequired = exists && !verified) },
+            install = { attempts++; exists = true; if (attempts == 1) awaitCancellation() else verified = true }, defer = {})
         runCurrent(); controller.installFromUser(); runCurrent(); controller.cancel(); runCurrent()
         controller.later(); runCurrent(); assertFalse(controller.state.value.presented)
         controller.show(); runCurrent()

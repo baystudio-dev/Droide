@@ -1,0 +1,1 @@
+Connect 9Router and discover the models your instance offers. Extensions has a new catalog and detail view with version selection and install progress. Installing tools reuses your Ubuntu environment. Kotlin installations from Ubuntu APT show the package and compiler versions. Scrolling, transitions and streamed replies use less UI-thread work.

@@ -53,7 +53,7 @@ internal object UserToolUpdateHealth {
     /** execute uses the rebuilt workspace launch projection after the provider completes. */
     suspend fun verify(recipe: UserToolUpdateRecipe, execute: suspend (String) -> ExecResult): Result {
         val evidence = mutableListOf<String>()
-        val pending = mutableListOf<String>()
+        val unverified = mutableListOf<String>()
         suspend fun run(command: String): String {
             currentCoroutineContext().ensureActive()
             val result = execute(command)
@@ -98,7 +98,7 @@ internal object UserToolUpdateHealth {
             }
             if (check.arguments == null) {
                 evidence += "${check.command}: $selected"
-                pending += "${check.command} executable health/version"
+                unverified += "${check.command} executable health/version"
                 continue
             }
             val output = run((listOf(selected) + check.arguments).joinToString(" ", transform = ::q) + " 2>&1")
@@ -111,17 +111,54 @@ internal object UserToolUpdateHealth {
                 }
             }
             evidence += "${check.command}${version?.let { " $it" }.orEmpty()}: $selected ($actual)"
-            if (expected == null || version == null) pending += "${check.command} requested version/origin"
-            else if (recipe.provider == "Ubuntu APT") pending += "${check.command} upstream/package-version equivalence"
-            else if (requested == null) pending += "${check.command} requested package/tool-version equivalence"
+            if (expected == null || version == null) unverified += "${check.command} requested version/origin"
+            else if (recipe.aptPackageRequests.isNotEmpty()) continue
+            else if (requested == null) unverified += "${check.command} requested package/tool-version equivalence"
             else if (!requested.removePrefix("v").matches(Regex("[0-9]+(?:\\.[0-9]+){0,2}(?:[-+][0-9A-Za-z.-]+)?")))
-                pending += "${check.command} upstream freshness for '$requested'"
+                unverified += "${check.command} upstream freshness for '$requested'"
         }
-        if (recipe.selectedCommandChecks.isEmpty()) pending += "selected executable health/version"
+        if (recipe.selectedCommandChecks.isEmpty()) unverified += "selected executable health/version"
         val detail = evidence.joinToString("; ")
-        return if (pending.isEmpty()) Result("Selected executable path, execution and version checked. $detail", true)
-        else Result("Provider completed; verification pending for ${pending.distinct().joinToString(", ")}. " +
+        if (recipe.aptPackageRequests.isNotEmpty()) {
+            val packages = installedAptVersions(recipe.aptPackageRequests, execute)
+            val message = listOf(packages, detail.takeIf { it.isNotEmpty() }?.let { "Selected tools: $it." },
+                unverified.takeIf { it.isNotEmpty() }?.let { "Not verified: ${it.distinct().joinToString(", ")}." })
+            return Result(message.filterNotNull().joinToString(" "), false)
+        }
+        return if (unverified.isEmpty()) Result("Selected executable path, execution and version checked. $detail", true)
+        else Result("Provider completed. Not verified: ${unverified.distinct().joinToString(", ")}. " +
             if (detail.isEmpty()) "Check the selected tool in Terminal." else "Observed: $detail", false)
+    }
+
+    private suspend fun installedAptVersions(requests: List<String>, execute: suspend (String) -> ExecResult): String {
+        val packages = requests.associateBy { it.substringBefore('=') }
+        val fields = "\${Package}\\t\${Architecture}\\t\${Version}\\t\${db:Status-Eflag}\\t\${db:Status-Status}\\n"
+        val names = packages.keys.joinToString(" ", transform = ::q)
+        currentCoroutineContext().ensureActive()
+        val result = execute("LC_ALL=C /usr/bin/dpkg-query -W -f=" + q(fields) + " -- $names 2>/dev/null")
+        currentCoroutineContext().ensureActive()
+        check(!result.timedOut && !result.outputIncomplete && result.exitCode in 0..1) {
+            "APT finished, but the installed package database could not be read."
+        }
+        val rows = result.output.lineSequence().filter { it.isNotBlank() }.map { it.split('\t') }.toList()
+        check(rows.all { it.size == 5 }) { "APT finished, but the installed package record could not be read." }
+        val installed = mutableListOf<String>()
+        val missing = mutableListOf<String>()
+        for ((name, request) in packages) {
+            val matches = rows.filter { it[0] == name || "${it[0]}:${it[1]}" == name }
+            val pinned = request.substringAfter('=', "")
+            if (matches.isEmpty() && pinned.isEmpty()) {
+                // APT can satisfy a virtual package using a differently named provider.
+                missing += name
+                continue
+            }
+            val versions = matches.filter { it[3] == "ok" && it[4] == "installed" }.map { it[2] }.distinct()
+            check(versions.isNotEmpty()) { "APT finished, but $name is not fully installed." }
+            check(pinned.isEmpty() || pinned in versions) { "APT installed $name ${versions.joinToString()}, requested $pinned." }
+            installed += "$name ${pinned.ifEmpty { versions.joinToString("/") }}"
+        }
+        return listOfNotNull(installed.takeIf { it.isNotEmpty() }?.let { "Installed Ubuntu packages: ${it.joinToString(", ")}." },
+            missing.takeIf { it.isNotEmpty() }?.let { "No direct package record for ${it.joinToString(", ")}." }).joinToString(" ")
     }
 
     // Parse a tool's own version banner, never an arbitrary dependency version substring.

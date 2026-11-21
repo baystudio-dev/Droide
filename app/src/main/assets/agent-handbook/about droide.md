@@ -280,6 +280,8 @@ External CLI versions and dependencies come from the current Extensions catalog.
 
 **Custom providers:** in Providers & Models, open **Manage providers → Add custom provider**. Enter a unique ID, name, API base URL and supported protocol; **Save & connect**, enter the key if required, validate and choose a model. Definitions apply across projects; keys remain in encrypted app storage. Blank Model IDs uses discovery; manual IDs send short validation requests that may be billed. Meta is listed directly and uses the Meta Model API. Use the edit icon to change/remove custom definitions. Endpoint changes require reconnection. This menu configures the built-in agent, not an external CLI's accounts.
 
+**9Router.** Open **Manage providers → 9Router**, enter the server’s HTTPS API base URL or use the local address if the server runs on this device. Match **Requires API key** to the server configuration, then save and connect. Droide loads the server’s current chat models and combo aliases in one catalog request. Select the exact ID shown. Tool and image support, reasoning, and token limits can differ between routes.
+
 Provider credentials, GitHub sign-in, and an external CLI's login are separate. Remote providers may charge for usage under their own plans. Local GGUF import and certification are exposed in Settings. Agent activation has a separate compatibility check; a 4K window is rejected as too small for the required Agent instructions/tools. Inspect the current activation diagnostic rather than equating certified import, a running local server and an available Agent backend. Do not infer a depleted balance from a generic rate-limit or quota message.
 
 **Use an external CLI agent in chat**

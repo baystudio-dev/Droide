@@ -40,12 +40,17 @@ internal fun extensionCatalogCards(
 ): List<ExtensionCatalogCard> = items.groupBy { it.family.id }.values.mapNotNull { versions ->
     val primary = extensionDefaultChoice(versions) ?: return@mapNotNull null
     if (category != null && primary.family.category != category) return@mapNotNull null
-    val searchable = versions.flatMap { item ->
-        listOf(item.family.id, item.family.name, item.family.publisher, item.family.description,
-            item.version.version, item.version.channel, item.family.category.label, extensionExecutionLabel(item)) +
-            item.family.keywords + item.version.provides + item.version.requires
+    val search = query.trim()
+    if (search.isNotEmpty()) {
+        val family = primary.family
+        val inFamily = listOf(family.id, family.name, family.publisher, family.description, family.category.label)
+            .any { it.contains(search, true) } || family.keywords.any { it.contains(search, true) }
+        if (!inFamily && versions.none { item ->
+                item.version.version.contains(search, true) || item.version.channel.contains(search, true) ||
+                    extensionExecutionLabel(item).contains(search, true) || item.version.provides.any { it.contains(search, true) } ||
+                    item.version.requires.any { it.contains(search, true) }
+            }) return@mapNotNull null
     }
-    if (query.isNotBlank() && searchable.none { it.contains(query.trim(), ignoreCase = true) }) return@mapNotNull null
     ExtensionCatalogCard(primary, versions.distinctBy { it.version.version to it.version.scope })
 }
 

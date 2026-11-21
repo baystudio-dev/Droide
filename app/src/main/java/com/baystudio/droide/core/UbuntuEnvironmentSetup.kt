@@ -66,27 +66,13 @@ internal object UbuntuEnvironmentSetup {
         val lock = guest.resolve("BOOTSTRAP_LOCK.txt")
         val linkStore = rootfs.resolve(".l2s")
         for (file in listOf(lock, bin.resolve("apt-get"), bin.resolve("dpkg"), bin.resolve("bash"))) {
-            val entry = (if (file == lock) attributes(lock) else installedBinaryAttributes(file, linkStore)) ?: return null
+            val entry = (if (file == lock) attributes(lock) else ubuntuBinaryAttributes(file.toPath(), linkStore.toPath())) ?: return null
             if (!entry.isRegularFile || entry.size() == 0L || (file == lock && entry.size() > 65_536)) return null
             identity.append('|').append(entry.fileKey() ?: entry.creationTime())
                 .append('/').append(entry.size()).append('/').append(entry.lastModifiedTime())
                 .append('/').append(entry.permissions().sumOf { 1 shl it.ordinal })
         }
         return identity.toString()
-    }
-
-    private fun installedBinaryAttributes(binary: File, linkStore: File): PosixFileAttributes? {
-        var path = binary.toPath()
-        // PRoot represents a hard link with at most two links into its guest-local .l2s directory.
-        repeat(3) { depth ->
-            val entry = attributes(path.toFile()) ?: return null
-            if (entry.isRegularFile) return entry
-            if (!entry.isSymbolicLink || depth == 2 || attributes(linkStore)?.isDirectory != true) return null
-            val target = path.resolveSibling(Files.readSymbolicLink(path))
-            if (target.parent != linkStore.toPath() || !target.fileName.toString().startsWith(".l2s.")) return null
-            path = target
-        }
-        return null
     }
 
     internal fun confirmActivation(context: Context, guest: File) {
@@ -108,7 +94,7 @@ internal object UbuntuEnvironmentSetup {
 
     internal suspend fun inspect(
         filesDir: File, verifiedIdentity: String?, deferred: Boolean,
-        verifyHealth: suspend () -> Boolean?, record: (String) -> Unit,
+        verifyHealth: suspend () -> Boolean?, record: (String) -> Unit, mutationInProgress: () -> Boolean = { false },
     ): EnvironmentSetupInspection {
         val base = filesDir.canonicalFile.resolve("guest")
         if (!retainedDirectory(base)) return EnvironmentSetupInspection(false, deferred)
@@ -119,12 +105,20 @@ internal object UbuntuEnvironmentSetup {
             return EnvironmentSetupInspection(false, deferred, recoveryRequired = retained)
         }
         val identity = activeIdentity(current)
-        if (identity != null) {
+        if (identity == null) {
+            if (verifiedIdentity != null && mutationInProgress()) {
+                return EnvironmentSetupInspection(false, checkLater = true)
+            }
+        } else {
             if (identity == verifiedIdentity) return EnvironmentSetupInspection(true)
-            val healthy = verifyHealth() ?: return EnvironmentSetupInspection(false, deferred = true, recoveryRequired = true)
-            if (healthy && activeIdentity(current) == identity) {
-                record(identity)
-                return EnvironmentSetupInspection(true)
+            val healthy = verifyHealth() ?: return EnvironmentSetupInspection(false, checkLater = true)
+            if (healthy) {
+                val after = activeIdentity(current)
+                if (after == identity) {
+                    record(identity)
+                    return EnvironmentSetupInspection(true)
+                }
+                if (after != null) return EnvironmentSetupInspection(false, checkLater = true)
             }
         }
         return EnvironmentSetupInspection(false, deferred, recoveryRequired = true)
@@ -140,9 +134,9 @@ internal object UbuntuEnvironmentSetup {
             scope, enabled = BuildConfig.FDROID_DISTRIBUTION,
             inspect = { withContext(Dispatchers.IO) {
                 inspect(app.filesDir, preferences.getString(VERIFIED_GUEST, null), preferences.getBoolean(DEFERRED, false),
-                    { manager.verifyExistingForSetup().also { if (it == null) pendingRuntimeConfirmation.set(true) } }) { identity ->
+                    manager::verifyExistingForSetup, record = { identity ->
                     check(preferences.edit().putString(VERIFIED_GUEST, identity).commit()) { "Unable to confirm Ubuntu setup" }
-                }
+                }, mutationInProgress = { manager.mutationInProgress }).also { if (it.checkLater) pendingRuntimeConfirmation.set(true) }
             } },
             install = { progress ->
                 val job = currentCoroutineContext()[Job]!!

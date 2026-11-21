@@ -2,10 +2,9 @@
 
 A result applies to the exact source, selected tests, toolchain and artifact it measured. Host compilation, APK assembly and physical-device execution are separate evidence. The current [testing guide](../TESTING.md) defines how to record them.
 
-## Scoped application records
+## License inventories
 
-- [Workbench action audit](workbench-actions-20261114/AUDIT.md), [results](workbench-actions-20261114/RESULTS.json) and [control inventory](workbench-actions-20261114/control-index.csv).
-- [Release legal audit](release-legal-20261110/AUDIT.md) and its adjacent source inventories. These establish the recorded notice review; later dependency changes need another review.
+The notice review retains the [embedded notices](release-legal-20261110/embedded-notice-sources.json), [upstream license sources](release-legal-20261110/upstream-license-sources.json) and [integrity inventory](release-legal-20261110/integrity-inventory-refresh.json). Recheck the affected entries when a dependency changes.
 
 ## Required provenance
 

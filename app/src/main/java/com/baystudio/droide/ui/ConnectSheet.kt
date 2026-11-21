@@ -48,6 +48,7 @@ import com.baystudio.droide.core.ProviderAuthMethodDescriptor
 import com.baystudio.droide.core.ProviderAuthMethodKind
 import com.baystudio.droide.core.ProviderConnectionBackend
 import com.baystudio.droide.core.ModelsDevCatalog
+import com.baystudio.droide.core.NineRouterProvider
 import com.baystudio.droide.core.ProviderRegistry
 import com.baystudio.droide.core.UserProviderDefinition
 import kotlinx.coroutines.CancellationException
@@ -179,10 +180,7 @@ fun ConnectSheet(
         selectedProviderId?.let(connectionBackend::snapshot)
     }
     val visibleModels = remember(validatedModels, modelQuery) {
-        validatedModels.asSequence()
-            .filter { modelQuery.isBlank() || it.contains(modelQuery, ignoreCase = true) }
-            .take(500)
-            .toList()
+        if (modelQuery.isBlank()) validatedModels else validatedModels.filter { it.contains(modelQuery, ignoreCase = true) }
     }
 
     fun preferredMethodId(methods: List<ProviderAuthMethodDescriptor>, currentMethodId: String? = null): String? =
@@ -345,19 +343,27 @@ fun ConnectSheet(
         }
     }
 
-    if (customEditor) {
+    val setupRouter = selectedProviderId == NineRouterProvider.ID && connectionBackend.customProvider(NineRouterProvider.ID) == null
+    if (customEditor || setupRouter) {
         CustomProviderForm(
-            backend = connectionBackend, initial = editingProvider, modifier = modifier,
+            backend = connectionBackend, initial = if (setupRouter) null else editingProvider, modifier = modifier,
+            nineRouter = setupRouter || editingProvider?.id == NineRouterProvider.ID,
             onSaved = { saved ->
+                editingProvider = null
                 customEditor = false
                 selectProvider(saved.id)
                 info = "Provider saved. Connect and validate to choose a model."
             },
             onRemoved = { id ->
+                editingProvider = null
                 clearTransient(); selectedProviderId = null; selectedMethodId = null
                 customEditor = false; onDisconnected(id)
             },
-            onCancel = { customEditor = false },
+            onCancel = {
+                if (setupRouter) selectedProviderId = null
+                customEditor = false
+                editingProvider = null
+            },
         )
         return
     }

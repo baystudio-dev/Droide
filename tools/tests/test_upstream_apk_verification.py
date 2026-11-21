@@ -1,7 +1,9 @@
 """Signing-policy regressions and optional checks against real release APKs."""
 import copy
+import importlib.util
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import sys
@@ -11,6 +13,27 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from verify_upstream_apk import publication_policy, verify
+
+
+class ReleaseTagTests(unittest.TestCase):
+    def test_github_publisher_and_fdroid_scanner_use_the_same_version(self):
+        root = Path(__file__).resolve().parents[2]
+        script = root / ".github/scripts/upload_release_assets.py"
+        spec = importlib.util.spec_from_file_location("release_assets", script)
+        publisher = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(publisher)
+        recipe = (root / "tools/fdroid/com.baystudio.droide.yml").read_text()
+        pattern = next(line.removeprefix("UpdateCheckMode: Tags ") for line in
+                       recipe.splitlines() if line.startswith("UpdateCheckMode: Tags "))
+        for tag in ("v1.03", "v1.03.1", "v2.10.12"):
+            with self.subTest(tag=tag):
+                self.assertEqual(tag[1:], publisher.release_version(tag))
+                self.assertIsNotNone(re.fullmatch(pattern, tag + "-fdroid"))
+        for tag in ("1.03.1", "v1", "v1.03.", "v1.03.1.1", "v1.03.1-rc1", "v1.03/1"):
+            with self.subTest(tag=tag):
+                with self.assertRaises(ValueError):
+                    publisher.release_version(tag)
+                self.assertIsNone(re.fullmatch(pattern, tag + "-fdroid"))
 
 
 class UpstreamPublicationPolicyTests(unittest.TestCase):

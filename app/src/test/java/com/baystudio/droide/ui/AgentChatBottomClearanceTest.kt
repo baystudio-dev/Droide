@@ -199,7 +199,7 @@ class AgentChatBottomClearanceTest {
         val activity = AgentChatActivity(60, 0, 0, 0, 0, 0, 0, null, false)
         compose.setContent {
             DroideTheme {
-                val current = rememberAgentChatViewport(ui, conversation, null, keys, activity, false)
+                val current = rememberAgentChatViewport(ui, conversation, null, { keys }, activity, false)
                 SideEffect { viewport = current }
                 LazyColumn(
                     state = current.listState,

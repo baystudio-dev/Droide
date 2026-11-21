@@ -25,6 +25,6 @@ Definitions are user settings shared across projects, stored separately from `.d
 - Providers from projects or the downloadable catalog cannot occupy the `user.*` namespace. Dynamic catalog metadata cannot override user provider definitions or their model capabilities.
 - At most 32 definitions, 16 manual models per definition and 128 KiB of serialized settings are allowed. These are configuration limits, not a model's context/output budget.
 
-## Validation scope
+## 9Router
 
-Focused Kotlin/Compose compilation and host tests exercise persistence, stale writes, reserved identities, four protocol probes, connection failure/endpoint ownership, provider/model routing and the real Compose form. Device validation and a live Meta account request remain separate checks; this source change alone is not a release APK or proof of live account access.
+Select 9Router in the provider menu. Use the URL of your instance and its credentials if required. The default local address is `http://127.0.0.1:20128/v1`. For a remote instance use HTTPS. Droide accepts the base URL, the models endpoint or the chat-completions endpoint. Refresh models after changing the routes on your instance. Select a model using its complete ID, including any prefix supplied by the router.

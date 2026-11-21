@@ -12,7 +12,7 @@ internal class ProviderConnectionStateStore(context: Context) {
         val id = normalizeProviderId(providerId)
         val method = prefs.getString(methodKey(id), null)?.takeIf { METHOD_ID.matches(it) } ?: return null
         val validated = prefs.getLong(validatedKey(id), 0L).takeIf { it > 0L } ?: return null
-        val models = prefs.getInt(modelCountKey(id), 0).coerceIn(0, MAX_MODELS)
+        val models = prefs.getInt(modelCountKey(id), 0).coerceIn(0, ProviderModelCatalog.limit(id))
         return ProviderConnectionRecord(id, method, validated, models, prefs.getString(endpointKey(id), null))
     }
 
@@ -20,7 +20,7 @@ internal class ProviderConnectionStateStore(context: Context) {
         val id = normalizeProviderId(record.providerId)
         require(METHOD_ID.matches(record.authMethodId)) { "Invalid provider auth method id" }
         require(record.validatedAtEpochSeconds > 0L) { "Invalid provider validation timestamp" }
-        require(record.modelCount in 0..MAX_MODELS) { "Invalid provider model count" }
+        require(record.modelCount in 0..ProviderModelCatalog.limit(id)) { "Invalid provider model count" }
         require(record.endpointFingerprint == null || FINGERPRINT.matches(record.endpointFingerprint)) {
             "Invalid provider endpoint fingerprint"
         }
@@ -63,7 +63,6 @@ internal class ProviderConnectionStateStore(context: Context) {
         private const val VALIDATED_PREFIX = "validated."
         private const val MODEL_COUNT_PREFIX = "models."
         private const val ENDPOINT_PREFIX = "endpoint."
-        private const val MAX_MODELS = 1_000
         private val PROVIDER_ID = Regex("[a-z0-9._-]{1,96}")
         private val METHOD_ID = Regex("[a-z0-9._-]{1,64}")
         private val FINGERPRINT = Regex("[a-f0-9]{64}")

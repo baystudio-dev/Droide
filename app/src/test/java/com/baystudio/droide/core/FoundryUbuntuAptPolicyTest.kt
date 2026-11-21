@@ -7,6 +7,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FoundryUbuntuAptPolicyTest {
+    @Test fun reviewedPackagePreparationChecksInterruptedDpkgBeforeWritingDefaults() {
+        val name = "src/main/java/com/baystudio/droide/core/FoundryUbuntuGuestEnvironment.kt"
+        val source = listOf(File(name), File("app/$name")).first { it.isFile }.readText()
+        val reviewed = source.substringAfter("if (!allowSharedRepair && existingGuestPresent()) {").substringBefore("} else ensureInstalledUnlocked()")
+        val check = reviewed.indexOf("aptDependencies.requireNoPendingConfiguration()")
+        assertTrue(check >= 0 && reviewed.indexOf("installGuestDefaults()") > check)
+    }
+
     @Test fun layerHealthChecksAllRequestedPackagesWithOneQueryAndFailsClosed() {
         val root = Files.createTempDirectory("droide-layer-health").toFile()
         try {

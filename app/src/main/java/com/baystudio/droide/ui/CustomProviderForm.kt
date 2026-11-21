@@ -17,6 +17,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.baystudio.droide.core.ProviderConnectionBackend
+import com.baystudio.droide.core.NineRouterProvider
 import com.baystudio.droide.core.ProviderWireProtocol
 import com.baystudio.droide.core.UserProviderDefinition
 import com.baystudio.droide.core.label
@@ -27,13 +28,14 @@ internal fun CustomProviderForm(
     backend: ProviderConnectionBackend,
     initial: UserProviderDefinition?,
     modifier: Modifier = Modifier,
+    nineRouter: Boolean = false,
     onSaved: (UserProviderDefinition) -> Unit,
     onRemoved: (String) -> Unit,
     onCancel: () -> Unit,
 ) {
     var name by rememberSaveable(initial?.id) { mutableStateOf(initial?.name.orEmpty()) }
     var id by rememberSaveable(initial?.id) { mutableStateOf(initial?.id?.removePrefix("user.").orEmpty()) }
-    var url by rememberSaveable(initial?.id) { mutableStateOf(initial?.baseUrl.orEmpty()) }
+    var url by rememberSaveable(initial?.id, nineRouter) { mutableStateOf(initial?.baseUrl ?: if (nineRouter) NineRouterProvider.LOCAL_URL else "") }
     var protocol by rememberSaveable(initial?.id) { mutableStateOf(initial?.protocol ?: ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS) }
     var needsKey by rememberSaveable(initial?.id) { mutableStateOf(initial?.requiresKey ?: true) }
     var models by rememberSaveable(initial?.id) { mutableStateOf(initial?.models?.joinToString("\n").orEmpty()) }
@@ -50,25 +52,30 @@ internal fun CustomProviderForm(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onCancel, enabled = !busy) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to providers") }
-            Text(if (initial == null) "Add custom provider" else "Edit custom provider", style = MaterialTheme.typography.titleMedium)
+            Text(if (nineRouter) NineRouterProvider.NAME else if (initial == null) "Add custom provider" else "Edit custom provider", style = MaterialTheme.typography.titleMedium)
         }
         Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Available across your projects. Save the endpoint, then connect with your API key.", style = MaterialTheme.typography.bodySmall, color = DroideColors.Muted)
-            OutlinedTextField(name, { name = it.take(160); error = null }, Modifier.fillMaxWidth(), label = { Text("Provider name") }, singleLine = true, enabled = !busy)
-            OutlinedTextField(id, { id = it.take(80); error = null }, Modifier.fillMaxWidth(), label = { Text("Provider ID") },
-                supportingText = { Text("Unique name, for example my-provider") }, singleLine = true, enabled = !busy && initial == null,
-                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
+            Text(if (nineRouter) "Use the local address if 9Router runs on this device. For a hosted server, paste its HTTPS API URL."
+                else "Available across your projects. Save the endpoint, then connect with your API key.", style = MaterialTheme.typography.bodySmall, color = DroideColors.Muted)
+            if (!nineRouter) {
+                OutlinedTextField(name, { name = it.take(160); error = null }, Modifier.fillMaxWidth(), label = { Text("Provider name") }, singleLine = true, enabled = !busy)
+                OutlinedTextField(id, { id = it.take(80); error = null }, Modifier.fillMaxWidth(), label = { Text("Provider ID") },
+                    supportingText = { Text("Unique name, for example my-provider") }, singleLine = true, enabled = !busy && initial == null,
+                    keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
+            }
             OutlinedTextField(url, { url = it.take(2048); error = null }, Modifier.fillMaxWidth(), label = { Text("API base URL") },
                 placeholder = { Text("https://api.example.com/v1") }, singleLine = true, enabled = !busy,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri))
-            Text("API protocol", style = MaterialTheme.typography.labelMedium)
-            Box {
-                OutlinedButton(onClick = { protocolsOpen = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                    Text(protocol.label, Modifier.weight(1f)); Icon(Icons.Default.ArrowDropDown, null)
-                }
-                DropdownMenu(expanded = protocolsOpen, onDismissRequest = { protocolsOpen = false }) {
-                    ProviderWireProtocol.entries.forEach { item ->
-                        DropdownMenuItem(text = { Text(item.label) }, onClick = { protocol = item; protocolsOpen = false; error = null })
+            if (!nineRouter) {
+                Text("API protocol", style = MaterialTheme.typography.labelMedium)
+                Box {
+                    OutlinedButton(onClick = { protocolsOpen = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(protocol.label, Modifier.weight(1f)); Icon(Icons.Default.ArrowDropDown, null)
+                    }
+                    DropdownMenu(expanded = protocolsOpen, onDismissRequest = { protocolsOpen = false }) {
+                        ProviderWireProtocol.entries.forEach { item ->
+                            DropdownMenuItem(text = { Text(item.label) }, onClick = { protocol = item; protocolsOpen = false; error = null })
+                        }
                     }
                 }
             }
@@ -76,7 +83,8 @@ internal fun CustomProviderForm(
                 Checkbox(needsKey, { needsKey = it; error = null }, enabled = !busy)
                 Text("Requires API key", style = MaterialTheme.typography.bodyMedium)
             }
-            OutlinedTextField(models, { models = it.take(4096); error = null }, Modifier.fillMaxWidth(), label = { Text("Model IDs (optional)") },
+            if (nineRouter) Text("Models and combo aliases are loaded from your server when you connect.", style = MaterialTheme.typography.bodySmall)
+            else OutlinedTextField(models, { models = it.take(4096); error = null }, Modifier.fillMaxWidth(), label = { Text("Model IDs (optional)") },
                 supportingText = { Text("One ID per line. Leave empty to discover models automatically.") }, minLines = 2, maxLines = 4, enabled = !busy,
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false))
             if (models.isNotBlank()) Text(
@@ -89,23 +97,25 @@ internal fun CustomProviderForm(
                 focus.clearFocus(); busy = true; error = null
                 scope.launchUiCatching(onError = { error = it.message ?: "Could not save custom provider."; busy = false }) {
                     try {
-                        val candidate = UserProviderDefinition("user.$id", name, url, protocol, needsKey, models.lines().map(String::trim).filter(String::isNotEmpty))
+                        val candidate = if (nineRouter) NineRouterProvider.defaults.copy(baseUrl = url, requiresKey = needsKey)
+                            else UserProviderDefinition("user.$id", name, url, protocol, needsKey, models.lines().map(String::trim).filter(String::isNotEmpty))
                         backend.saveCustomProvider(candidate, initial)
                             .onSuccess(onSaved).onFailure { error = it.message ?: "Could not save custom provider." }
                     } finally { busy = false }
                 }
-            }, enabled = !busy && name.isNotBlank() && id.isNotBlank() && url.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
+            }, enabled = !busy && url.isNotBlank() && (nineRouter || (name.isNotBlank() && id.isNotBlank())), modifier = Modifier.fillMaxWidth()) {
                 Text("Save & connect")
             }
             if (initial != null) TextButton(onClick = { removing = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Text("Remove custom provider", color = MaterialTheme.colorScheme.error)
+                Text(if (nineRouter) "Reset 9Router connection" else "Remove custom provider", color = MaterialTheme.colorScheme.error)
             }
         }
     }
     if (removing && initial != null) AlertDialog(
         onDismissRequest = { if (!busy) removing = false },
-        title = { Text("Remove ${initial.name}?") },
-        text = { Text("Removes this provider and its saved credential. Existing chats are kept.") },
+        title = { Text(if (nineRouter) "Reset 9Router?" else "Remove ${initial.name}?") },
+        text = { Text(if (nineRouter) "Clears the saved server address and credential. You can connect again from Providers & Models."
+            else "Removes this provider and its saved credential. Existing chats are kept.") },
         confirmButton = { TextButton(enabled = !busy, onClick = {
             busy = true; error = null
             scope.launchUiCatching(onError = { error = it.message ?: "Could not remove provider."; busy = false; removing = false }) {
@@ -114,7 +124,7 @@ internal fun CustomProviderForm(
                         .onFailure { error = it.message ?: "Could not remove provider." }
                 } finally { busy = false; removing = false }
             }
-        }) { Text("Remove") } },
+        }) { Text(if (nineRouter) "Reset" else "Remove") } },
         dismissButton = { TextButton(onClick = { removing = false }, enabled = !busy) { Text("Cancel") } },
     )
 }

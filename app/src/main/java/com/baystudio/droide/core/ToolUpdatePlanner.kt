@@ -12,6 +12,7 @@ data class UserToolUpdateRecipe(
     val selectedCommandChecks: List<UserToolCommandCheck> = emptyList(),
     val expectedCommandPaths: Map<String, String> = emptyMap(),
     val miseRequest: String? = null,
+    val aptPackageRequests: List<String> = emptyList(),
 )
 
 internal object ToolUpdatePlanner {
@@ -195,7 +196,8 @@ internal object ToolUpdatePlanner {
             if (links.isEmpty()) "" else " && mkdir -p \"\$HOME/.local/bin\" && " + links.joinToString(" && ") { (name, path) ->
                 "test -x " + q(path) + " && ln -sf " + q(path) + " \"\$HOME/.local/bin/" + name + "\""
             }
-        return UserToolUpdateRecipe(command, provider = "Ubuntu APT", healthCommands = aliases.keys.toList(), expectedCommandPaths = aliases)
+        return UserToolUpdateRecipe(command, provider = "Ubuntu APT", healthCommands = aliases.keys.toList(),
+            expectedCommandPaths = aliases, aptPackageRequests = packages)
     }
 
     private fun androidSdk(familyId: String, version: String, source: PackageSourceDefinition?): UserToolUpdateRecipe {

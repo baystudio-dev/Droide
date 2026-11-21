@@ -6,7 +6,6 @@ import java.util.concurrent.atomic.AtomicReference
 
 
 internal object ProviderModelCertificationRegistry {
-    private const val MAX_MODELS = 1_000
 
     private data class Certification(
         val providerFingerprint: String,
@@ -15,8 +14,8 @@ internal object ProviderModelCertificationRegistry {
 
     private val certifications = AtomicReference<Map<String, Certification>>(emptyMap())
 
-    fun validatedModels(models: Collection<String>): List<String> {
-        require(models.size <= MAX_MODELS) { "Provider returned too many model IDs" }
+    fun validatedModels(models: Collection<String>, providerId: String = ""): List<String> {
+        require(models.size <= ProviderModelCatalog.limit(providerId)) { "Provider returned too many model IDs" }
         val safe = LinkedHashSet<String>(models.size)
         models.forEach { raw ->
             safe += ProviderModelIdentity.normalize(raw)
@@ -27,7 +26,7 @@ internal object ProviderModelCertificationRegistry {
 
      
     fun certify(provider: AiProvider, models: Collection<String>): List<String> {
-        val safe = validatedModels(models)
+        val safe = validatedModels(models, provider.id)
         val id = provider.id.trim().lowercase()
         val certification = Certification(providerFingerprint(provider), safe.toSet())
         while (true) {

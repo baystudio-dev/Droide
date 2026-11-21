@@ -103,4 +103,23 @@ class DeviceTerminalViewLifecycleTest {
 
 /** Test fixture only: production PTY readers decode off the Android Looper. */
 private fun com.baystudio.droide.core.DeviceTerminalEmulator.appendFromWorker(text: String) =
-    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.Default) { appendText(text) }
+    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.Default) { appendText(text)
+    @Test fun repeatedBindingOnlyRequestsTheInitialScreenForANewOwner() {
+        val model = DeviceTerminalEmulator({}, 40, 24)
+        class Listener : DeviceTerminalEmulator.UiListener {
+            var changes = 0
+            override fun onScreenChanged() { changes++ }
+        }
+        val first = Listener()
+        val second = Listener()
+        repeat(120) { model.setUiListener(first) }
+        assertEquals(1, first.changes)
+        model.setUiListener(second)
+        model.clearUiListener(first)
+        model.setUiListener(second)
+        assertEquals(1, second.changes)
+        model.clearUiListener(second)
+        model.setUiListener(second)
+        assertEquals(2, second.changes)
+    }
+}
