@@ -4401,7 +4401,7 @@
     "app/src/test/java/com/baystudio/droide/ui/SettingsMotionWorkflowTest.kt": "4cfb3afeeaddcabf1c5f4c951638b5dd8b63d33ab097899cc213ee7fe543d94e",
     "app/src/test/java/com/baystudio/droide/ui/SettingsOfficialLinkActionsR74Test.kt": "aefef52334354ea13317e0c908358f503a8338021056c35f4ec556a613985b4f",
     "app/src/test/java/com/baystudio/droide/ui/SettingsOfficialLinkLauncherR74Test.kt": "9dfd11053043fae40da7c230073e5cbfa7ebca46493a94e919a984b91fa7d0e7",
-    "app/src/test/java/com/baystudio/droide/ui/SettingsOfficialLinksR74Test.kt": "464999fe521d3ad09c3affbfacc53c69e4ba448311994ca5b000410d6d8415ca",
+    "app/src/test/java/com/baystudio/droide/ui/SettingsOfficialLinksR74Test.kt": "be4dba28a239bf5efb8d843523b4df104f1125351af6936f269b37920410af84",
     "app/src/test/java/com/baystudio/droide/ui/SettingsOfficialLinksWorkflowR74Test.kt": "a9bbe495b7088e9195b7441c823c06d966ac1a5d5eaa000365e83e4ee8b76a8e",
     "app/src/test/java/com/baystudio/droide/ui/SkillManagementWorkflowTest.kt": "a0c2d27877e5271adce8accae5d2421a4f6039f933e9f67851053e6a9f4b1028",
     "app/src/test/java/com/baystudio/droide/ui/StartupRecoveryRestorationTest.kt": "1bb0236ceb826d2663454ea899f4255f61427202be50ac4c2613c3d5adbb6b1f",

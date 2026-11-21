@@ -58,8 +58,8 @@ class SettingsOfficialLinksR74Test {
         }
     }
 
-    @Test fun unusualRepositorySpellingAndInstagramQueryRemainUnchanged() {
-        assertEquals("/baystudio-dev/Droide-v1.-00", URI(SettingsOfficialLink.SOURCE.url).path)
+    @Test fun repositoryPathAndInstagramQueryMatchOfficialDestinations() {
+        assertEquals("/baystudio-dev/Droide", URI(SettingsOfficialLink.SOURCE.url).path)
         assertEquals("psln=M2p0YjRpeHpqY3Jh", URI(SettingsOfficialLink.INSTAGRAM.url).rawQuery)
         assertEquals(listOf(SettingsOfficialLink.INSTAGRAM), SettingsOfficialLink.entries.filter { URI(it.url).rawQuery != null })
     }
