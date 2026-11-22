@@ -60,6 +60,7 @@ class DroideIdeHeaderActions(
     val onTest: () -> Unit,
     val onTestExplorer: () -> Unit,
     val onLint: () -> Unit,
+    val onLintFile: () -> Unit,
     val onReleaseApk: () -> Unit,
     val onReleaseBundle: () -> Unit,
     val onBuildOutput: () -> Unit,
@@ -132,7 +133,9 @@ fun DroideIdeHeader(
         add(DroideHeaderAction("Build Debug APK", Icons.Default.Android, "Build", state.androidProject && !state.busy, androidDisabledHint, actions.onBuildDebug))
         add(DroideHeaderAction("Test Tasks", Icons.Default.Science, "Test", !state.busy, if (state.busy) "Another Build/Run operation is active" else null, actions.onTestExplorer))
         add(DroideHeaderAction("Android Test", Icons.Default.Science, "Test", state.androidProject && !state.busy, androidDisabledHint, actions.onTest))
-        add(DroideHeaderAction("Lint", Icons.Default.Rule, "Verify", state.androidProject && !state.busy, androidDisabledHint, actions.onLint))
+        if (com.baystudio.droide.core.SourceFileLint.supports(state.activeFile))
+            add(DroideHeaderAction("Lint file", Icons.Default.Rule, "Verify", !state.busy, onClick = actions.onLintFile))
+        add(DroideHeaderAction("Android Lint", Icons.Default.Rule, "Verify", state.androidProject && !state.busy, androidDisabledHint, actions.onLint))
         add(DroideHeaderAction("Release APK", Icons.Default.Inventory2, "Package", state.androidProject && !state.busy, androidDisabledHint, actions.onReleaseApk))
         add(DroideHeaderAction("Release Bundle", Icons.Default.AllInbox, "Package", state.androidProject && !state.busy, androidDisabledHint, actions.onReleaseBundle))
         add(DroideHeaderAction("Build / Run Output", Icons.Default.Article, "Inspect", state.outputAvailable, if (state.outputAvailable) null else "No output yet", actions.onBuildOutput))

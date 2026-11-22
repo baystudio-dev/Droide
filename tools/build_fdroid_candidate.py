@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import subprocess
 
+from verify_repository_docs import check_handbook_sections
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -17,6 +19,9 @@ def main():
     parser.add_argument("--device-storage", action="store_true", help="Opt into Android all-files access for shared storage")
     args = parser.parse_args()
     root, sdk, java = args.root.resolve(), args.sdk.resolve(), args.java_home.resolve()
+    failures = check_handbook_sections(root)
+    if failures:
+        raise SystemExit("BUNDLED_HELP_FAILED\n" + "\n".join(failures))
     products = args.dependencies.resolve()
     environment = os.environ.copy()
     environment.update(JAVA_HOME=str(java), ANDROID_HOME=str(sdk), ANDROID_SDK_ROOT=str(sdk))

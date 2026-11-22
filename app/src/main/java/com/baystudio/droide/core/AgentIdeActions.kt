@@ -35,6 +35,7 @@ class AgentIdeActions(
             "gradle_task" -> renderBuild(op, coordinator.gradleTask(requireNotNull(request.task)))
             "test" -> renderBuild(op, coordinator.test())
             "lint" -> renderBuild(op, coordinator.lint())
+            "lint_file" -> AgentIdeResult.fileCheck(op, coordinator.lintFile(requireNotNull(request.path)))
             "run_file" -> AgentIdeResult.runFile(coordinator.runFileResult(requireNotNull(request.path), approvedPython))
             "install_run" -> {
                 val result = coordinator.installAndRun(buildTask = request.task ?: "assembleDebug")

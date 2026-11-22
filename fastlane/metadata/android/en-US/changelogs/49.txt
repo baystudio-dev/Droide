@@ -1,0 +1,1 @@
+Extensions can retry cancelled installations and prepare required Ubuntu libraries. Run uses the project's Ubuntu tools, including project-installed TypeScript. Lint file checks supported source files. The Agent, Architecture and Integrations guides open again, with dedicated 9Router setup guidance.

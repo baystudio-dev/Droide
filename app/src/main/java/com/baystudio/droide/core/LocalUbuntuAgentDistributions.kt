@@ -12,6 +12,7 @@ internal object LocalUbuntuAgentDistributions {
     const val ANTIGRAVITY_VERSION = "1.5.3"
     const val MUSE_RUNTIME = "runtime.muse-code"
     const val MUSE_VERSION = "1.4.13-R6996.1"
+    private const val MAX_MUSE_BINARY_BYTES = 512L * 1024 * 1024
     const val MUSE_KEY = "$MUSE_RUNTIME@$MUSE_VERSION"
 
     data class Release(
@@ -39,7 +40,7 @@ internal object LocalUbuntuAgentDistributions {
             familyId = MUSE_RUNTIME, command = "muse-runtime", assetTemplate = "muse-aarch64-linux",
             format = LocalUbuntuVendorFormat.RAW, entryTemplate = "muse",
             admission = LocalUbuntuVendorAdmission.STATIC_ARM64, maxFiles = 1,
-            maxAssetBytes = 384L * 1024 * 1024, maxUnpackedBytes = 384L * 1024 * 1024,
+            maxAssetBytes = MAX_MUSE_BINARY_BYTES, maxUnpackedBytes = MAX_MUSE_BINARY_BYTES,
             pinnedVersion = MUSE_VERSION,
             pinnedSha256 = "c7f278b5f12862f5721c73433976256aa2a8abd433a12da0e484d30b08c024ff"),
             "https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=$MUSE_VERSION&file=muse-aarch64-linux",

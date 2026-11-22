@@ -119,7 +119,9 @@ data class LocalUbuntuVendorRecipe @JvmOverloads constructor(
         require(assetSha512 == null || (familyId == LocalUbuntuAgentDistributions.ANTIGRAVITY &&
             assetSha512.matches(Regex("[0-9a-f]{128}"))))
         require(assetSha256.matches(Regex("[0-9a-f]{64}")) || (assetSha256.isEmpty() && assetSha512 != null))
-        require(assetSize == null || assetSize in 1L..definition.maxAssetBytes)
+        require(assetSize == null || assetSize in 1L..definition.maxAssetBytes) {
+            "Publisher size for $assetName is $assetSize bytes, outside the supported range 1–${definition.maxAssetBytes}"
+        }
         if (familyId == LocalUbuntuJsDebugPolicy.FAMILY && version == LocalUbuntuJsDebugPolicy.VERSION) require(assetSize == LocalUbuntuJsDebugPolicy.ARTIFACT_BYTES) {
             "Reviewed js-debug release size changed"
         }

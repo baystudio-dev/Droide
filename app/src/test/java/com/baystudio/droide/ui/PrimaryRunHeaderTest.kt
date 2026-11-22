@@ -29,7 +29,7 @@ class PrimaryRunHeaderTest {
                         busy, android, connected, false, false, false, emptyList()),
                     DroideIdeHeaderActions(
                         onProjects = {}, onRun = { runs++ }, onBuildDebug = {}, onTest = {},
-                        onTestExplorer = {}, onLint = {}, onReleaseApk = {}, onReleaseBundle = {},
+                        onTestExplorer = {}, onLint = {}, onLintFile = {}, onReleaseApk = {}, onReleaseBundle = {},
                         onBuildOutput = {}, onApkAnalyzer = {}, onCancel = {}, onDebugAndroid = {},
                         onRunAndroidApp = { localAppRuns++ },
                         onInstallRun = {}, onLogcat = {}, onLocalLinux = {},

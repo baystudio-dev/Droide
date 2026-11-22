@@ -34,6 +34,20 @@ class ExternalAgentPublisherUpdatesTest {
         }
     }
 
+    @Test fun museAcceptsThePublishedArm64BinaryAndRejectsOversizedManifests() = runBlocking<Unit> {
+        val version = "1.4.25-R9361.1"
+        val digest = "8fe089115ef137879fca46986d55edf18d5d3ab9cfdb6441c67e9d1807b4108a"
+        val url = LocalUbuntuAgentDistributions.museUrl(version, "muse-aarch64-linux")
+        val manifest = """{"version":"$version","checksum_algorithm":"sha256","artifacts":{"aarch64_linux":{"url":"$url","checksum":"$digest","size":415897832}}}"""
+        val recipe = LocalUbuntuVendorResolver { manifest }.resolve(LocalUbuntuAgentDistributions.MUSE_RUNTIME, version)
+        assertEquals(415897832L, recipe.assetSize)
+        assertEquals(digest, recipe.assetSha256)
+        recipe.artifactDescriptor("muse-test").validateStructure()
+        assertThrows(IllegalArgumentException::class.java) {
+            recipe.copy(assetSize = recipe.definition.maxAssetBytes + 1L).validate()
+        }
+    }
+
     @Test fun futureAntigravityAuthenticatesSha512BeforeMaterializingReceiptSha256() = runBlocking<Unit> {
         val manifest = fixture("agy").replace("1.5.3", "1.6.0").replace(
             Json.parseToJsonElement(fixture("agy")).jsonObject.getValue("sha512").jsonPrimitive.content, "a".repeat(128))

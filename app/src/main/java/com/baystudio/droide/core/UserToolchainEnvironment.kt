@@ -89,8 +89,13 @@ internal object UserToolchainEnvironment {
         require(observed.keys.all { it in keys })
         val merged = observed.filterKeys { it !in protectedKeys }.toMutableMap()
         if ("PATH" in merged) {
-            merged["PATH"] = (preferredBins + merged.getValue("PATH").split(':') + base["PATH"].orEmpty().split(':'))
-                .filter { it.isNotEmpty() }.distinct().joinToString(":")
+            val observedPaths = merged.getValue("PATH").split(':').filter(String::isNotEmpty)
+            val basePaths = base["PATH"].orEmpty().split(':').filter(String::isNotEmpty)
+            val missing = basePaths.filterNot { it in observedPaths || it in LocalLinuxUserEnvironment.systemBins }
+            val systemIndex = observedPaths.indexOfFirst { it in LocalLinuxUserEnvironment.systemBins }
+                .let { if (it < 0) observedPaths.size else it }
+            merged["PATH"] = (preferredBins + observedPaths.take(systemIndex) + missing +
+                observedPaths.drop(systemIndex) + basePaths).distinct().joinToString(":")
         }
         require(merged.values.all { it.length <= MAX_VALUE_CHARS && it.none { c -> c == '\n' || c == '\r' || c == '\u0000' } })
         return merged.toMap()

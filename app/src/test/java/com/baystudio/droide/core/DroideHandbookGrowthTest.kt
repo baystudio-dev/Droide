@@ -17,10 +17,13 @@ class DroideHandbookGrowthTest {
    assertEquals(expected,DroideHandbookPolicy.readSection(StringReader(doc),name))
   }
  }
+ private fun bundledGuide(): String {
+  val root = File(System.getProperty("droide.source", "."))
+  val relative = "src/main/assets/" + DroideHandbookPolicy.ASSET
+  return root.resolve("app/$relative").takeIf { it.isFile }?.readText() ?: File(relative).readText()
+ }
  @Test fun smallUnrelatedEditDoesNotDisableAllCurrentSections() {
-  val root=File(System.getProperty("droide.source","."))
-  val asset=root.resolve("app/src/main/assets/agent-handbook/about droide.md").let { if(it.isFile)it else File("src/main/assets/agent-handbook/about droide.md") }
-  val doc=asset.readText()
+  val doc = bundledGuide()
   val grown=doc+"\n"+" ".repeat(200)
   assertTrue(grown.length>32000)
   for(name in DroideHandbookPolicy.sections.keys)
@@ -57,16 +60,17 @@ class DroideHandbookGrowthTest {
   val root=Files.createTempDirectory("handbook-external").toFile()
   try {
    val lsp=Proxy.newProxyInstance(LspManager::class.java.classLoader,arrayOf(LspManager::class.java)){_,_,_->throw AssertionError("No LSP call")} as LspManager
-   val provider=ExternalIdeTools(FileRepository(root),null,lsp,PermissionEngine(listOf(PermRule("*","*",PermEffect.ALLOW))),ApprovalManager(),requireOwner={},handbook={guide()})
+   val doc = bundledGuide()
+   val provider=ExternalIdeTools(FileRepository(root),null,lsp,PermissionEngine(listOf(PermRule("*","*",PermEffect.ALLOW))),ApprovalManager(),requireOwner={},handbook={doc})
    try {
     val definition=provider.definitions.map { it.jsonObject }.single { it["name"]?.jsonPrimitive?.content=="droide_help" }
     val choices=definition.getValue("inputSchema").jsonObject.getValue("properties").jsonObject
      .getValue("section").jsonObject.getValue("enum").jsonArray.map { it.jsonPrimitive.content }.toSet()
     assertEquals(DroideHandbookPolicy.sections.keys,choices)
-    for(section in listOf("identity","architecture","release","integrations","storage","ssh","android_device")) {
-     val result=provider.call("droide_help",buildJsonObject { put("section",section) })
-     assertTrue(result.contains("## ${DroideHandbookPolicy.sections.getValue(section)}. $section"))
-     assertFalse(result.contains("## 2. navigation"))
+    for (section in DroideHandbookPolicy.sections.keys) {
+     val result = provider.call("droide_help", buildJsonObject { put("section", section) })
+     val expected = DroideHandbookPolicy.readSection(StringReader(doc), section)
+     assertTrue(result, result.endsWith(expected))
      assertEquals(1,Regex("(?m)^## ").findAll(result).count())
      assertTrue(result.length<DroideHandbookPolicy.MAX_RESULT_CHARS)
     }

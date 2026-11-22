@@ -83,11 +83,13 @@ data class ManagedPackageCatalogEntry(
 
 object ManagedPackageCatalog {
     private const val ASSET_NAME = "managed-package-catalog.json"
-    const val PINNED_ASSET_SHA256 = "8c58a6d6379bfdcc30465fa70ada899f3959bd4e0aa9627ae7c63160a4016a27"
+    const val PINNED_ASSET_SHA256 = "bca59122b6ecfc453ba766618c5566825992fac954f76741fefbe23ea6534cef"
     private val json = Json { ignoreUnknownKeys = false }
 
-    fun load(context: Context): ManagedPackageCatalogDocument {
-        val bytes = context.applicationContext.assets.open(ASSET_NAME).use { it.readBytes() }
+    fun load(context: Context): ManagedPackageCatalogDocument =
+        context.applicationContext.assets.open(ASSET_NAME).use { decode(it.readBytes()) }
+
+    internal fun decode(bytes: ByteArray): ManagedPackageCatalogDocument {
         val actual = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
         check(actual == PINNED_ASSET_SHA256) { "Pinned managed package catalog integrity check failed" }
         return json.decodeFromString<ManagedPackageCatalogDocument>(bytes.decodeToString()).also(::validate)

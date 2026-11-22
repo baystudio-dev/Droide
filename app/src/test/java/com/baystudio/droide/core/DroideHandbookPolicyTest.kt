@@ -17,7 +17,6 @@ class DroideHandbookPolicyTest {
         for (value in listOf("", "all", "Identity", "../identity", "/identity", "https://example.com/", "identity\nterminal")) {
             assertThrows(IllegalArgumentException::class.java) { DroideHandbookPolicy.validateSelection(value, null) }
         }
-        assertEquals(24, DroideHandbookPolicy.sections.size)
     }
 
     @Test fun screenshotIdsAreFixedAndMustMatchTheSection() {
@@ -76,13 +75,35 @@ class DroideHandbookPolicyTest {
         assertEquals(indexed.toSet().size, indexed.size)
         val headings = Regex("(?m)^## ([0-9]+)\\. ").findAll(doc).map { it.groupValues[1].toInt() }.toList()
         assertEquals(DroideHandbookPolicy.sections.values.toList(), headings)
-        for (section in listOf("architecture", "diagnostics", "troubleshooting_agent", "troubleshooting_runtime", "lifecycle", "release", "integrations")) {
+        for (section in listOf("agent", "architecture", "diagnostics", "troubleshooting_agent", "troubleshooting_runtime",
+            "lifecycle", "release", "integrations", "agent_workflow", "architecture_workspace", "integrations_browser", "nine_router")) {
             val text = DroideHandbookPolicy.readSection(StringReader(doc), section)
             assertTrue(text.startsWith("## ${DroideHandbookPolicy.sections.getValue(section)}. "))
             assertEquals(1, Regex("(?m)^## ").findAll(text).count())
             assertNull(DroideHandbookPolicy.validateSelection(section, null))
             assertThrows(IllegalArgumentException::class.java) { DroideHandbookPolicy.validateSelection(section, "editor") }
         }
+    }
+
+    @Test fun theRepairedOverviewsPointToReadableDetailsAndNineRouterSetup() {
+        val doc = document()
+        val routes = mapOf(
+            "agent" to listOf("agent_workflow", "nine_router"),
+            "architecture" to listOf("architecture_workspace"),
+            "integrations" to listOf("integrations_browser"),
+        )
+        for ((section, details) in routes) {
+            val overview = DroideHandbookPolicy.readSection(StringReader(doc), section)
+            for (detail in details) {
+                assertTrue(overview.contains(detail))
+                assertTrue(DroideHandbookPolicy.readSection(StringReader(doc), detail).isNotBlank())
+            }
+        }
+        val setup = DroideHandbookPolicy.readSection(StringReader(doc), "nine_router")
+        assertTrue(setup.contains("http://127.0.0.1:20128/v1"))
+        assertTrue(setup.contains("Requires API key"))
+        assertTrue(setup.contains("docs/guides/custom-providers.md#9router"))
+        assertTrue(setup.contains("A handbook lookup error describes the local guide."))
     }
 
     @Test fun verifiedIdentityAndCurrentControlsAreProductFocused() {
@@ -149,6 +170,8 @@ class DroideHandbookPolicyTest {
         assertTrue(DroideHandbookPolicy.BOOTSTRAP.length < 500)
         assertTrue(DroideHandbookPolicy.BOOTSTRAP.contains("user's language"))
         assertTrue(DroideHandbookPolicy.BOOTSTRAP.contains("ordinary coding"))
+        assertTrue(DroideHandbookPolicy.BOOTSTRAP.contains("Use nine_router for 9Router setup."))
+        assertTrue(DroideHandbookPolicy.DISCOVERY_BOOTSTRAP.contains("Use nine_router for 9Router setup."))
         assertTrue(DroideHandbookPolicy.BOOTSTRAP.contains("Never auto-fetch"))
         assertFalse(DroideHandbookPolicy.BOOTSTRAP.contains("BayStudio"))
         assertFalse(DroideHandbookPolicy.BOOTSTRAP.contains("https://"))

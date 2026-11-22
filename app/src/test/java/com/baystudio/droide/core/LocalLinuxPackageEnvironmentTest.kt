@@ -4,6 +4,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class LocalLinuxPackageEnvironmentTest {
+    @Test fun everyEligibleCompilerStaysOnPathInALargeInstallation() {
+        val root = "/data/user/0/droide/files"
+        val records = (1..174).map { record(root, "tool.%03d".format(it), "1", true) } +
+            record(root, "tool.174", "2", false)
+        val paths = LocalLinuxPackageEnvironment.guestBinPaths(records, mapOf("tool.174" to "2"), root)
+        assertEquals(174, paths.size)
+        assertEquals("/opt/droide/packages/tool.174/2/arm64-v8a/payload/bin", paths.last())
+    }
+
     @Test fun workspaceSelectionOverridesGlobalActiveVersion() {
         val root = "/data/user/0/droide/files"
         val records = listOf(

@@ -146,10 +146,10 @@ object ManagedLanguageServerPlan {
         ManagedLanguageServerPlanEntry(
             languageServerId = "rust-analyzer",
             packageFamilyId = "lsp.rust-analyzer",
-            pinnedVersion = "20260914",
+            pinnedVersion = "20261116",
             command = "rust-analyzer",
             runtime = LanguageServerRuntimeKind.ANDROID_NATIVE,
-            notes = "Bootstrap from the exact hash-pinned Termux aarch64 package built from upstream rust-analyzer 2026-09-14; Droide extracts only the reviewed executable and never runs Debian maintainer scripts.",
+            notes = "Bootstrap from the exact hash-pinned Termux aarch64 package built from upstream rust-analyzer 2026-11-16; Droide extracts only the reviewed executable and never runs Debian maintainer scripts.",
         ),
         ManagedLanguageServerPlanEntry(
             languageServerId = "kotlin",

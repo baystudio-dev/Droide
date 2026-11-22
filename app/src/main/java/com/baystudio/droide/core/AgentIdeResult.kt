@@ -67,10 +67,12 @@ internal object AgentIdeResult {
     fun failed(operation: String, payload: String, operationStarted: Boolean = true): String =
         render(operation, AgentToolEvidenceState.FAILED, operationStarted, payload)
 
-    fun runFile(result: RunnerExecutionResult): String {
+    fun runFile(result: RunnerExecutionResult): String = fileCheck("run_file", result)
+
+    fun fileCheck(operation: String, result: RunnerExecutionResult): String {
         val exit = if (result.success) 0 else result.exitCode?.takeIf { it != 0 } ?: 1
         val payload = "exit=$exit\nsuccess=${result.success}\ntimed_out=${result.timedOut}\noutput:\n${result.output}"
-        return if (result.success) succeeded("run_file", payload) else failed("run_file", payload, result.processStarted)
+        return if (result.success) succeeded(operation, payload) else failed(operation, payload, result.processStarted)
     }
 
     private fun render(operation: String, state: AgentToolEvidenceState, started: Boolean, payload: String): String {

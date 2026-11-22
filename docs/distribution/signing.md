@@ -10,7 +10,7 @@ This configuration does not establish F-Droid acceptance. The official applicati
 
 ## Published release and packaging recipe
 
-The GitHub release tag `v1.03.1` and packaging tag `v1.03.1-fdroid` identify the same application source. The signed APK is `Droide-1.03.1-release.apk`, version 1.03.1 (48). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.1)
+The GitHub release tag `v1.03.2` and packaging tag `v1.03.2-fdroid` identify the same application source. The signed APK is `Droide-1.03.2-release.apk`, version 1.03.2 (49). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.2)
 
 For the historical 1.02 release, `v1.02` and `v1.02-fdroid` identify commit `ad75df7763aa6458b0c102818b891e0898af3a58`.
 
@@ -36,10 +36,10 @@ Use the current repository's verifier with the rebuilt artifact:
 
 ```sh
 python3 tools/verify_upstream_apk.py \
-  --signed-apk /absolute/path/Droide-1.03.1-release.apk \
+  --signed-apk /absolute/path/Droide-1.03.2-release.apk \
   --unsigned-apk /absolute/path/normalized-unsigned.apk \
   --apksigner /absolute/path/android-sdk/build-tools/36.0.0/apksigner \
-  --version-code 48 \
+  --version-code 49 \
   --output /absolute/path/new-verification.json
 ```
 
@@ -48,7 +48,7 @@ The verifier checks the enabled recipe, package/version, allowed certificate, a 
 Real-artifact regressions require explicit inputs:
 
 ```sh
-DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03.1-release.apk \
+DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03.2-release.apk \
 DROIDE_UPSTREAM_UNSIGNED_APK=/absolute/path/normalized-unsigned.apk \
 DROIDE_APKSIGNER=/absolute/path/android-sdk/build-tools/36.0.0/apksigner \
 python3 -B -m unittest discover -s tools/tests -p 'test_upstream_apk_verification.py' -v

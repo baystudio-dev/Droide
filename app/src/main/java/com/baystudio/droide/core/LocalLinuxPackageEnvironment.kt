@@ -38,7 +38,6 @@ object LocalLinuxPackageEnvironment {
                 familyRecords.firstOrNull { selected != null && it.version == selected }
                     ?: familyRecords.filter { it.active }.singleOrNull()
             }
-            .take(128)
     }
 
     fun guestBinPaths(
@@ -55,7 +54,6 @@ object LocalLinuxPackageEnvironment {
             listOfNotNull(home?.takeIf { record.familyId == LocalUbuntuJdkPolicy.FAMILY }?.let { "$it/bin" }, wrapper)
         }
         .distinct()
-        .take(64)
 
     
     fun guestEnvironment(

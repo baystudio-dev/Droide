@@ -34,6 +34,7 @@ class CommandManager(private val workDir: File) {
         out += DroideCommand("android-build-release-apk", "Build the Android release APK using project signing configuration", "/android-build-release-apk")
         out += DroideCommand("android-build-release-bundle", "Build the Android release App Bundle using project signing configuration", "/android-build-release-bundle")
         out += DroideCommand("android-test", "Run Android project Gradle tests on this device", "/android-test")
+        out += DroideCommand("lint-file", "Check the active source file with its workspace tools", "/lint-file")
         out += DroideCommand("android-lint", "Run Android project lint on this device", "/android-lint")
         out += DroideCommand("android-run-local", "Build, install and run Android app on this device", "/android-run-local")
         out += DroideCommand("android-install-run", "Build, install and run on the connected Android device", "/android-install-run")

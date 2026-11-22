@@ -158,13 +158,14 @@ object SafeHttp {
                 .header("User-Agent", "Droide/1.00")
                 .header("Accept", accept)
                 .build()
-            client.newCall(req).awaitResponse().use { response ->
+            val completed = client.newCall(req).withCancellableResponse { response ->
                 if (response.code in 300..399) {
-                    val location = response.header("Location") ?: return SafeHttpResponse(response.code, "", target.url)
+                    val location = response.header("Location") ?: return@withCancellableResponse SafeHttpResponse(response.code, "", target.url)
                     val base = target.url.toHttpUrlOrNull() ?: throw IllegalArgumentException("Invalid redirect base")
                     val next = base.resolve(location)?.toString() ?: throw IllegalArgumentException("Invalid redirect")
                     target = NetworkSecurity.validatePublicHttpsTarget(next)
                     if (hop == 5) throw IllegalStateException("Too many redirects")
+                    null
                 } else {
                     val source = response.body?.source()
                     val body = if (source == null) "" else {
@@ -173,9 +174,10 @@ object SafeHttp {
                         require(source.buffer.size <= maxBytes.toLong()) { "HTTP response exceeds $maxBytes bytes" }
                         source.buffer.clone().readUtf8(source.buffer.size)
                     }
-                    return SafeHttpResponse(response.code, body, target.url)
+                    SafeHttpResponse(response.code, body, target.url)
                 }
             }
+            if (completed != null) return completed
         }
         throw IllegalStateException("Too many redirects")
     }

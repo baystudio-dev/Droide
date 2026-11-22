@@ -276,14 +276,14 @@ class OpenVsxRegistryClient(context: Context) {
                     .header("Accept", "application/octet-stream")
                     .build()
                 val pinned = client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build()
-                pinned.newCall(request).awaitResponse().use { response ->
+                val artifact = pinned.newCall(request).withCancellableResponse { response ->
                     if (response.code == 429) throw MarketplaceRateLimitException(response.header("Retry-After"))
                     if (response.code in 300..399) {
                         require(hop < MAX_REDIRECTS) { "Open VSX redirect limit exceeded" }
                         val location = response.header("Location") ?: error("Marketplace redirect has no location")
                         val next = response.request.url.resolve(location)?.toString() ?: error("Invalid marketplace redirect")
                         target = NetworkSecurity.validatePublicHttpsTarget(next)
-                        return@use
+                        return@withCancellableResponse null
                     }
                     check(response.isSuccessful) { "Open VSX download failed with HTTP ${response.code}" }
                     val declared = response.body?.contentLength()?.takeIf { it >= 0 }
@@ -308,13 +308,14 @@ class OpenVsxRegistryClient(context: Context) {
                     expectedSha256?.let { expected ->
                         require(actualSha256 == expected) { "Open VSX VSIX SHA-256 does not match registry metadata" }
                     }
-                    return@withContext DownloadedMarketplaceArtifact(
+                    DownloadedMarketplaceArtifact(
                         file = destination,
                         sha256 = actualSha256,
                         bytes = total,
                         finalUrl = target.url,
                     )
                 }
+                if (artifact != null) return@withContext artifact
             }
             error("Open VSX redirect limit exceeded")
         } catch (t: Throwable) {
@@ -333,7 +334,7 @@ class OpenVsxRegistryClient(context: Context) {
                 .header("Accept", accept)
                 .build()
             val pinned = client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build()
-            pinned.newCall(request).awaitResponse().use { response ->
+            val payload = pinned.newCall(request).withCancellableResponse { response ->
                 if (response.code == 429) throw MarketplaceRateLimitException(response.header("Retry-After"))
                 if (response.code in 300..399) {
                     require(hop < MAX_REDIRECTS) { "Open VSX redirect limit exceeded" }
@@ -341,16 +342,17 @@ class OpenVsxRegistryClient(context: Context) {
                     val next = response.request.url.resolve(location)?.toString() ?: error("Invalid marketplace redirect")
                     target = NetworkSecurity.validatePublicHttpsTarget(next)
                     if (!externalResource) require(target.host.equals("open-vsx.org", true)) { "Marketplace metadata redirect escaped Open VSX" }
-                    return@use
+                    return@withCancellableResponse null
                 }
                 check(response.isSuccessful) { "Open VSX request failed with HTTP ${response.code}" }
-                val body = response.body ?: return MarketplaceHttpPayload(ByteArray(0), target.url, response.header("ETag"), response.header("Retry-After"))
+                val body = response.body ?: return@withCancellableResponse MarketplaceHttpPayload(ByteArray(0), target.url, response.header("ETag"), response.header("Retry-After"))
                 val declared = body.contentLength().takeIf { it >= 0 }
                 declared?.let { require(it <= maxBytes) { "Marketplace response exceeds $maxBytes bytes" } }
                 val bytes = body.byteStream().use { input -> input.readNBytes(maxBytes + 1) }
                 require(bytes.size <= maxBytes) { "Marketplace response exceeds $maxBytes bytes" }
-                return MarketplaceHttpPayload(bytes, target.url, response.header("ETag"), response.header("Retry-After"))
+                MarketplaceHttpPayload(bytes, target.url, response.header("ETag"), response.header("Retry-After"))
             }
+            if (payload != null) return payload
         }
         error("Open VSX redirect limit exceeded")
     }

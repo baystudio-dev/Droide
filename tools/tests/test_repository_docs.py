@@ -48,6 +48,19 @@ class RepositoryDocsTest(unittest.TestCase):
         self.assertEqual(["README.md:1: link escapes repository: ../outside.md"],
                          self.check("README.md", "[Outside](../outside.md)"))
 
+    def test_bundled_help_counts_utf16_and_reports_each_oversized_heading(self):
+        self.write(docs.HANDBOOK_POLICY, "    const val MAX_SECTION_CHARS = 1_6\n")
+        self.write(docs.HANDBOOK, "Intro\n## 1. Guide\r\n😀😀  \r\n\n## 2. Setup\n123456\n")
+        self.assertEqual([
+            f"{docs.HANDBOOK}:2: ## 1. Guide has 17 UTF-16 units (limit 16)",
+            f"{docs.HANDBOOK}:5: ## 2. Setup has 18 UTF-16 units (limit 16)",
+        ], docs.check_handbook_sections(self.root))
+
+    def test_bundled_help_accepts_boundary_with_trailing_whitespace(self):
+        self.write(docs.HANDBOOK_POLICY, "    const val MAX_SECTION_CHARS = 16\n")
+        self.write(docs.HANDBOOK, "## 0. Index\ntext \r\n\n")
+        self.assertEqual([], docs.check_handbook_sections(self.root))
+
 
 if __name__ == "__main__":
     unittest.main()

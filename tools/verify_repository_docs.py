@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check local links in maintained repository guides without fetching remote URLs."""
+"""Check local guide links and bundled help section sizes."""
 import argparse
 from pathlib import Path
 import re
@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INLINE_LINK = re.compile(r"!?\[[^\]\n]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+[^)\n]*)?\)")
 REFERENCE = re.compile(r"^\s{0,3}\[[^\]\n]+\]:\s*(?:<([^>\n]+)>|(\S+))", re.MULTILINE)
 ROOT_TEMPLATES = {"tools/fdroid/README.md"}
+HANDBOOK = "app/src/main/assets/agent-handbook/about droide.md"
+HANDBOOK_POLICY = "app/src/main/java/com/baystudio/droide/core/DroideHandbookPolicy.kt"
 
 
 def prose(text):
@@ -58,8 +60,31 @@ def documents(root):
     yield root / "app/src/test/README.md"
 
 
-def audit(root):
+def check_handbook_sections(root):
+    for name in (HANDBOOK, HANDBOOK_POLICY):
+        if not (root / name).is_file():
+            return [f"{name}: required bundled help input missing"]
+    policy = (root / HANDBOOK_POLICY).read_text(encoding="utf-8")
+    limit_match = re.search(r"(?m)^[ \t]*const val MAX_SECTION_CHARS = ([0-9_]+)[ \t]*$", policy)
+    if limit_match is None:
+        return [f"{HANDBOOK_POLICY}: could not read MAX_SECTION_CHARS"]
+    limit = int(limit_match[1].replace("_", ""))
+    text = (root / HANDBOOK).read_bytes().decode("utf-8")
+    headings = list(re.finditer(r"(?m)^## [0-9]+\. [^\r\n]+(?=\r?$)", text))
+    if not headings:
+        return [f"{HANDBOOK}: no numbered help sections found"]
     failures = []
+    for i, heading in enumerate(headings):
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+        length = len(text[heading.start():end].strip().encode("utf-16-le")) // 2
+        if length > limit:
+            line = text.count("\n", 0, heading.start()) + 1
+            failures.append(f"{HANDBOOK}:{line}: {heading[0]} has {length} UTF-16 units (limit {limit})")
+    return failures
+
+
+def audit(root):
+    failures = check_handbook_sections(root)
     for path in documents(root):
         if not path.is_file():
             failures.append(f"{path.relative_to(root)}: required guide missing")
@@ -75,7 +100,7 @@ def main():
     failures = audit(args.root.resolve())
     if failures:
         raise SystemExit("REPOSITORY_DOCS_FAILED\n" + "\n".join(failures))
-    print("REPOSITORY_DOCS_OK (local guide targets; no remote availability claim)")
+    print("REPOSITORY_DOCS_OK (local guide targets and bundled help section sizes)")
 
 
 if __name__ == "__main__":

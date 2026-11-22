@@ -35,7 +35,10 @@ internal object LocalUbuntuNodeDistribution {
             runtimeCompatibility = DeclarativeRuntimeCompatibility(
                 guestProfile = DeclarativeGuestProfile.UBUNTU_24_04_GLIBC_ARM64,
                 libc = DeclarativeLibcCompatibility.GLIBC,
-                requiredGuestPackages = listOf("ca-certificates", "libstdc++6", "libgcc-s1"),
+                requiredGuestPackages = buildList {
+                    addAll(listOf("ca-certificates", "libstdc++6", "libgcc-s1"))
+                    if (version.substringBefore('.').toInt() >= 25) add("libatomic1")
+                },
                 evidenceUrl = "https://github.com/nodejs/node/blob/v$version/BUILDING.md",
             ),
         ).also { it.validate() }

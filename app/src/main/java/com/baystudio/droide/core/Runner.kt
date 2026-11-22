@@ -117,7 +117,7 @@ class Runner(
             val commands = if (preparation != null) SourceRunPreparation.remotePreparationCommands(preparation, requireNotNull(generatedFiles))
                 else listOf(listOf("mkdir", "-p", ".droide/run"))
             for (command in commands) {
-                val prepare = terminal.execArgv(command, timeoutMs = timeoutMs)
+                val prepare = WorkspaceCommandInvocation.execute(terminal, workDir, workDir, command, timeoutMs)
                 if (prepare.exitCode != 0 || prepare.timedOut) {
                     return RunnerExecutionResult("Runner: could not prepare remote run directory\n${boundedRunOutput(prepare.output, 8_000)}", prepare.exitCode, prepare.timedOut)
                 }
@@ -128,7 +128,16 @@ class Runner(
         var timedOut = false
         for (originalStep in plan.steps) {
             val step = if (plan.pythonConfigurationIdentity != null) originalStep else resolveCompilerAlias(originalStep)
-            val r = WorkspaceCommandInvocation.execute(terminal, workDir, workDir, step, timeoutMs)
+            val npmSource = plan.preparation?.npmToolSource
+            val r = if (npmSource != null && step.first() == "tsc") {
+                suspend fun compile(argv: List<String>) = WorkspaceCommandInvocation.execute(terminal, workDir, workDir,
+                    WorkspaceNpmTool.command(npmSource, argv), timeoutMs)
+                val first = compile(step)
+                if (!first.timedOut && first.exitCode != 0 && first.output.lineSequence().any {
+                        "TS5023" in it && "rewriteRelativeImportExtensions" in it
+                    }) compile(step.dropLast(1) + "${requireNotNull(plan.preparation).directory}/tsconfig-legacy.json")
+                else first
+            } else WorkspaceCommandInvocation.execute(terminal, workDir, workDir, step, timeoutMs)
             lastExit = r.exitCode
             timedOut = r.timedOut
             out.appendLine(boundedRunOutput(r.output, 8_000))
@@ -149,17 +158,21 @@ class Runner(
         return RunnerExecutionResult(boundedRunOutput(out, 16_000), lastExit, timedOut, processStarted = true)
     }
 
-    private suspend fun resolveCompilerAlias(step: List<String>): List<String> {
+    internal suspend fun resolveCompilerAlias(step: List<String>): List<String> {
         if (step.isEmpty()) return step
-        val alternative = when (step.first()) {
-            "gcc" -> "clang"
-            "g++" -> "clang++"
+        val candidates = when (step.first()) {
+            "gcc" -> listOf("gcc", "clang", "cc")
+            "g++" -> listOf("g++", "clang++", "c++")
             else -> return step
         }
-        val available = WorkspaceCommandInvocation.execute(terminal, workDir, workDir, listOf("sh", "-c", "command -v \"${'$'}1\" >/dev/null", "droide-compiler", step.first()), timeoutMs = 5_000)
-        if (available.exitCode != 1 || available.timedOut) return step
-        val fallback = WorkspaceCommandInvocation.execute(terminal, workDir, workDir, listOf("sh", "-c", "command -v \"${'$'}1\" >/dev/null", "droide-compiler", alternative), timeoutMs = 5_000)
-        return if (fallback.exitCode == 0 && !fallback.timedOut) listOf(alternative) + step.drop(1) else step
+        for (candidate in candidates) {
+            val probe = listOf("sh", "-c", "if command -v \"${'$'}1\" >/dev/null 2>&1; then exit 0; else exit 1; fi",
+                "droide-compiler", candidate)
+            val available = WorkspaceCommandInvocation.execute(terminal, workDir, workDir, probe, 5_000)
+            if (available.timedOut || available.exitCode !in 0..1) return step
+            if (available.exitCode == 0) return listOf(candidate) + step.drop(1)
+        }
+        return step
     }
 
 }

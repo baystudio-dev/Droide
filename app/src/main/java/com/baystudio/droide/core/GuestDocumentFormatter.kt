@@ -58,7 +58,7 @@ object GuestDocumentFormatter {
                 "sh", "-c",
                 """input=${'$'}1; output=${'$'}2; shift 2; exec "${'$'}@" < "${'$'}input" > "${'$'}output";""",
                 "droide-formatter", snapshot.absolutePath, formatted.absolutePath,
-            ) + argv
+            ) + WorkspaceNpmTool.command(relativePath, argv)
             val result = execute(invocation)
             check(!result.timedOut && result.exitCode == 0) {
                 if (!result.timedOut && result.exitCode in listOf(126, 127))

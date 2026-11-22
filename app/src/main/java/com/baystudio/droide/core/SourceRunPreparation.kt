@@ -38,7 +38,7 @@ internal object SourceRunPreparation {
     fun typeScriptPlan(path: String): RunPlan {
         val source = checkedSourcePath(path)
         val directory = runDirectory("typescript", source)
-        val config = buildJsonObject {
+        fun config(rewriteImports: Boolean) = buildJsonObject {
             put("compilerOptions", buildJsonObject {
                 put("target", "ES2022")
                 put("module", "NodeNext")
@@ -46,7 +46,7 @@ internal object SourceRunPreparation {
                 put("rootDir", "../../../..")
                 put("outDir", ".")
                 put("noEmitOnError", true)
-                put("rewriteRelativeImportExtensions", true)
+                if (rewriteImports) put("rewriteRelativeImportExtensions", true)
             })
             put("files", buildJsonArray { add(JsonPrimitive("../../../../$source")) })
         }.toString()
@@ -58,7 +58,9 @@ internal object SourceRunPreparation {
         return RunPlan(
             steps = listOf(listOf("tsc", "--project", "$directory/tsconfig.json"), listOf("node", "$directory/$emitted")),
             display = "tsc $source && node $directory/$emitted",
-            preparation = RunPreparation(directory, mapOf("tsconfig.json" to config), mirrorTypeScriptPackageScopes = true),
+            preparation = RunPreparation(directory,
+                mapOf("tsconfig.json" to config(true), "tsconfig-legacy.json" to config(false)),
+                mirrorTypeScriptPackageScopes = true, npmToolSource = source),
         )
     }
 
@@ -92,6 +94,26 @@ internal object SourceRunPreparation {
         )
     }
 
+    fun kotlinPlan(path: String): RunPlan {
+        val source = checkedSourcePath(path)
+        val argument = if (source.startsWith('-')) "./$source" else source
+        if (source.endsWith(".kts", ignoreCase = true)) {
+            return RunPlan(listOf(listOf("kotlinc", "-script", argument)), "kotlinc -script $source")
+        }
+        val directory = runDirectory("kotlin", source)
+        val jar = "$directory/program.jar"
+        return RunPlan(listOf(listOf("kotlinc", argument, "-include-runtime", "-d", jar), listOf("java", "-jar", jar)),
+            "kotlinc $source && java -jar $jar", RunPreparation(directory, mapOf("source-path.txt" to "$source\n")))
+    }
+
+    fun rustPlan(path: String): RunPlan {
+        val source = checkedSourcePath(path)
+        val directory = runDirectory("rust", source)
+        val output = "$directory/program"
+        return RunPlan(listOf(listOf("rustc", "./$source", "-o", output), listOf("./$output")),
+            "rustc $source && ./$output", RunPreparation(directory, mapOf("source-path.txt" to "$source\n")))
+    }
+
     fun nativePlan(path: String): RunPlan {
         val source = checkedSourcePath(path)
         val extension = source.substringAfterLast('.').lowercase()
@@ -110,7 +132,7 @@ internal object SourceRunPreparation {
         ExportWriterAdmission.withWriter(workDir, "Generated run preparation") {
         require(preparation.files.size in 1..16) { "Invalid run preparation" }
         require(preparation.files.values.all { it.toByteArray(Charsets.UTF_8).size <= 128 * 1024 }) { "Run preparation is too large" }
-        require(preparation.directory.matches(Regex("\\.droide/run/(typescript|csharp|native)/[0-9a-f]{64}"))) {
+        require(preparation.directory.matches(Regex("\\.droide/run/(typescript|csharp|native|kotlin|rust)/[0-9a-f]{64}"))) {
             "Run preparation must use an isolated generated directory"
         }
         require(preparation.files.keys.none { it == OWNER_FILE || it == SCOPES_FILE }) { "Reserved generated run file" }
@@ -176,7 +198,7 @@ internal object SourceRunPreparation {
     // Workspace sync deliberately excludes .droide. Materialize only these generated files in the
     // selected Device terminal, using argv for contents and refusing symlinks or unowned directories.
     internal fun remotePreparationCommands(preparation: RunPreparation, files: Map<String, String>): List<List<String>> {
-        require(preparation.directory.matches(Regex("\\.droide/run/(typescript|csharp|native)/[0-9a-f]{64}")))
+        require(preparation.directory.matches(Regex("\\.droide/run/(typescript|csharp|native|kotlin|rust)/[0-9a-f]{64}")))
         files.keys.forEach { checkedRelativeParts(it) }
         val setup = """
             set -eu

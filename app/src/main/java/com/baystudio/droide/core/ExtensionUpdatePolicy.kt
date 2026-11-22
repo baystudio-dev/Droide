@@ -86,7 +86,8 @@ internal object ExtensionUpdatePolicy {
             return Policy(Route.PARENT, "Updated together with its parent integration. A separate runtime update would break the integration's dependency contract.", listOf(parent))
         }
         integrated[family.id]?.let { components ->
-            return Policy(Route.DROIDE, "$components are updated together through Droide releases. Install the compatible version offered by this release below; independent upstream versions need a matching Droide adapter.")
+            val related = if (family.id == LocalUbuntuSveltePolicy.FAMILY_ID) listOf("runtime.node") else emptyList()
+            return Policy(Route.DROIDE, "$components are updated together through Droide releases. Install the compatible version offered by this release below; independent upstream versions need a matching Droide adapter.", related)
         }
         upstream[family.id]?.let { return it }
         projects[family.id]?.let {

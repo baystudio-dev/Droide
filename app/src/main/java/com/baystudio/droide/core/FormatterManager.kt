@@ -43,7 +43,7 @@ class FormatterManager(
         val session = terminals.automatedExecutionSession(createIfMissing = true)
             ?: error(terminals.automatedExecutionUnavailableReason())
         return GuestDocumentFormatter.format(workDir, relPath, content, codeStyle) { argv ->
-            session.execArgv(argv, timeoutMs = 10_000)
+            WorkspaceCommandInvocation.execute(session, workDir, workDir, argv, 10_000)
         }
     }
 }

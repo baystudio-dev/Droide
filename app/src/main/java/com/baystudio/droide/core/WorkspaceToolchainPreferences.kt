@@ -29,7 +29,7 @@ class WorkspaceToolchainPreferences(
                     version.matches(Regex("[A-Za-z0-9._+ -]{1,80}"))
             }
             .toList()
-            .take(64)
+            .take(MAX_SELECTIONS)
             .toMap()
     }
 
@@ -118,7 +118,7 @@ class WorkspaceToolchainPreferences(
         require(version.matches(Regex("[A-Za-z0-9._+ -]{1,80}"))) { "Invalid package version" }
         mutate {
             val next = readSelections().toMutableMap().apply { put(familyId, version) }
-            require(next.size <= 64) { "Too many workspace toolchain overrides" }
+            require(next.size <= MAX_SELECTIONS) { "Too many workspace toolchain overrides" }
             publishElpAware(next) {
                 prefs.edit().putString(workspaceKey, json.encodeToString(serializer, next)).apply()
             }
@@ -152,6 +152,7 @@ class WorkspaceToolchainPreferences(
     }
 
     private companion object {
+        const val MAX_SELECTIONS = 512
         // SharedPreferences.apply publishes to memory before returning. Hold one bounded, process-wide monitor
         // across the whole RMW, including apply, for every instance.
         val preferenceLock = Any()

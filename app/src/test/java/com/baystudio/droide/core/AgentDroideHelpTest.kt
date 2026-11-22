@@ -50,7 +50,8 @@ class AgentDroideHelpTest {
     } }
 
     @Test fun releaseAndArchitectureHelpPreserveInstalledBuildMetadataAndSectionIsolation() = workspace { root -> runBlocking {
-        for (section in listOf("architecture", "diagnostics", "troubleshooting_agent", "troubleshooting_runtime", "lifecycle", "release", "integrations")) {
+        for (section in listOf("architecture", "diagnostics", "troubleshooting_agent", "troubleshooting_runtime",
+            "lifecycle", "release", "integrations", "agent_workflow", "architecture_workspace", "integrations_browser", "nine_router")) {
             val result = AgentTools.execute("droide_help", args(section), context(root, mode = AgentMode.REVIEW))
             assertTrue(result.startsWith("[DROIDE_HELP_REFERENCE section=$section "))
             assertTrue(result.contains("Runtime app: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE});"))
@@ -61,6 +62,17 @@ class AgentDroideHelpTest {
         }
         assertFalse(ChatMediaStore(root).hasManifest())
         assertFalse(root.resolve("AGENTS.md").exists())
+    } }
+
+    @Test fun repairedOverviewsFitTogetherInTheSameToolGroup() = workspace { root -> runBlocking {
+        val ctx = context(root, mode = AgentMode.REVIEW)
+        val results = listOf("agent", "architecture", "integrations").map { section ->
+            AgentTools.execute("droide_help", args(section), ctx).also {
+                assertTrue(it, it.startsWith("[DROIDE_HELP_REFERENCE section=$section "))
+            }
+        }
+        assertTrue(results.sumOf(String::length) <= DroideHandbookPolicy.MAX_GROUP_CHARS)
+        assertFalse(ChatMediaStore(root).hasManifest())
     } }
 
     @Test fun invalidSelectionsAndReadDenialsNeverPublishImages() = workspace { root -> runBlocking {

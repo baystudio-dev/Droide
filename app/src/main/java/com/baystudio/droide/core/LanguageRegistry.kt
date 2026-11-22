@@ -17,6 +17,7 @@ data class RunPreparation(
     val directory: String,
     val files: Map<String, String>,
     val mirrorTypeScriptPackageScopes: Boolean = false,
+    val npmToolSource: String? = null,
 )
 
 data class DeclarativeLanguageSpec(
@@ -49,13 +50,9 @@ object LanguageRegistry {
         LanguageDef("react", "React / TSX", listOf("jsx", "tsx"), null, "export default () => <div>Hello</div>\n"),
         LanguageDef("go", "Go", listOf("go"), one("go run {FILE}", "go", "run", "{FILE}"), "package main\nimport \"fmt\"\nfunc main(){ fmt.Println(\"Hello\") }\n"),
         LanguageDef("goose", "Goose", listOf("goose"), GooseLanguage::runPlan, GooseLanguage.TEMPLATE),
-        LanguageDef("rust", "Rust", listOf("rs"), { path -> RunPlan(listOf(listOf("rustc", path, "-o", ".droide/run/rust"), listOf("./.droide/run/rust")), "rustc $path -o .droide/run/rust && ./.droide/run/rust") }, "fn main(){ println!(\"Hello\"); }\n"),
+        LanguageDef("rust", "Rust", listOf("rs"), SourceRunPreparation::rustPlan, "fn main(){ println!(\"Hello\"); }\n"),
         LanguageDef("java", "Java", listOf("java"), one("java {FILE}", "java", "{FILE}"), "public class Main { public static void main(String[] a){ System.out.println(\"Hello\"); } }\n"),
-        LanguageDef("kotlin", "Kotlin", listOf("kt", "kts"), { path ->
-            if (path.substringAfterLast('.').equals("kts", ignoreCase = true)) {
-                RunPlan(listOf(listOf("kotlinc", "-script", path)), "kotlinc -script $path")
-            } else RunPlan(listOf(listOf("kotlinc", path, "-include-runtime", "-d", ".droide/run/kotlin.jar"), listOf("java", "-jar", ".droide/run/kotlin.jar")), "kotlinc $path -include-runtime -d .droide/run/kotlin.jar && java -jar .droide/run/kotlin.jar")
-        }, "fun main(){ println(\"Hello\") }\n"),
+        LanguageDef("kotlin", "Kotlin", listOf("kt", "kts"), SourceRunPreparation::kotlinPlan, "fun main(){ println(\"Hello\") }\n"),
         LanguageDef("c", "C", listOf("c", "h"), SourceRunPreparation::nativePlan, "#include <stdio.h>\nint main(){ printf(\"Hello\\n\"); return 0; }\n"),
         LanguageDef("cpp", "C++", listOf("cpp", "cc", "cxx", "c++", "hpp", "hh", "hxx", "h++"), SourceRunPreparation::nativePlan, "#include <iostream>\nint main(){ std::cout << \"Hello\"; }\n"),
         LanguageDef("csharp", "C#", listOf("cs"), SourceRunPreparation::cSharpPlan, "Console.WriteLine(\"Hello\");\n"),
@@ -183,7 +180,8 @@ object LanguageRegistry {
         // Syntax metadata does not imply that Clojure CLI can run every dialect/data file.
         if (language.id == "powershell" && extension != "ps1") return null
         if (language.id == "clojure" && extension != "clj") return null
-        return language.runner?.invoke(path)
+        val argument = if (path.startsWith('-')) "./$path" else path
+        return language.runner?.invoke(argument)
     }
     fun templateFor(path: String): String =
         if (path.substringAfterLast('.', "").equals("lhs", ignoreCase = true) && forFile(path)?.id == "haskell")

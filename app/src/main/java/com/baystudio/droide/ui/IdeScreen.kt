@@ -576,6 +576,18 @@ internal fun IdeScreen(
             }
             .onFailure { snackbarHostState.showSnackbar("Run failed: ${it.message}") }
     }
+    suspend fun lintCurrentFile(path: String) {
+        if (!SourceFileLint.supports(path)) { snackbarHostState.showSnackbar("Open a supported source file to run lint"); return }
+        val failure = prepareExecution()
+        if (failure != null) { snackbarHostState.showSnackbar("Cannot check: save needs attention for ${failure.first}"); return }
+        runSuspendCatching { execution.lintFile(path) }
+            .onSuccess { result ->
+                androidOutputTitle = "Lint: ${path.substringAfterLast('/')}"
+                androidOutputText = result.output
+                showAndroidOutput = true
+            }
+            .onFailure { snackbarHostState.showSnackbar("Lint failed: ${it.message}") }
+    }
     suspend fun debugAndroidApp() { if (!workstationSupported()) return
         val failure = prepareExecution()
         if (failure != null) {
@@ -1332,6 +1344,7 @@ internal fun IdeScreen(
                         },
                         onBuildDebug = { openBottomTool(DroideBottomTool.Build); launchUserAction { runAndroidTask("Android: Build Debug APK") { execution.buildDebug() } } },
                         onTest = { openBottomTool(DroideBottomTool.Build); launchUserAction { runAndroidTask("Android: Test") { execution.test() } } }, onTestExplorer = { professionalSheet = ProfessionalSheet.TEST_EXPLORER },
+                        onLintFile = { val path = activeFile; launchUserAction { lintCurrentFile(path) } },
                         onLint = { openBottomTool(DroideBottomTool.Build); launchUserAction { runAndroidTask("Android: Lint") { execution.lint() } } },
                         onReleaseApk = { openBottomTool(DroideBottomTool.Build); launchUserAction { runAndroidTask("Android: Build Release APK") { execution.buildReleaseApk() } } },
                         onReleaseBundle = { openBottomTool(DroideBottomTool.Build); launchUserAction { runAndroidTask("Android: Build Release Bundle") { execution.buildReleaseBundle() } } },
@@ -1674,6 +1687,7 @@ internal fun IdeScreen(
                 "android-build-release-apk" -> launchUserAction { runAndroidTask("Android: Build Release APK") { execution.buildReleaseApk() } }
                 "android-build-release-bundle" -> launchUserAction { runAndroidTask("Android: Build Release Bundle") { execution.buildReleaseBundle() } }
                 "android-test" -> launchUserAction { runAndroidTask("Android: Test") { execution.test() } }
+                "lint-file" -> { val path = activeFile; launchUserAction { lintCurrentFile(path) } }
                 "android-lint" -> launchUserAction { runAndroidTask("Android: Lint") { execution.lint() } }
                 "android-run-local" -> launchUserAction { installAndRunAndroid() }
                 "android-install-run" -> launchUserAction { installAndRunAndroid(onConnectedDevice = true) }

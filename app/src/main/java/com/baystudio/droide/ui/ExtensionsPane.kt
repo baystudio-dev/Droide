@@ -49,6 +49,8 @@ import com.baystudio.droide.core.resolvedVersion
 import com.baystudio.droide.core.UbuntuAptCatalog
 import com.baystudio.droide.core.LanguageRuntimePresentation
 import com.baystudio.droide.core.runSuspendCatching
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
@@ -618,6 +620,21 @@ private fun ExtensionStateBadge(state: ExtensionState, modifier: Modifier = Modi
     }
 }
 
+internal class ExtensionDetailActions(private val scope: CoroutineScope) {
+    private var job by mutableStateOf<Job?>(null)
+    val busy: Boolean get() = job != null
+
+    fun launch(action: suspend () -> Unit) {
+        if (busy) return
+        val next = scope.launch(start = CoroutineStart.LAZY) { action() }
+        job = next
+        next.invokeOnCompletion { if (job === next) job = null }
+        next.start()
+    }
+
+    fun cancel() { job?.cancel() }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ExtensionDetail(
@@ -633,7 +650,8 @@ private fun ExtensionDetail(
     val androidProviderState by manager.installer.androidProviderState.collectAsState()
     val packageProviderState by manager.installer.packageProviderState.collectAsState()
     var plan by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf<com.baystudio.droide.core.ExtensionInstallPlan?>(null) }
-    var installJob by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf<Job?>(null) }
+    val actions = remember(scope, item.family.id, item.version.version, item.version.scope) { ExtensionDetailActions(scope) }
+    val actionsEnabled = !actions.busy && !installState.running
     var installMessage by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf<String?>(null) }
     var confirmUninstall by remember(item.family.id, item.version.version, item.version.scope) { mutableStateOf(false) }
     var elpHealthRequest by remember(item.family.id,item.version.version) { mutableStateOf<Pair<com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor,com.baystudio.droide.core.ElpRuntimeHealthApprovalRequest>?>(null) }
@@ -643,14 +661,12 @@ private fun ExtensionDetail(
     val updatePolicy = remember(item.family) { ExtensionUpdatePolicy.forFamily(item.family) }
     val uriHandler = LocalUriHandler.current
     fun prepareVersion(value: String) {
-        if (installJob != null || installState.running) return
+        if (!actionsEnabled) return
         installMessage = null
-        installJob = scope.launch {
-            try {
-                runSuspendCatching { manager.prepareRequestedVersion(item.family.id, value) }
-                    .onSuccess { prepared -> plan = prepared }
-                    .onFailure { installMessage = it.message ?: "Could not resolve this version" }
-            } finally { installJob = null }
+        actions.launch {
+            runSuspendCatching { manager.prepareRequestedVersion(item.family.id, value) }
+                .onSuccess { prepared -> plan = prepared }
+                .onFailure { installMessage = it.message ?: "Could not resolve this version" }
         }
     }
     if (showVersionRequest) {
@@ -668,8 +684,8 @@ private fun ExtensionDetail(
     val versionChoices = remember(snapshot.items, item.family.id) {
         extensionSelectableChoices(snapshot.items.filter { it.family.id == item.family.id })
     }
-    DisposableEffect(item.family.id, item.version.version, item.version.scope) {
-        onDispose { installJob?.cancel() }
+    DisposableEffect(actions) {
+        onDispose { actions.cancel() }
     }
 
     var showTechnical by rememberSaveable(item.family.id) { mutableStateOf(false) }
@@ -710,18 +726,18 @@ private fun ExtensionDetail(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (reviewedAndroid != null) {
                         if (!ExtensionSelection.from(reviewedAndroid).matches(item)) Button(onClick = { prepareVersion(reviewedAndroid.version.version) },
-                            enabled = reviewedAndroid.state == ExtensionState.AVAILABLE && installJob == null && !installState.running) {
+                            enabled = reviewedAndroid.state == ExtensionState.AVAILABLE && actionsEnabled) {
                             Text(stringResource(if (reviewedAndroid.state == ExtensionState.INSTALLED) R.string.ext_installed_version else R.string.ext_confirmed_review, reviewedAndroid.version.version))
                         }
                     } else {
-                        Button(onClick = { prepareVersion("latest") }, enabled = installJob == null && !installState.running) { Text(stringResource(R.string.ext_updated)) }
+                        Button(onClick = { prepareVersion("latest") }, enabled = actionsEnabled) { Text(stringResource(R.string.ext_updated)) }
                     }
-                    OutlinedButton(onClick = { showVersionRequest = true }, enabled = installJob == null && !installState.running) { Text(stringResource(R.string.ext_pick)) }
+                    OutlinedButton(onClick = { showVersionRequest = true }, enabled = actionsEnabled) { Text(stringResource(R.string.ext_pick)) }
                 }
             }
             for (relatedFamily in updatePolicy.relatedFamilies) {
                 val target = extensionDefaultChoice(snapshot.items.filter { it.family.id == relatedFamily })
-                if (target != null) TextButton(onClick = { onSelectItem(target) }, enabled = installJob == null && !installState.running) {
+                if (target != null) TextButton(onClick = { onSelectItem(target) }, enabled = actionsEnabled) {
                     Text("Open ${target.family.name}")
                 }
             }
@@ -735,7 +751,7 @@ private fun ExtensionDetail(
                 ExtensionVersionChoices(
                     choices = versionChoices,
                     selected = item,
-                    enabled = installJob == null && !installState.running,
+                    enabled = actionsEnabled,
                     onSelect = onSelectItem,
                 )
             }
@@ -810,13 +826,13 @@ private fun ExtensionDetail(
             )
 
             if(item.family.id=="lsp.elp" && item.state==ExtensionState.INSTALLED) {
-                OutlinedButton(enabled=installJob==null&&!installState.running,onClick={
-                    installJob=scope.launch { try {
+                OutlinedButton(enabled=actionsEnabled,onClick={
+                    actions.launch {
                         runSuspendCatching { manager.installer.prepare(item) as com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor }
                             .onSuccess { prepared -> runSuspendCatching{manager.installer.requestElpHealthApproval(prepared)}
                                 .onSuccess{elpHealthRequest=prepared to it}.onFailure{installMessage=it.message} }
                             .onFailure{installMessage=it.message}
-                    } finally {installJob=null} }
+                    }
                 }) {Text("Approve runtime health recheck")}
             }
             installMessage?.let { DismissibleNotice(it, color = MaterialTheme.colorScheme.primary) }
@@ -825,7 +841,7 @@ private fun ExtensionDetail(
             }
             if (installState.familyId == item.family.id && installState.running) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-                TextButton(onClick = { manager.installer.cancelInstallation(); installJob?.cancel() }) { Text(stringResource(R.string.ext_cancel)) }
+                TextButton(onClick = { manager.installer.cancelInstallation(); actions.cancel() }) { Text(stringResource(R.string.ext_cancel)) }
             }
             if (installState.familyId == item.family.id && installState.log.isNotBlank()) {
                 Text(installState.log, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
@@ -844,7 +860,7 @@ private fun ExtensionDetail(
                     val record = manager.registry.find(item.family.id, item.version.version)
                     val workspaceSelected = manager.workspaceVersion(item.family.id) == item.version.version
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onRefresh, enabled = installJob == null && !installState.running) { Text("Verify status") }
+                        OutlinedButton(onClick = onRefresh, enabled = actionsEnabled) { Text("Verify status") }
                         if (item.version.installKind in setOf(
                                 com.baystudio.droide.core.ExtensionInstallKind.ANDROID_LOCAL_COMPONENT,
                                 com.baystudio.droide.core.ExtensionInstallKind.MANAGED_PACKAGE,
@@ -852,16 +868,12 @@ private fun ExtensionDetail(
                                 com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
                             ) && record != null && !record.active) {
                             Button(
-                                enabled = installJob == null && !installState.running,
+                                enabled = actionsEnabled,
                                 onClick = {
-                                    installJob = scope.launch {
-                                        try {
-                                            runSuspendCatching { manager.unifiedAuthority.activate(item.family.id, item.version.version) }
-                                                .onSuccess { installMessage = it.message; if (it.success) onRefresh() }
-                                                .onFailure { installMessage = it.message ?: "Activation failed" }
-                                        } finally {
-                                            installJob = null
-                                        }
+                                    actions.launch {
+                                        runSuspendCatching { manager.unifiedAuthority.activate(item.family.id, item.version.version) }
+                                            .onSuccess { installMessage = it.message; if (it.success) onRefresh() }
+                                            .onFailure { installMessage = it.message ?: "Activation failed" }
                                     }
                                 },
                             ) { Text("Set global default") }
@@ -874,24 +886,20 @@ private fun ExtensionDetail(
                             com.baystudio.droide.core.ExtensionInstallKind.REVIEWED_RECIPE,
                         ) && record != null) {
                         OutlinedButton(
-                            enabled = installJob == null && !installState.running,
+                            enabled = actionsEnabled,
                             onClick = {
-                                installJob = scope.launch {
-                                    try {
-                                        runSuspendCatching {
-                                            if (workspaceSelected) {
-                                                manager.clearWorkspaceVersion(item.family.id)
-                                                "Workspace override cleared."
-                                            } else {
-                                                val result = manager.unifiedAuthority.activate(item.family.id, item.version.version, manager.workspaceId)
-                                                check(result.success) { result.message }
-                                                result.message
-                                            }
-                                        }.onSuccess { installMessage = it; onRefresh() }
-                                            .onFailure { installMessage = it.message ?: "Workspace toolchain selection failed" }
-                                    } finally {
-                                        installJob = null
-                                    }
+                                actions.launch {
+                                    runSuspendCatching {
+                                        if (workspaceSelected) {
+                                            manager.clearWorkspaceVersion(item.family.id)
+                                            "Workspace override cleared."
+                                        } else {
+                                            val result = manager.unifiedAuthority.activate(item.family.id, item.version.version, manager.workspaceId)
+                                            check(result.success) { result.message }
+                                            result.message
+                                        }
+                                    }.onSuccess { installMessage = it; onRefresh() }
+                                        .onFailure { installMessage = it.message ?: "Workspace toolchain selection failed" }
                                 }
                             },
                         ) { Text(if (workspaceSelected) "Use global default" else "Use in workspace") }
@@ -906,28 +914,24 @@ private fun ExtensionDetail(
                     ) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                enabled = installJob == null && !installState.running,
+                                enabled = actionsEnabled,
                                 onClick = {
-                                    installJob = scope.launch {
-                                        try {
-                                            runSuspendCatching { manager.unifiedAuthority.repairVersion(item.family.id, item.version.version) }
-                                                .onSuccess { txResult ->
-                                                    if (txResult.success) {
-                                                        installMessage = txResult.message
-                                                        onRefresh()
-                                                    } else {
-                                                        installMessage = txResult.message
-                                                    }
+                                    actions.launch {
+                                        runSuspendCatching { manager.unifiedAuthority.repairVersion(item.family.id, item.version.version) }
+                                            .onSuccess { txResult ->
+                                                if (txResult.success) {
+                                                    installMessage = txResult.message
+                                                    onRefresh()
+                                                } else {
+                                                    installMessage = txResult.message
                                                 }
-                                                .onFailure { installMessage = it.message ?: "Repair failed" }
-                                        } finally {
-                                            installJob = null
-                                        }
+                                            }
+                                            .onFailure { installMessage = it.message ?: "Repair failed" }
                                     }
                                 },
                             ) { Text("Repair") }
                             TextButton(
-                                enabled = installJob == null && !installState.running,
+                                enabled = actionsEnabled,
                                 onClick = { confirmUninstall = true },
                             ) { Text(if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) "Remove Android pack" else if (item.version.version == UbuntuAptCatalog.VERSION) "Remove integration" else "Uninstall") }
                         }
@@ -936,9 +940,9 @@ private fun ExtensionDetail(
                 ExtensionState.EXTERNAL -> {
                     Text("This command is detected in its environment. Droide does not own this installation or remove it.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    OutlinedButton(onClick = onRefresh, enabled = installJob == null && !installState.running) { Text("Verify detection") }
+                    OutlinedButton(onClick = onRefresh, enabled = actionsEnabled) { Text("Verify detection") }
                     versionChoices.firstOrNull { it.state == ExtensionState.AVAILABLE }?.let { managed ->
-                        Button(onClick = { onSelectItem(managed) }, enabled = installJob == null && !installState.running) { Text("Install managed version") }
+                        Button(onClick = { onSelectItem(managed) }, enabled = actionsEnabled) { Text("Install managed version") }
                     }
                 }
                 else -> Unit
@@ -951,16 +955,12 @@ private fun ExtensionDetail(
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Button(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small,
-                    enabled = installJob == null && !installState.running,
+                    enabled = actionsEnabled,
                     onClick = {
-                        installJob = scope.launch {
-                            try {
-                                val result = runSuspendCatching { manager.installer.prepare(item) }
-                                result.onSuccess { prepared -> plan = prepared }
-                                    .onFailure { installMessage = it.message ?: "Could not prepare installation" }
-                            } finally {
-                                installJob = null
-                            }
+                        actions.launch {
+                            val result = runSuspendCatching { manager.installer.prepare(item) }
+                            result.onSuccess { prepared -> plan = prepared }
+                                .onFailure { installMessage = it.message ?: "Could not prepare installation" }
                         }
                     },
                 ) { Text(if (installState.familyId == item.family.id && installState.phase in setOf(
@@ -978,12 +978,12 @@ private fun ExtensionDetail(
             confirmButton={TextButton(onClick={
                 manager.installWithElpHealthApproval(healthPlan,request)
                 elpHealthRequest=null
-            },enabled=installJob==null&&!installState.running){Text("Run this health check")}},
+            },enabled=actionsEnabled){Text("Run this health check")}},
             dismissButton={TextButton(onClick={request.decline();elpHealthRequest=null;installMessage="ELP health attempt inactive; previous package unchanged."}){Text("Decline")}})
     }
     if (confirmUninstall) {
         AlertDialog(
-            onDismissRequest = { if (installJob == null && !installState.running) confirmUninstall = false },
+            onDismissRequest = { if (actionsEnabled) confirmUninstall = false },
             title = { Text(if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) "Remove entire Android toolchain pack?" else if (item.version.version == UbuntuAptCatalog.VERSION) "Remove command integration?" else "Uninstall ${item.family.name}?") },
             text = {
                 Text(
@@ -997,31 +997,27 @@ private fun ExtensionDetail(
             },
             confirmButton = {
                 Button(
-                    enabled = installJob == null && !installState.running,
+                    enabled = actionsEnabled,
                     onClick = {
-                        installJob = scope.launch {
-                            try {
-                                runSuspendCatching { manager.unifiedAuthority.uninstall(item.family.id, item.version.version) }
-                                    .onSuccess { txResult ->
-                                        if (txResult.success) {
-                                            installMessage = txResult.message
-                                            confirmUninstall = false
-                                            onRefresh()
-                                        } else {
-                                            installMessage = txResult.message
-                                        }
+                        actions.launch {
+                            runSuspendCatching { manager.unifiedAuthority.uninstall(item.family.id, item.version.version) }
+                                .onSuccess { txResult ->
+                                    if (txResult.success) {
+                                        installMessage = txResult.message
+                                        confirmUninstall = false
+                                        onRefresh()
+                                    } else {
+                                        installMessage = txResult.message
                                     }
-                                    .onFailure { installMessage = it.message ?: "Uninstall failed" }
-                            } finally {
-                                installJob = null
-                            }
+                                }
+                                .onFailure { installMessage = it.message ?: "Uninstall failed" }
                         }
                     },
                 ) { Text(if (item.version.installKind == com.baystudio.droide.core.ExtensionInstallKind.ANDROID_MANAGED_TOOLCHAIN) "Remove entire pack" else if (item.version.version == UbuntuAptCatalog.VERSION) "Remove integration" else "Uninstall") }
             },
             dismissButton = {
                 TextButton(
-                    enabled = installJob == null && !installState.running,
+                    enabled = actionsEnabled,
                     onClick = { confirmUninstall = false },
                 ) { Text("No") }
             },
@@ -1035,7 +1031,7 @@ private fun ExtensionDetail(
         val packagePlan = currentPlan as? com.baystudio.droide.core.ExtensionInstallPlan.Package
         val recipePlan = currentPlan as? com.baystudio.droide.core.ExtensionInstallPlan.Recipe
         AlertDialog(
-            onDismissRequest = { if (installJob == null && !installState.running) plan = null },
+            onDismissRequest = { if (actionsEnabled) plan = null },
             title = { Text(stringResource(R.string.ext_review_title, currentPlan.familyName)) },
             text = {
                 Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1112,44 +1108,39 @@ private fun ExtensionDetail(
                     (localAndroidPlan != null && !localAndroidPlan.licenseAccepted) ||
                     (androidWorkstationPlan != null && !androidWorkstationPlan.licenseAccepted)
                 Button(
-                    enabled = installJob == null && !installState.running,
+                    enabled = actionsEnabled,
                     onClick = {
                         if (needsLicense) {
-                            installJob = scope.launch {
-                                try {
-                                    val result = runSuspendCatching {
-                                        when {
-                                            androidPlan != null -> manager.installer.acceptLicense(androidPlan)
-                                            localAndroidPlan != null -> manager.installer.acceptLicense(localAndroidPlan)
-                                            androidWorkstationPlan != null -> manager.installer.acceptLicense(androidWorkstationPlan)
-                                            else -> error("No Android license plan is active")
-                                        }
+                            actions.launch {
+                                val result = runSuspendCatching {
+                                    when {
+                                        androidPlan != null -> manager.installer.acceptLicense(androidPlan)
+                                        localAndroidPlan != null -> manager.installer.acceptLicense(localAndroidPlan)
+                                        androidWorkstationPlan != null -> manager.installer.acceptLicense(androidWorkstationPlan)
+                                        else -> error("No Android license plan is active")
                                     }
-                                    result.onSuccess {
-                                        plan = when {
-                                            androidPlan != null -> androidPlan.copy(licenseAccepted = true)
-                                            localAndroidPlan != null -> localAndroidPlan.copy(licenseAccepted = true)
-                                            androidWorkstationPlan != null -> androidWorkstationPlan.copy(licenseAccepted = true)
-                                            else -> currentPlan
-                                        }
-                                    }.onFailure { installMessage = it.message ?: "License acceptance failed" }
-                                } finally {
-                                    installJob = null
                                 }
+                                result.onSuccess {
+                                    plan = when {
+                                        androidPlan != null -> androidPlan.copy(licenseAccepted = true)
+                                        localAndroidPlan != null -> localAndroidPlan.copy(licenseAccepted = true)
+                                        androidWorkstationPlan != null -> androidWorkstationPlan.copy(licenseAccepted = true)
+                                        else -> currentPlan
+                                    }
+                                }.onFailure { installMessage = it.message ?: "License acceptance failed" }
                             }
                         } else {
                             // Only the confirmation is pane-local. The manager owns the job and
                             // progress presentation before this dialog leaves the Composition.
-                            installJob = scope.launch {
-                                try {
-                                    runSuspendCatching {
-                                        manager.installer.acceptExternalDownloadFromUser(currentPlan)
-                                        if (currentPlan is com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor && currentPlan.familyId == "lsp.elp") {
-                                            elpHealthRequest = currentPlan to manager.installer.requestElpHealthApproval(currentPlan)
-                                        } else manager.installInBackground(currentPlan)
-                                        plan = null
-                                    }.onFailure { installMessage = it.message ?: "Installation could not start" }
-                                } finally { installJob = null }
+                            actions.launch {
+                                if (plan !== currentPlan) return@launch
+                                runSuspendCatching {
+                                    manager.installer.acceptExternalDownloadFromUser(currentPlan)
+                                    if (currentPlan is com.baystudio.droide.core.ExtensionInstallPlan.LocalVendor && currentPlan.familyId == "lsp.elp") {
+                                        elpHealthRequest = currentPlan to manager.installer.requestElpHealthApproval(currentPlan)
+                                    } else manager.installInBackground(currentPlan)
+                                    plan = null
+                                }.onFailure { installMessage = it.message ?: "Installation could not start" }
                             }
                         }
                     },
@@ -1159,7 +1150,7 @@ private fun ExtensionDetail(
             },
             dismissButton = {
                 if (installState.running) {
-                    TextButton(onClick = { manager.installer.cancelInstallation(); installJob?.cancel() }) { Text(stringResource(R.string.ext_cancel)) }
+                    TextButton(onClick = { manager.installer.cancelInstallation(); actions.cancel() }) { Text(stringResource(R.string.ext_cancel)) }
                 } else {
                     TextButton(onClick = { plan = null }) { Text(stringResource(R.string.ext_close)) }
                 }

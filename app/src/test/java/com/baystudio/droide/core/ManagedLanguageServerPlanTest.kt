@@ -51,7 +51,13 @@ class ManagedLanguageServerPlanTest {
         assertEquals(LanguageServerRuntimeKind.ANDROID_NATIVE, ManagedLanguageServerPlan.forServer("gopls")?.runtime)
         val rust = ManagedLanguageServerPlan.forServer("rust-analyzer")!!
         assertEquals(LanguageServerRuntimeKind.ANDROID_NATIVE, rust.runtime)
-        assertEquals("20260914", rust.pinnedVersion)
+        val assets = sequenceOf(java.io.File("src/main/assets"), java.io.File("app/src/main/assets"),
+            System.getProperty("droide.source")?.let { java.io.File(it, "app/src/main/assets") })
+            .filterNotNull().first { java.io.File(it, "managed-package-catalog.json").isFile }
+        val bytes = java.io.File(assets, "managed-package-catalog.json").readBytes()
+        val native = ManagedPackageCatalog.decode(bytes).entries.single { it.familyId == rust.packageFamilyId }
+        assertEquals(native.version, rust.pinnedVersion)
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) { ManagedPackageCatalog.decode(bytes + 32.toByte()) }
         val typescript = ManagedLanguageServerPlan.forServer("typescript")!!
         assertEquals(RuntimeVersion(22, 22, 2), typescript.runtimeRequirements.single().let { RuntimeVersion(it.minimumMajor, it.minimumMinor, it.minimumPatch) })
         val jdtls = ManagedLanguageServerPlan.forServer("jdtls")!!

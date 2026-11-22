@@ -7,6 +7,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LocalUbuntuNodeDistributionTest {
+    @Test fun publisherRuntimeDependenciesFollowTheArm64LinkerChange() {
+        val digest = "a".repeat(64)
+        for (version in listOf("22.23.3", "24.0.0", "25.0.0", "26.13.1", "27.0.0")) {
+            val recipe = LocalUbuntuNodeDistribution.resolve("$digest  node-v$version-linux-arm64.tar.gz")
+            assertEquals(LocalUbuntuNodeDistribution.recipe(version, digest), recipe)
+            val packages = recipe.runtimeCompatibility.requiredGuestPackages
+            assertTrue(packages.containsAll(listOf("libgcc-s1", "libstdc++6")))
+            assertEquals(version.substringBefore('.').toInt() >= 25, "libatomic1" in packages)
+        }
+    }
+
     @Test fun globalPackageStateDefaultsOutsideTheSdkAndExplicitEnvironmentPrefixesSurvive() {
         val root = Files.createTempDirectory("droide node '").toFile()
         try {

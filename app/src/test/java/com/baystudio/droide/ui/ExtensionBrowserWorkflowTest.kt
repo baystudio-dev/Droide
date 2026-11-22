@@ -89,7 +89,7 @@ class ExtensionBrowserWorkflowTest {
         }
     }
 
-    private fun mount(initialFamily: String? = null) {
+    private fun mount(initialFamily: String? = null, showProgress: Boolean = false) {
         compose.setContent { DroideTheme {
             view = LocalView.current
             dispatcher = requireNotNull(LocalOnBackPressedDispatcherOwner.current).onBackPressedDispatcher
@@ -100,6 +100,7 @@ class ExtensionBrowserWorkflowTest {
                     ExtensionsPane(manager, development, bridge, "main.py", initialFamilyId = request,
                         onExit = { exits++ }, onInitialFamilyHandled = { request = null })
                 }
+                if (showProgress) InstallerProgressHost(manager.installProgress)
                 DroideCompactNavigation(6) {}
             } }
         } }
@@ -215,6 +216,60 @@ class ExtensionBrowserWorkflowTest {
             reservation.cancel()
             hold.complete(Unit)
         }
+    }
+
+    @Test fun canceledInstallationCanBeReviewedAndSubmittedAgainFromTheSameDetail() {
+        mount("runtime.python", showProgress = true)
+        repeat(2) {
+            compose.onNodeWithText("Review installation").assertIsEnabled().performClick()
+            compose.waitUntil(15_000) { compose.onAllNodesWithText("Install").fetchSemanticsNodes().isNotEmpty() }
+            val acquired = CompletableDeferred<Unit>()
+            val reservation = scope.launch(Dispatchers.IO) {
+                manager.installer.withSnapshot { acquired.complete(Unit); awaitCancellation() }
+            }
+            try {
+                runBlocking { withTimeout(5_000) { acquired.await() } }
+                compose.onNodeWithText("Install").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("installer-progress-cancel").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("installer-progress-cancel").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithTag("installer-progress-close").fetchSemanticsNodes().isNotEmpty() }
+                assertEquals(InstallerProgressOutcome.CANCELED, manager.installProgress.state.value.expanded?.outcome)
+                compose.onNodeWithTag("installer-progress-close").performClick()
+            } finally { runBlocking { reservation.cancelAndJoin() } }
+        }
+        compose.onNodeWithText("Review installation").assertIsEnabled()
+    }
+
+    @Test fun svelteLinksToItsNodePrerequisiteAndBack() {
+        val svelte = requireNotNull(DevelopmentExtensionCatalog.byId("lsp.svelte-language-server"))
+        val node = requireNotNull(DevelopmentExtensionCatalog.byId("runtime.node"))
+        mount(svelte.id)
+        compose.onNodeWithText("Open ${node.name}").performClick()
+        compose.onNodeWithText(node.name).assertExists()
+        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithText("Open ${node.name}").assertExists()
+    }
+
+    @Test fun synchronousHandoffAndPreStartCancellationReleaseEveryCatalogAction() {
+        val immediate = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val actions = ExtensionDetailActions(immediate)
+            for (family in DevelopmentExtensionCatalog.families) {
+                var launches = 0
+                actions.launch { launches++ }
+                assertFalse(family.id, actions.busy)
+                actions.launch { launches++; awaitCancellation() }
+                assertTrue(family.id, actions.busy)
+                actions.launch { fail("Overlapping action for ${family.id}") }
+                actions.cancel()
+                assertFalse(family.id, actions.busy)
+                actions.launch { launches++ }
+                assertEquals(family.id, 3, launches)
+            }
+            immediate.cancel()
+            actions.launch { fail("Canceled scope ran pane work") }
+            assertFalse(actions.busy)
+        } finally { immediate.cancel() }
     }
 
     @Test fun directPackageLinkReturnsToItsCaller() {

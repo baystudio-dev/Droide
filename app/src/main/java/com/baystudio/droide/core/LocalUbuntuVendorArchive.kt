@@ -100,7 +100,11 @@ internal object LocalUbuntuVendorArchive {
     private fun single(recipe: LocalUbuntuVendorRecipe, archive: File, input: InputStream, active: () -> Unit): SafeTreeProjection {
         require('/' !in recipe.entryPoint)
         val parent = requireNotNull(archive.parentFile)
-        check(parent.usableSpace >= recipe.definition.maxUnpackedBytes + 268_435_456L)
+        val maxExpanded = recipe.definition.maxUnpackedBytes
+        val spaceNeeded = if (recipe.definition.format == LocalUbuntuVendorFormat.RAW) {
+            archive.length().also { require(it in 1L..maxExpanded) { "Vendor payload exceeds its size limit" } }
+        } else maxExpanded
+        check(parent.usableSpace >= spaceNeeded + 268_435_456L) { "Insufficient storage for the vendor payload" }
         val root = File(parent, ".vendor-raw-${java.util.UUID.randomUUID()}")
         check(root.mkdir())
         return try {

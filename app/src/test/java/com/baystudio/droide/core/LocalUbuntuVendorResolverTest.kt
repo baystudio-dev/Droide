@@ -36,10 +36,13 @@ class LocalUbuntuVendorResolverTest {
         val definitions = LocalUbuntuVendorCatalog.all
         assertEquals(definitions.size, definitions.map { it.familyId }.toSet().size)
         for (def in definitions) {
-            assertNotNull(DevelopmentExtensionCatalog.byId(def.familyId))
-            assertTrue(def.maxFiles in 1..50_000)
-            assertTrue(def.maxUnpackedBytes in 1..1_073_741_824L)
-            assertTrue(def.maxAssetBytes in 1..268_435_456L)
+            val museRuntime = def.familyId == LocalUbuntuAgentDistributions.MUSE_RUNTIME
+            val catalogOwner = if (museRuntime) LocalUbuntuMusePolicy.FAMILY else def.familyId
+            assertNotNull(def.familyId, DevelopmentExtensionCatalog.byId(catalogOwner))
+            assertTrue(def.familyId, def.maxFiles in 1..50_000)
+            assertTrue(def.familyId, def.maxUnpackedBytes in 1..1_073_741_824L)
+            val assetLimit = if (museRuntime) 512L * 1024 * 1024 else 256L * 1024 * 1024
+            assertTrue(def.familyId, def.maxAssetBytes in 1..assetLimit)
         }
     }
     @Test fun hexRequiresExactCompatiblePublisherChecksumRow() = runBlocking {

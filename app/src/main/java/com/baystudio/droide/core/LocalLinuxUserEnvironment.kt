@@ -11,7 +11,7 @@ internal object LocalLinuxUserEnvironment {
         "/root/.local/bin", "/root/.local/share/mise/shims", "/root/.dotnet", "/root/.opencode/bin", "/root/.npm-global/bin",
         "/root/.local/share/pnpm", "/root/.bun/bin", "/root/.cargo/bin", "/root/go/bin",
     )
-    private val systemBins = listOf(
+    val systemBins = listOf(
         "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
     )
 

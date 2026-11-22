@@ -27,7 +27,7 @@ class IdeHeaderDispatchTest {
                     android, true, true, true, true, emptyList()),
                 DroideIdeHeaderActions(
                     onProjects = record("Projects"), onRun = record("Run"), onBuildDebug = record("Build"),
-                    onTest = record("Test"), onTestExplorer = record("Test Explorer"), onLint = record("Lint"),
+                    onTest = record("Test"), onTestExplorer = record("Test Explorer"), onLint = record("Lint"), onLintFile = record("File lint"),
                     onReleaseApk = record("APK"), onReleaseBundle = record("Bundle"), onBuildOutput = record("Output"),
                     onApkAnalyzer = record("Analyzer"), onCancel = record("Cancel"), onDebugAndroid = record("Debug Android"),
                     onRunAndroidApp = record("Run Android locally"),
@@ -75,10 +75,18 @@ class IdeHeaderDispatchTest {
         }
     }
 
+    @Test fun fileLintWorksInANonAndroidWorkspace() {
+        mount()
+        compose.runOnIdle { path = "index.ts"; android = false }
+        compose.onNodeWithContentDescription("More").performClick()
+        compose.onNodeWithText("Lint file").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(listOf("File lint"), events.toList()) }
+    }
+
     @Test fun allOverflowActionsReachTheirNamedCallback() {
         mount()
         val actions = listOf("Projects" to "Projects", "Open AI" to "Agent", "Run current file or app" to "Run", "Manage MCP" to "MCP", "Project Tasks" to "Tasks", "Build Debug APK" to "Build", "Test Tasks" to "Test Explorer",
-            "Android Test" to "Test", "Lint" to "Lint", "Release APK" to "APK", "Release Bundle" to "Bundle",
+            "Android Test" to "Test", "Android Lint" to "Lint", "Release APK" to "APK", "Release Bundle" to "Bundle",
             "Build / Run Output" to "Output", "APK Analyzer" to "Analyzer", "Cancel active operation" to "Cancel",
             "Run & Debug" to "Debug", "Run Android app on this device" to "Run Android locally", "Debug Android App" to "Debug Android", "Run on connected device" to "Install",
             "Logcat" to "Logcat", "Problems" to "Problems", "Quick Open" to "Quick Open", "Search in Files" to "Search",
@@ -100,7 +108,7 @@ class IdeHeaderDispatchTest {
         compose.runOnIdle { busy = true; android = false }
         compose.onNodeWithContentDescription("Run current file").assertIsNotEnabled()
         compose.onNodeWithContentDescription("More").performClick()
-        for (label in listOf("Build Debug APK", "Android Test", "Lint", "Release APK", "Release Bundle", "Run Android app on this device", "Debug Android App", "Run on connected device"))
+        for (label in listOf("Build Debug APK", "Android Test", "Android Lint", "Release APK", "Release Bundle", "Run Android app on this device", "Debug Android App", "Run on connected device"))
             compose.onNodeWithText(label).assertIsNotEnabled()
         assertTrue(events.isEmpty())
     }

@@ -171,13 +171,13 @@ internal object AgentToolCatalog {
                 })
                 put("include_path", buildJsonObject { put("type", "boolean") })
             }))
-        add(tool("ide", "Build/test/lint Android/Gradle projects, run supported source files or Android APKs, and inspect/control the IDE debugger. For other binaries use an advertised BUILD/TEST capability or the project build command through exec_command. Android run/debug requires a paired Device Bridge; debug requires a compatible installed adapter. Debug start confirms a session, not program completion.",
+        add(tool("ide", "Build/test/lint Android/Gradle projects, check a source file with lint_file, run supported files or Android APKs, and inspect/control the IDE debugger. For other binaries use an advertised BUILD/TEST capability or the project build command through exec_command. Android run/debug requires a paired Device Bridge; debug requires a compatible installed adapter. Debug start confirms a session, not program completion.",
             buildJsonObject {
                 put("operation", buildJsonObject {
                     put("type", "string")
                     put("enum", buildJsonArray { AgentIdeRequest.OPERATIONS.forEach { add(it) } })
                 })
-                put("path", buildJsonObject { put("type", "string"); put("description", "Workspace-relative source file for run/debug/configurations/breakpoints") })
+                put("path", buildJsonObject { put("type", "string"); put("description", "Workspace-relative source file for lint_file/run/debug/configurations/breakpoints") })
                 put("task", buildJsonObject { put("type", "string"); put("description", "One Gradle task for gradle_task, e.g. :app:compileDebugKotlin. Optional module-qualified assembleDebug task for install_run/debug_android.") })
                 put("configuration", buildJsonObject { put("type", "string"); put("description", "Exact debug configuration name; query debug_configurations first") })
                 listOf("line", "thread_id", "frame_id", "reference", "start", "count").forEach { name ->

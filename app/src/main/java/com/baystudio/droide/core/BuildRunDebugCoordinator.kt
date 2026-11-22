@@ -233,6 +233,14 @@ class BuildRunDebugCoordinator(
     suspend fun lint(): AndroidDevelopmentManager.BuildResult =
         operation(Operation.LINT, "Running lint…") { android.lint() }
 
+    internal suspend fun lintFile(path: String): RunnerExecutionResult = operation(Operation.LINT, "Checking $path…") {
+        val relative = checkedSourcePath(path)
+        if (!SourceFileLint.supports(relative)) return@operation RunnerExecutionResult("No built-in file check for $relative")
+        val session = terminals.automatedExecutionSession(createIfMissing = true)
+            ?: return@operation RunnerExecutionResult(terminals.automatedExecutionUnavailableReason())
+        SourceFileLint.execute(session, root, relative)
+    }
+
     suspend fun gradleTask(task: String): AndroidDevelopmentManager.BuildResult {
         GradleTaskPath.parse(task)
         return operation(Operation.GRADLE_TASK, "Running Gradle $task…") { android.build(task) }

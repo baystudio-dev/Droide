@@ -9,7 +9,7 @@ internal interface DevicePtySessionHandle : ITerminalSession {
 }
 internal object DroideCli {
     sealed interface Result {
-        data class Err(val msg: String) : Result
+        data class Err(val msg: String, val contributedFallbackAllowed: Boolean = true) : Result
         data class Run(val plan: RunPlan) : Result
         data object Open : Result
         data object Pkg : Result

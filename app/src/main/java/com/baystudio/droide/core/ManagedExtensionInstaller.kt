@@ -630,7 +630,7 @@ class ManagedExtensionInstaller(
             _state.value = State(Phase.IDLE, "Official Node.js plan ready.", item.family.id, recipe.version)
             return ExtensionInstallPlan.VendorOfficial(item.family.id, item.family.name, item.version.version, recipe,
                 listOf("Official Linux ARM64 Node.js ${recipe.version} + npm/npx", "Publisher SHA-256 ${recipe.assetSha256}",
-                    "Ubuntu runtime and shared library prerequisites", "Toolchain downloaded on request"))
+                    "Ubuntu prerequisites: ${recipe.runtimeCompatibility.requiredGuestPackages.joinToString()}", "Toolchain downloaded on request"))
         }
         if (item.family.id == "plugin.opencode" && item.version.version == LocalUbuntuVendorPolicy.VERSION_CHOICE) {
             val recipe = localVendorResolver.resolve("plugin.opencode")
@@ -941,6 +941,7 @@ class ManagedExtensionInstaller(
                 recipe.additionalDependencies.forEach { (name, version) -> add("npm $name@$version") }
                 if (dependency != null) {
                     add("Download Node.js ${dependency.version} + npm for Ubuntu ARM64")
+                    add("Ubuntu prerequisites: ${dependency.runtimeCompatibility.requiredGuestPackages.joinToString()}")
                     add("Node.js publisher SHA-256 ${dependency.assetSha256}")
                 } else add(if (svelte) "Use the already owned, reviewed and selected Node.js 22+ runtime with npm 10+; no automatic prerequisite setup"
                     else "Use installed Linux ARM64 Node.js ${recipe.minimumNodeMajor}+ and npm 10+")

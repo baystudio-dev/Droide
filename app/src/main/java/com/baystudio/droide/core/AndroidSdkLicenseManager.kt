@@ -51,14 +51,14 @@ class AndroidSdkLicenseManager(context: Context) {
                 .header("Accept", "application/xml,text/xml")
                 .build()
             val hopClient = client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build()
-            hopClient.newCall(request).awaitResponse().use { response ->
+            val license = hopClient.newCall(request).withCancellableResponse { response ->
                 if (response.code in 300..399) {
                     require(hop < MAX_REDIRECTS) { "Too many Android repository redirects" }
                     val location = response.header("Location") ?: error("Android repository redirect has no Location header")
                     val base = target.url.toHttpUrlOrNull() ?: error("Invalid Android repository redirect base")
                     val next = base.resolve(location)?.toString() ?: error("Invalid Android repository redirect")
                     target = NetworkSecurity.validatePublicHttpsTarget(next)
-                    return@use
+                    return@withCancellableResponse null
                 }
                 check(response.isSuccessful) { "Android repository metadata failed: HTTP ${response.code}" }
                 val body = response.body ?: error("Android repository metadata is empty")
@@ -71,8 +71,9 @@ class AndroidSdkLicenseManager(context: Context) {
                 val repositoryText = parseLicense(xml)
                 val text = repositoryText.trim()
                 require(text.length in MIN_LICENSE_CHARS..MAX_LICENSE_CHARS) { "Android SDK license text is invalid" }
-                return@withContext AndroidSdkLicense(text, sha256(text)).also { it.repositoryText = repositoryText }
+                AndroidSdkLicense(text, sha256(text)).also { it.repositoryText = repositoryText }
             }
+            if (license != null) return@withContext license
         }
         error("Android repository redirect limit exceeded")
     }

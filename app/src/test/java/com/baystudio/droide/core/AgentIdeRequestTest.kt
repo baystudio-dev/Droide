@@ -11,7 +11,7 @@ class AgentIdeRequestTest {
         for (operation in AgentIdeRequest.OPERATIONS) {
             val args = buildJsonObject {
                 put("operation", operation)
-                if (operation in setOf("run_file", "debug_file", "debug_android", "debug_configurations", "debug_breakpoint_add", "debug_breakpoint_remove")) put("path", "src/main.kt")
+                if (operation in setOf("lint_file", "run_file", "debug_file", "debug_android", "debug_configurations", "debug_breakpoint_add", "debug_breakpoint_remove")) put("path", "src/main.kt")
                 if (operation == "gradle_task") put("task", ":app:compileDebugKotlin")
                 if (operation.startsWith("debug_breakpoint_")) put("line", 1)
                 if (operation == "debug_evaluate") put("expression", "counter + 1")
@@ -68,7 +68,7 @@ class AgentIdeRequestTest {
     }
 
     @Test fun everyDiskExecutingOperationReconcilesGeneratedFiles() {
-        listOf("build_debug", "build_release_apk", "build_release_bundle", "gradle_task", "test", "lint", "run_file", "install_run", "debug_file", "debug_android").forEach {
+        listOf("build_debug", "build_release_apk", "build_release_bundle", "gradle_task", "test", "lint", "lint_file", "run_file", "install_run", "debug_file", "debug_android").forEach {
             assertTrue(AgentIdeRequest(it).usesDisk)
             assertTrue(AgentIdeRequest(it).reconcileAfter)
         }

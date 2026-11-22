@@ -34,16 +34,16 @@ internal data class AgentIdeRequest(
 
     companion object {
         val OPERATIONS = listOf(
-            "status", "build_debug", "build_release_apk", "build_release_bundle", "gradle_task", "test", "lint",
+            "status", "build_debug", "build_release_apk", "build_release_bundle", "gradle_task", "test", "lint", "lint_file",
             "run_file", "install_run", "cancel", "debug_status", "debug_configurations", "debug_file", "debug_android",
             "debug_continue", "debug_pause", "debug_next", "debug_step_in", "debug_step_out", "debug_stop",
             "debug_breakpoint_add", "debug_breakpoint_remove", "debug_threads", "debug_stack", "debug_variables", "debug_evaluate",
         )
         private val DISK_OPERATIONS = setOf(
-            "build_debug", "build_release_apk", "build_release_bundle", "gradle_task", "test", "lint",
+            "build_debug", "build_release_apk", "build_release_bundle", "gradle_task", "test", "lint", "lint_file",
             "run_file", "install_run", "debug_configurations", "debug_file", "debug_android",
         )
-        private val PATH_OPERATIONS = setOf("run_file", "debug_file", "debug_android", "debug_configurations", "debug_breakpoint_add", "debug_breakpoint_remove")
+        private val PATH_OPERATIONS = setOf("lint_file", "run_file", "debug_file", "debug_android", "debug_configurations", "debug_breakpoint_add", "debug_breakpoint_remove")
         private val THREAD_OPERATIONS = setOf("debug_continue", "debug_pause", "debug_next", "debug_step_in", "debug_step_out", "debug_stack")
         private val PAGED_OPERATIONS = setOf("debug_configurations", "debug_threads", "debug_stack", "debug_variables")
         private val FIELDS = setOf("operation", "path", "task", "configuration", "line", "thread_id", "frame_id", "reference", "start", "count", "expression")

@@ -1,0 +1,1 @@
+Ekstensi bisa mencoba lagi setelah pemasangan dibatalkan dan menyiapkan pustaka Ubuntu yang dibutuhkan. Run memakai alat dari lingkungan proyek, termasuk TypeScript yang dipasang di proyek. Lint file memeriksa berkas sumber yang didukung. Panduan Agent, Architecture, dan Integrations bisa dibuka lagi, dengan petunjuk khusus setup 9Router.

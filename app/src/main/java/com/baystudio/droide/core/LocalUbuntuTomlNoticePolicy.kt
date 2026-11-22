@@ -50,7 +50,7 @@ internal object LocalUbuntuTomlNoticePolicy {
             require(url==SOURCE_ROOT+entry.getValue("source_path").jsonPrimitive.content)
             val call=client.newCall(Request.Builder().url(url).header("Accept","text/html").header("User-Agent","Droide-Taplo-source-availability/1").build())
             call.timeout().deadlineNanoTime(deadline)
-            call.execute().use { response->
+            call.withCancellableResponse { response->
                 require(response.code==200&&response.request.url.toString()==url) { "Exact covered source unavailable: $url HTTP ${response.code}" }
                 val body=requireNotNull(response.body);require(body.contentType()?.type=="text") { "Nontext covered source: $url" }
                 val out=java.io.ByteArrayOutputStream();body.byteStream().use{stream->val b=ByteArray(8192);while(true){ensureActive();val n=stream.read(b);if(n<0)break;require(out.size()+n<=MAX_RESPONSE&&total.addAndGet(n.toLong())<=MAX_TOTAL);out.write(b,0,n)}}

@@ -27,8 +27,8 @@ class RunCatalogResolutionTest {
             assertTrue(path, resolution is Runner.FilePlanResolution.Ready)
             val plan = (resolution as Runner.FilePlanResolution.Ready).plan
             val expected = if (path.endsWith(".kt")) listOf(
-                listOf("kotlinc", path, "-include-runtime", "-d", ".droide/run/kotlin.jar"),
-                listOf("java", "-jar", ".droide/run/kotlin.jar"),
+                listOf("kotlinc", path, "-include-runtime", "-d", "${requireNotNull(plan.preparation).directory}/program.jar"),
+                listOf("java", "-jar", "${requireNotNull(plan.preparation).directory}/program.jar"),
             ) else listOf(listOf("java", path))
             assertEquals(path, expected, plan.steps)
             assertEquals(RunExecutionPolicy.Target.LOCAL_LINUX_ARM64, RunExecutionPolicy.decide(plan, true).target)
