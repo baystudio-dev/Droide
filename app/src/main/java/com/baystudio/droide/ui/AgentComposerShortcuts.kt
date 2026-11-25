@@ -21,17 +21,24 @@ internal data class AgentComposerChoice(val token: String, val title: String, va
 internal object AgentComposerShortcuts {
     fun query(text: String, caret: Int, selectionCollapsed: Boolean = true): AgentComposerQuery? {
         if (!selectionCollapsed || caret !in 1..text.length) return null
-        val prefix = text.substring(0, caret)
-        // Do not offer feature actions in code, email addresses or path fragments.
-        if (prefix.split("```").size % 2 == 0 || prefix.substringAfterLast('\n').count { it == '`' } % 2 != 0) return null
-        val start = prefix.indexOfLast { it.isWhitespace() } + 1
-        val token = prefix.substring(start)
-        if (token.length > 160 || token.firstOrNull() !in listOf('/', '@')) return null
-        if (token.drop(1).any { !it.isLetterOrDigit() && it !in "._-/:" }) return null
-        if (token.startsWith('/') && (start != 0 || caret != text.length)) return null
         // Editing the middle of an existing identifier must not leave a duplicated suffix.
         if (caret < text.length && !text[caret].isWhitespace()) return null
-        return AgentComposerQuery(start, caret, token)
+        var start = caret
+        while (start > 0 && !text[start - 1].isWhitespace()) {
+            start--
+            if (caret - start > 160) return null
+        }
+        if (start == caret || (text[start] != '/' && text[start] != '@')) return null
+        if (text[start] == '/' && (start != 0 || caret != text.length)) return null
+        for (i in start + 1 until caret) {
+            if (!text[i].isLetterOrDigit() && text[i] !in "._-/:") return null
+        }
+        // Only a possible shortcut needs the surrounding Markdown context.
+        if (text.lastIndexOf('`', start - 1) >= 0) {
+            val prefix = text.substring(0, caret)
+            if (prefix.split("```").size % 2 == 0 || prefix.substringAfterLast('\n').count { it == '`' } % 2 != 0) return null
+        }
+        return AgentComposerQuery(start, caret, text.substring(start, caret))
     }
 
     fun choices(query: AgentComposerQuery, commands: List<AgentComposerCommand>, mentions: List<AgentMentionTarget>): List<AgentComposerChoice> {

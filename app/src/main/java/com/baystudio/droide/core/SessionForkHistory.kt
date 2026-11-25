@@ -59,6 +59,12 @@ internal object SessionForkHistory {
 
 
 
+    fun legacyTextEntries(messages: List<AgentMessage>): List<JsonObject> = messages.asSequence()
+        .filter { it.streamPart == null && (it.role == "user" || it.role == "assistant") }
+        .filterNot { it.content.startsWith("TOOL|") }
+        .map { message -> buildJsonObject { put("role", message.role); put("content", message.content) } }
+        .toList()
+
     fun migrateLegacy(messages: List<AgentMessage>, activeHistory: List<JsonObject>): List<JsonObject>? {
         val hasUiToolEvidence = messages.any {
             it.content.startsWith("TOOL|") || it.streamPart?.kind == AgentStreamPartKind.TOOL
@@ -69,13 +75,7 @@ internal object SessionForkHistory {
         }
         if (hasUiToolEvidence || hasStructuredToolEvidence) return null
 
-        val candidate = if (activeHistory.isEmpty() && messages.isNotEmpty()) {
-            messages.asSequence()
-                .filter { it.streamPart == null && (it.role == "user" || it.role == "assistant") }
-                .filterNot { it.content.startsWith("TOOL|") }
-                .map { message -> buildJsonObject { put("role", message.role); put("content", message.content) } }
-                .toList()
-        } else activeHistory
+        val candidate = activeHistory.ifEmpty { legacyTextEntries(messages) }
         if (candidate.isEmpty()) return emptyList()
         if (!isExact(candidate)) return null
         if (candidate.any { isCompactionCheckpoint(it) }) return null

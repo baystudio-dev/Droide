@@ -1,0 +1,1 @@
+Typing in agent chat and colouring code use less temporary memory. Older chat sessions retain context. Git stash actions verify the selected entry. Workspace search, TypeScript and Go lint, Prettier settings, language-server edits, Quick Fix and paginated MCP results are more reliable.

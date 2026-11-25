@@ -73,7 +73,7 @@ class GuestDocumentFormatterTest {
         val style = CodeStyleProfile(IndentStyle.TABS, 2, 2, 4, "test")
         GuestDocumentFormatter.format(root, "a.ts", "unsaved", style) { argv ->
             assertEquals(listOf("sh", "-c"), argv.take(2))
-            assertEquals(listOf("prettier", "--tab-width", "2", "--use-tabs", "--stdin-filepath"), argv.takeLast(6).dropLast(1))
+            assertEquals(listOf("prettier", "--config-precedence", "file-override", "--tab-width", "2", "--use-tabs", "--stdin-filepath"), argv.takeLast(8).dropLast(1))
             assertEquals(File(root, "a.ts").absolutePath, argv.last())
             File(argv[5]).writeText(File(argv[4]).readText())
             ExecResult(0, "", false)

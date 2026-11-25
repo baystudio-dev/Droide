@@ -44,7 +44,7 @@ class EditorSnippetHighlightTest {
             override suspend fun semanticTokens(path: String, currentText: String?) = response.await()
         }
         val controller = DroideEditorHighlightController(editor, "main.kt", "kotlin", lsp, scope, style)
-        fun color(column: Int) = editor.styles?.spans?.read()?.getSpansOnLine(0)
+        fun color(column: Int, line: Int = 0) = editor.styles?.spans?.read()?.getSpansOnLine(line)
             ?.lastOrNull { it.column <= column }?.foregroundColorId
         fun awaitColor(column: Int, role: Int) {
             val until = System.nanoTime() + 5_000_000_000L
@@ -55,7 +55,7 @@ class EditorSnippetHighlightTest {
             assertEquals("Column " + column, role, color(column))
         }
         try {
-            val text = "val count = 12"
+            val text = "val count = 12\n//" + "comment".repeat(40) + "\nval v = 1\n\nval next = 2\n"
             editor.setText(text)
             editor.layout(0, 0, 480, 220)
             editor.setSelection(0, 5)
@@ -64,6 +64,10 @@ class EditorSnippetHighlightTest {
             response.complete(listOf(LspSemanticToken(0, 0, 3, "custom-unmapped"), LspSemanticToken(0, 4, 5, "function")))
             awaitColor(4, EditorColorScheme.FUNCTION_NAME)
             assertEquals(EditorColorScheme.KEYWORD, color(0))
+            assertEquals(EditorColorScheme.COMMENT, color(3, 1))
+            assertEquals(EditorColorScheme.TEXT_NORMAL, color(3, 2))
+            assertEquals(EditorColorScheme.LITERAL, color(8, 2))
+            assertEquals(EditorColorScheme.TEXT_NORMAL, color(0, 3))
             assertEquals(text, editor.text.toString())
             assertEquals(5, editor.cursor.left)
         } finally {

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
@@ -103,6 +104,21 @@ class McpManagerTest {
             assertEquals(JsonPrimitive("second-page"), page.getValue("result").jsonObject["nextCursor"])
             val next = Json.parseToJsonElement(manager.contextOperation("local", "list_resources", buildJsonObject { put("cursor", "second-page") })).jsonObject
             assertEquals(JsonPrimitive("fixture://two"), next.getValue("result").jsonObject.getValue("resources").jsonArray[0].jsonObject["uri"])
+            var large = Json.parseToJsonElement(manager.contextOperation("local", "list_resources", buildJsonObject {
+                put("cursor", "large-fixture")
+            })).jsonObject
+            val names = mutableListOf<String>()
+            while (true) {
+                names += large.getValue("result").jsonObject.getValue("resources").jsonArray.map {
+                    it.jsonObject.getValue("name").jsonPrimitive.content
+                }
+                val token = large["continuation"] ?: break
+                large = Json.parseToJsonElement(manager.contextOperation("local", "list_resources", buildJsonObject {
+                    put("continuation", token)
+                })).jsonObject
+            }
+            assertEquals((0 until 128).map { "item-$it" }, names)
+            assertEquals(JsonPrimitive("second-page"), large.getValue("result").jsonObject["nextCursor"])
             assertTrue(manager.contextOperation("local", "list_resource_templates", buildJsonObject {}).contains("uriTemplate"))
             assertEquals(McpHealthState.CONNECTED, McpHealthRegistry.observe(root).value.first { it.serverName == "local" }.state)
             assertEquals(1, host.starts.size)
@@ -216,6 +232,14 @@ class McpManagerTest {
                                     "tools/list" -> """{"tools":[{"name":"counter","inputSchema":{"type":"object"}}]}"""
                                     "tools/call" -> """{"content":[{"type":"text","text":"ok"}]}"""
                                     "resources/list" -> when (request["params"]?.jsonObject?.get("cursor")?.jsonPrimitive?.content) {
+                                        "large-fixture" -> buildJsonObject {
+                                            put("resources", buildJsonArray {
+                                                repeat(128) { i -> add(buildJsonObject {
+                                                    put("name", "item-$i"); put("uri", "fixture://$i"); put("description", "note ".repeat(25))
+                                                }) }
+                                            })
+                                            put("nextCursor", "second-page")
+                                        }.toString()
                                         "second-page" -> """{"resources":[{"uri":"fixture://two","name":"two"}]}"""
                                         "repeat" -> """{"resources":[],"nextCursor":"repeat"}"""
                                         else -> """{"resources":[{"uri":"fixture://one","name":"one"}],"nextCursor":"second-page"}"""

@@ -270,10 +270,12 @@ class McpManager(
 
     private suspend fun contextOperation(serverName: String, operation: String, parameters: JsonObject, selection: ServerSelection?): String =
         withServer(serverName, McpHealthPhase.TOOL_CALL, selection) { server, session, protocol ->
-            val result = session.contextOperation(protocol, operation, parameters)
+            val result = session.listPages.result(serverName, protocol.version, operation, parameters) { wire ->
+                session.contextOperation(protocol, operation, wire)
+            }
             val previousCount = McpHealthRegistry.observe(workDir).value.firstOrNull { it.serverName == server.name }?.toolsCount
             McpHealthRegistry.connected(workDir, server, previousCount, protocol.version)
-            McpAgentResult.render(serverName, protocol.version, operation, result)
+            result
         }
 
     private suspend fun <T> withServer(
@@ -481,6 +483,8 @@ class McpManager(
         private val json: Json,
         private val toolsChanged: () -> Unit,
     ) {
+        val listPages = McpListPages()
+
         private val process: HostedStdioProcess get() = io.process
         private val stdout: InputStream = io.stdout
         private var nextId = 1L

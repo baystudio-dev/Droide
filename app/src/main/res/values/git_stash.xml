@@ -1,0 +1,4 @@
+<resources>
+    <string name="git_drop_stash_title">Drop this stash?</string>
+    <string name="git_drop_stash_action">Drop stash</string>
+</resources>

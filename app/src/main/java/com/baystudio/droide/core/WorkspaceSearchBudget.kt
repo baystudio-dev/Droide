@@ -96,6 +96,7 @@ internal class WorkspaceSearchBudget(
         reasons += reason
         throw WorkspaceSearchLimitException(reason)
     }
+    fun recordSkippedLongLine() { reasons += WorkspaceSearchStopReason.LINE_LENGTH_LIMIT }
     fun checkpoint() {
         context.ensureActive()
         if (deadline.expired()) stop(WorkspaceSearchStopReason.DEADLINE)

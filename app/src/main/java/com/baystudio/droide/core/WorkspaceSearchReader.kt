@@ -101,6 +101,7 @@ internal class WorkspaceSearchReader(
     ) {
         // The request reuses one fixed line array; each emitted String is independently immutable.
         private var used = 0
+        private var skipLine = false
         private var lineNumber = 0
         private var afterCr = false
         private var sawCharacters = false
@@ -121,8 +122,12 @@ internal class WorkspaceSearchReader(
                     afterCr = char == '\r'
                     endedWithTerminator = true
                 } else {
-                    if (used == line.size) budget.stop(WorkspaceSearchStopReason.LINE_LENGTH_LIMIT)
-                    line[used++] = char
+                    if (!skipLine) {
+                        if (used < line.size) line[used++] = char else {
+                            skipLine = true
+                            budget.recordSkippedLongLine()
+                        }
+                    }
                     endedWithTerminator = false
                 }
             }
@@ -135,9 +140,9 @@ internal class WorkspaceSearchReader(
         private suspend fun emit() {
             budget.beforeLine()
             lineNumber++
-            val value = String(line, 0, used)
+            if (!skipLine) onLine(lineNumber, String(line, 0, used))
             used = 0
-            onLine(lineNumber, value)
+            skipLine = false
         }
     }
 }

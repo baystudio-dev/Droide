@@ -16,6 +16,18 @@ class AgentConversationHistoryOwnershipTest {
         put("content", text)
     }
 
+    @Test fun legacyVisibleAndProviderHistoriesKeepTheSameUnicodeTail() = runBlocking {
+        val input = "x".repeat(7_999) + "🙂 keep the last instruction"
+        val message = AgentMessage(role = "user", content = input)
+        val session = DroideSession(id = "legacy", title = "Test", messages = listOf(message))
+        val history = AgentConversationHistory()
+        assertEquals(input, history.load(session).single().content)
+        assertEquals(listOf(entry(input)), history.strictActiveForProvider())
+        assertEquals(listOf(entry(input)), history.completeExactOrNull())
+        history.load(session.copy(apiHistory = listOf(entry("stored context"))))
+        assertEquals(listOf(entry("stored context")), history.strictActiveForProvider())
+    }
+
     @Test fun delayedOldSessionAppendCannotAdoptTheNewHistoryOwner() = runBlocking {
         val history = AgentConversationHistory()
         history.append(entry("old conversation"))

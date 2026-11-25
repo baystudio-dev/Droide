@@ -97,7 +97,7 @@ python3 tools/build_fdroid_candidate.py \
 ```
 
 The storage flag enables the optional Android shared-file integration used by the
-1.03.2 recipe. Users still enable the preference and grant Android file access.
+1.03.3 recipe. Users still enable the preference and grant Android file access.
 Omit it only when intentionally building without that capability.
 
 Compilation must run in F-Droid's **build** phase, after source scanning, not its prebuild
@@ -129,7 +129,7 @@ never provide a private keystore or password to the build repository.
 
 ### Packaging metadata
 
-`tools/fdroid/com.baystudio.droide.yml` builds the current upstream release, 1.03.2 (49), from `v1.03.2-fdroid`. An fdroiddata submission pins the commit behind this tag. Fastlane supplies the localized description, screenshots and changelog. The recipe installs JDK 17 from Debian Bookworm on Trixie builders. Its init step preserves three reads of the default debug keystore in inactive task definitions when F-Droid removes signing configuration. Release builds remain unsigned until the upstream signature has been verified.
+`tools/fdroid/com.baystudio.droide.yml` builds the current upstream release, 1.03.3 (50), from `v1.03.3-fdroid`. An fdroiddata submission pins the commit behind this tag. Fastlane supplies the localized description, screenshots and changelog. The recipe installs JDK 17 from Debian Bookworm on Trixie builders. Its init step preserves three reads of the default debug keystore in inactive task definitions when F-Droid removes signing configuration. Release builds remain unsigned until the upstream signature has been verified.
 
 The recipe builds after source scanning, uses the pinned buildserver Gradle, and declares optional proprietary services, add-ons and third-party marks. It uses neither `scanignore` nor `scandelete`. `Binaries` supplies the versioned upstream APK for verification, and `AllowedAPKSigningKeys` pins the production certificate. The upstream APK does not replace compilation or source review.
 

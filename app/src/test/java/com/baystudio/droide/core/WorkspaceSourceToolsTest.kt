@@ -79,12 +79,48 @@ class WorkspaceSourceToolsTest {
         file(root, path, "throw new Error()")
         file(root, "tsconfig.json", "{}")
         val nearest = file(root, "app/tsconfig.json", "{}")
-        assertTrue(SourceFileLint.command(root, path).second.takeLast(3) == listOf("--noEmit", "--project", "./app/tsconfig.json"))
+        val command = SourceFileLint.command(root, path).second
+        assertEquals(listOf("node", "-e"), command.take(2))
+        assertEquals(listOf("./$path", "./app/tsconfig.json"), command.takeLast(2))
         assertTrue(nearest.delete())
         assertEquals("./tsconfig.json", SourceFileLint.command(root, path).second.last())
         assertTrue(root.resolve("tsconfig.json").delete())
         assertEquals("./$path", SourceFileLint.command(root, path).second.last())
         assertFalse(SourceFileLint.supports("plain.txt"))
+    }
+
+    @Test fun typeCheckReportsOnlyTheSelectedFileWithTheProjectOptions() = runBlocking {
+        val module = System.getenv("DROIDE_TEST_TYPESCRIPT_MODULE")?.let(::File)
+        org.junit.Assume.assumeTrue("Provide an installed TypeScript package", module?.resolve("package.json")?.isFile == true)
+        val root = temp.newFolder()
+        file(root, "tsconfig.json", """{"compilerOptions":{"strict":true},"files":["sibling.ts"]}""")
+        file(root, "sibling.ts", "export const ok: number = 1")
+        val selected = file(root, "selected.ts", "export const bad: number = 'text'")
+        val packages = root.resolve("node_modules").also { it.mkdir() }
+        Files.createSymbolicLink(packages.resolve("typescript").toPath(), requireNotNull(module).toPath())
+        val shell = Shell(System.getenv("PATH"), root)
+        val failure = SourceFileLint.execute(shell, root, selected.name)
+        assertEquals(2, failure.exitCode)
+        assertTrue(failure.output.contains("selected.ts") && failure.output.contains("TS2322"))
+        selected.writeText("export const ok: number = 1")
+        file(root, "sibling.ts", "export const bad: number = 'text'")
+        assertEquals(0, SourceFileLint.execute(shell, root, selected.name).exitCode)
+        selected.writeText("export function fn(arg) { return arg }")
+        assertTrue(SourceFileLint.execute(shell, root, selected.name).output.contains("TS7006"))
+    }
+
+    @Test fun goVetHandlesNestedModulesAndUsesSiblingDeclarations() = runBlocking {
+        val go = System.getenv("DROIDE_TEST_GO_BIN")
+        org.junit.Assume.assumeTrue("Provide a Go toolchain", go != null && File(go, "go").canExecute())
+        val root = temp.newFolder()
+        file(root, "nested package/go.mod", "module sample.test/nested\n\ngo 1.20\n")
+        val selected = file(root, "nested package/a.go", "package sample\nfunc A() int { return b() }\n")
+        file(root, "nested package/b.go", "package sample\nfunc b() int { return 1 }\n")
+        val shell = Shell("$go:${System.getenv("PATH")}", root)
+        val path = selected.relativeTo(root).invariantSeparatorsPath
+        assertEquals(0, SourceFileLint.execute(shell, root, path).exitCode)
+        selected.writeText("package sample\nfunc A() int { return missing() }\n")
+        assertNotEquals(0, SourceFileLint.execute(shell, root, path).exitCode)
     }
 
     @Test fun compiledOutputsBelongToTheSelectedSource() {

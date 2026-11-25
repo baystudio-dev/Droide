@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 import org.eclipse.jgit.api.CreateBranchCommand
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.dircache.DirCacheEditor
+import org.eclipse.jgit.internal.storage.file.DroideStashDrop
 import org.eclipse.jgit.lib.Constants
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder
 import org.eclipse.jgit.lib.Repository
@@ -365,22 +366,21 @@ class GitManager(
     suspend fun stashes(): List<GitStash> = gitIo {
         val g = openExisting() ?: return@gitIo emptyList()
         g.use {
-            it.stashList().call().mapIndexed { index, c -> GitStash(index, c.name.take(12), c.shortMessage) }
+            it.stashList().call().mapIndexed { index, c -> GitStash(index, c.name, c.shortMessage) }
         }
     }
 
-    suspend fun applyStash(index: Int): String = mutatePersisted("Apply stash") { gitIo {
-        require(index >= 0) { "Invalid stash index" }
+    suspend fun applyStash(stash: GitStash): String = mutatePersisted("Apply stash") { gitIo {
+        require(org.eclipse.jgit.lib.ObjectId.isId(stash.id)) { "Invalid stash identity" }
         val g = openExisting() ?: return@gitIo "git error: not a git repository"
-        g.use { it.stashApply().setStashRef("stash@{$index}").call() }
-        "Applied stash@{$index}"
+        g.use { it.stashApply().setStashRef(stash.id).call() }
+        "Applied stash ${stash.id.take(12)}"
     } }
 
-    suspend fun dropStash(index: Int): String = gitIo {
-        require(index >= 0) { "Invalid stash index" }
+    suspend fun dropStash(stash: GitStash): String = gitIo {
         val g = openExisting() ?: return@gitIo "git error: not a git repository"
-        g.use { it.stashDrop().setStashRef(index).call() }
-        "Dropped stash@{$index}"
+        g.use { DroideStashDrop.drop(it.repository, stash.index, stash.id) }
+        "Dropped stash ${stash.id.take(12)}"
     }
 
     suspend fun branches(): String = gitIo {

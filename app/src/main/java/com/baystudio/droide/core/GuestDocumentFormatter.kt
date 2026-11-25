@@ -47,8 +47,10 @@ object GuestDocumentFormatter {
             val argv = definition.command.map { if (it == "\$FILE") formatterPath else it }.toMutableList()
             when (definition.name) {
                 "prettier" -> {
-                    argv.addAll(1, listOf("--tab-width", (codeStyle?.tabWidth ?: 4).coerceIn(1, 8).toString()))
-                    if (codeStyle?.useTabs == true) argv.add(3, "--use-tabs")
+                    // Use editor preferences as fallbacks for options absent from the project's Prettier config.
+                    val defaults = listOf("--config-precedence", "file-override", "--tab-width",
+                        (codeStyle?.tabWidth ?: 4).coerceIn(1, 8).toString())
+                    argv.addAll(1, defaults + if (codeStyle?.useTabs == true) listOf("--use-tabs") else emptyList())
                 }
                 "shfmt" -> argv.addAll(1, listOf("-i", if (codeStyle?.useTabs == true) "0" else (codeStyle?.indentSize ?: 4).coerceIn(1, 8).toString()))
             }

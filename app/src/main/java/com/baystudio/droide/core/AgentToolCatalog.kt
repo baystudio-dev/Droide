@@ -353,7 +353,7 @@ internal object AgentToolCatalog {
                 put("domains", buildJsonObject { put("type","array"); put("items",buildJsonObject { put("type","string") }); put("maxItems",8) })
                 put("recency_days", buildJsonObject { put("type","integer"); put("minimum",1); put("maximum",3650) })
             }, listOf("query")))
-        add(tool("mcp", "Discover/call tools, list/read resources and resource templates, or list/get prompts on an approved configured local stdio MCP server. Context lists return one page; continue with nextCursor. Remote HTTP/OAuth and multi-round-trip Tasks are not supported. Truncated results are explicit previews.",
+        add(tool("mcp", "Discover/call tools, list/read resources and resource templates, or list/get prompts on an approved configured local stdio MCP server. For lists, pass continuation alone to continue a local page, or pass result.nextCursor as cursor for the next server page. An entry_fragment contains consecutive JSON text for one large entry. Remote HTTP/OAuth and multi-round-trip Tasks are not supported. Truncated results are explicit previews.",
             buildJsonObject {
                 put("server", buildJsonObject { put("type", "string") })
                 put("operation", buildJsonObject {
@@ -367,6 +367,7 @@ internal object AgentToolCatalog {
                 put("tool", buildJsonObject { put("type", "string") })
                 put("uri", buildJsonObject { put("type", "string") })
                 put("cursor", buildJsonObject { put("type", "string") })
+                put("continuation", buildJsonObject { put("type", "string") })
                 put("prompt", buildJsonObject { put("type", "string") })
                 put("arguments", buildJsonObject { put("type", "object") })
                 put("patch", buildJsonObject {

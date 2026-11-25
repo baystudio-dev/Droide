@@ -1,0 +1,1 @@
+Pengetikan di chat agen dan pewarnaan kode lebih hemat memori. Sesi chat lama mempertahankan konteks. Tindakan Git stash memeriksa entri yang dipilih. Pencarian proyek, lint TypeScript dan Go, pengaturan Prettier, edit LSP, Quick Fix, dan penelusuran halaman MCP lebih andal.

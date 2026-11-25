@@ -1,0 +1,4 @@
+<resources>
+    <string name="git_drop_stash_title">Hapus stash ini?</string>
+    <string name="git_drop_stash_action">Hapus stash</string>
+</resources>

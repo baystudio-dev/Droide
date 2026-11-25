@@ -139,21 +139,23 @@ internal class DroideEditorHighlightController(
         val lines = text.split('\n')
         val grouped = result.spans.groupBy { it.line }
         val builder = MappedSpans.Builder(lines.size.coerceAtLeast(1))
+        val normal = TextStyle.makeStyle(EditorColorScheme.TEXT_NORMAL)
+        var lineStyles = LongArray(0)
         for ((lineIndex, line) in lines.withIndex()) {
             val lineSpans = grouped[lineIndex].orEmpty()
             if (line.isEmpty() || lineSpans.isEmpty()) {
-                builder.add(lineIndex, Span.obtain(0, TextStyle.makeStyle(EditorColorScheme.TEXT_NORMAL)))
+                builder.add(lineIndex, Span.obtain(0, normal))
                 continue
             }
-            val styles = LongArray(line.length) { TextStyle.makeStyle(EditorColorScheme.TEXT_NORMAL) }
-            
-            lineSpans.asSequence().filter { !it.semantic }.forEach { paint(styles, it) }
-            
-            lineSpans.asSequence().filter { it.semantic }.forEach { paint(styles, it) }
-            var last: Long? = null
-            for (column in styles.indices) {
-                val style = styles[column]
-                if (last == null || last != style) {
+            if (lineStyles.size < line.length) lineStyles = LongArray(line.length)
+            lineStyles.fill(normal, 0, line.length)
+            for (span in lineSpans) if (!span.semantic) paint(lineStyles, line.length, span)
+            for (span in lineSpans) if (span.semantic) paint(lineStyles, line.length, span)
+            var last = lineStyles[0]
+            builder.add(lineIndex, Span.obtain(0, last))
+            for (column in 1 until line.length) {
+                val style = lineStyles[column]
+                if (last != style) {
                     builder.add(lineIndex, Span.obtain(column, style))
                     last = style
                 }
@@ -197,9 +199,9 @@ internal class DroideEditorHighlightController(
         styles.setIndentCountMode(true)
     }
 
-    private fun paint(target: LongArray, span: DroideHighlightSpan) {
-        val from = span.start.coerceIn(0, target.size)
-        val to = span.end.coerceIn(from, target.size)
+    private fun paint(target: LongArray, lineLength: Int, span: DroideHighlightSpan) {
+        val from = span.start.coerceIn(0, lineLength)
+        val to = span.end.coerceIn(from, lineLength)
         if (to <= from) return
         val color = when (span.kind) {
             DroideHighlightKind.NORMAL -> EditorColorScheme.TEXT_NORMAL

@@ -88,6 +88,18 @@ class FileRepositorySearchPageTest {
         } finally { PathSecurity.deleteTreeNoFollow(root) }
     }
 
+    @Test fun `overlong line still permits matches later in the file and in the workspace`() = runBlocking {
+        val root = Files.createTempDirectory("droide-long-line-search-").toFile()
+        try {
+            root.resolve("a.txt").writeText("needle" + "x".repeat(65_536) + "\r\nneedle\n")
+            root.resolve("b.txt").writeText("needle\n")
+            val page = FileRepository(root).searchPage("needle")
+            assertEquals(setOf("a.txt" to 2, "b.txt" to 1), page.hits.map { it.path to it.line }.toSet())
+            assertTrue(page.scanLimitReached)
+            assertEquals(setOf(WorkspaceSearchStopReason.LINE_LENGTH_LIMIT), page.searchStopReasons)
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
+
     @Test fun `text file-pattern and quick open pages reveal their output limits`() = runBlocking {
         val root = Files.createTempDirectory("droide-query-page-").toFile()
         try {

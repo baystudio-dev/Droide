@@ -25,6 +25,7 @@ import com.baystudio.droide.core.PathSecurity
 import java.io.File
 import java.net.URI
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private data class ProblemRow(
@@ -43,7 +44,7 @@ fun ProblemsSheet(
     lsp: LspManager,
     buildDiagnostics: List<BuildDiagnostic> = emptyList(),
     onOpen: (String, Int, Int) -> Unit,
-    onApplyWorkspaceEdit: (LspWorkspaceEdit) -> Unit,
+    onApplyWorkspaceEdit: (LspWorkspaceEdit, (Result<Int>) -> Boolean) -> Unit,
     onClose: (() -> Unit)? = null,
 ) {
     val diagnostics by lsp.diagnostics.collectAsState()
@@ -80,7 +81,7 @@ fun ProblemsSheet(
     }
 
     LaunchedEffect(statusRevision) {
-        if (actionTarget?.lspDiagnostic?.reportGuard?.accepts() == false || actions.any { it.activationGuard?.accepts() == false }) {
+        if (actionError == null && (actionTarget?.lspDiagnostic?.reportGuard?.accepts() == false || actions.any { it.activationGuard?.accepts() == false })) {
             dismissActions()
         }
     }
@@ -210,8 +211,16 @@ fun ProblemsSheet(
                                         if (resolved.activationGuard?.accepts() == false) return@launchUiCatching
                                         val edit = resolved.edit
                                         if (edit != null) {
-                                            onApplyWorkspaceEdit(edit)
-                                            dismissActions()
+                                            loadingActions = true
+                                            onApplyWorkspaceEdit(edit) { applied ->
+                                                if (!scope.isActive || request != actionRequest || actionTarget !== target) false
+                                                else {
+                                                    loadingActions = false
+                                                    if (applied.isSuccess) dismissActions()
+                                                    else actionError = applied.exceptionOrNull()?.message ?: "Quick Fix failed. Request it again."
+                                                    true
+                                                }
+                                            }
                                         } else {
                                             actionError = resolved.disabledReason
                                                 ?: if (resolved.commandTitle != null) "This action requires a server command; no opaque command was executed."

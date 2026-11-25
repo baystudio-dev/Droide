@@ -148,7 +148,7 @@ fun SearchPanel(
             }, enabled = globQuery.length <= 256 && globQuery.isNotBlank() && !globBusy) { Text(if (globBusy) "Searching…" else "Find files") }
             LazyColumn(Modifier.heightIn(max = 180.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 globResults?.let { page ->
-                    if (page.scanLimitReached) item { Text("Search stopped after ${page.scannedEntries} entries; results may be incomplete. " +
+                    if (page.scanLimitReached) item { Text("Searched ${page.scannedEntries} entries with limits; results may be incomplete. " +
                         (page.scanStopReasons.map { it.name.lowercase() } + page.searchStopReasons.map { it.name.lowercase() }).joinToString()) }
                     else if (page.resultLimitReached) item { Text("Showing first ${page.paths.size} files; narrow the pattern for more.") }
                     if (page.paths.isEmpty()) item { Text("No files found in the scanned folders (first 20 levels).", style = MaterialTheme.typography.labelSmall) }

@@ -1605,7 +1605,7 @@ class FileRepository internal constructor(
                 } catch (cancel: CancellationException) {
                     throw cancel
                 } catch (stopped: WorkspaceSearchLimitException) {
-                    throw stopped
+                    if (stopped.reason != WorkspaceSearchStopReason.FILE_BYTE_LIMIT) throw stopped
                 } catch (_: Exception) {
                     unreadable++
                 }

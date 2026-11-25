@@ -1,6 +1,7 @@
 package com.baystudio.droide.ui
 
 import android.app.Application
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.baystudio.droide.core.*
@@ -33,6 +34,7 @@ class ProblemsActionsWorkflowTest {
     private val resolution = CompletableDeferred<LspCodeAction>()
     private var resolutions = 0
     private var applied = 0
+    private val showProblems = mutableStateOf(true)
     private var editorMode = false
     private val bridge = ActiveEditorBridge()
     private val focus = AccessoryInputFocusController()
@@ -64,7 +66,7 @@ class ProblemsActionsWorkflowTest {
     }
 
     private fun action(title: String) = LspCodeAction(title, edit = LspWorkspaceEdit(emptyList()))
-    private fun mount(editor: Boolean = false) {
+    private fun mount(editor: Boolean = false, onResult: ((Result<Int>) -> Boolean) -> Unit = { it(Result.success(1)) }) {
         editorMode = editor
         root.resolve("a.kt").writeText("keep this content")
         val files = FileRepository(root)
@@ -75,7 +77,10 @@ class ProblemsActionsWorkflowTest {
                 formatter = FormatterManager(root, terminals), theme = ThemeManager(root).snapshot(),
                 accessoryInputFocus = focus, accessoryKeysExpanded = false, onAccessoryKeysExpandedChange = {},
                 onApplyWorkspaceEdit = { applied++ })
-            else ProblemsSheet(files, lsp, onOpen = { _, _, _ -> }, onApplyWorkspaceEdit = { applied++ })
+            else if (showProblems.value) ProblemsSheet(files, lsp, onOpen = { _, _, _ -> }, onApplyWorkspaceEdit = { _, finished ->
+                applied++
+                onResult(finished)
+            })
         } }
     }
     private fun open() {
@@ -94,6 +99,32 @@ class ProblemsActionsWorkflowTest {
         compose.runOnIdle { replies[0].complete(listOf(action("Stale action"))) }
         compose.onNodeWithText("Stale action").assertDoesNotExist()
         compose.onNodeWithText("Current action").assertExists()
+    }
+
+    @Test fun rejectedEditKeepsQuickFixOpenAndExplainsTheFailure() {
+        mount { finished -> finished(Result.failure(IllegalStateException("Document changed. Request the fix again."))) }
+        open()
+        compose.waitUntil(5_000) { replies.size == 1 }
+        compose.runOnIdle { replies[0].complete(listOf(action("Fix line"))) }
+        compose.onNodeWithText("Fix line").performClick()
+        compose.waitUntil(5_000) { resolutions == 1 }
+        compose.runOnIdle { resolution.complete(action("Fix line")) }
+        compose.onNodeWithText("Document changed. Request the fix again.").assertExists()
+        assertEquals(1, applied)
+        assertEquals("keep this content", root.resolve("a.kt").readText())
+    }
+
+    @Test fun disposedPanelLeavesDeferredFailureFeedbackToWorkbench() {
+        var finish: ((Result<Int>) -> Boolean)? = null
+        mount { finish = it }
+        open()
+        compose.waitUntil(5_000) { replies.size == 1 }
+        compose.runOnIdle { replies[0].complete(listOf(action("Fix line"))) }
+        compose.onNodeWithText("Fix line").performClick()
+        compose.runOnIdle { resolution.complete(action("Fix line")) }
+        compose.waitUntil(5_000) { finish != null }
+        compose.runOnIdle { showProblems.value = false }
+        compose.runOnIdle { assertFalse(requireNotNull(finish)(Result.failure(IllegalStateException("Changed")))) }
     }
 
     @Test fun closingAResolvingActionPreventsLateApplication() = dismissedResolution(false)

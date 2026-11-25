@@ -3,6 +3,8 @@ package com.baystudio.droide.ui
 import com.baystudio.droide.core.FileRepository
 import com.baystudio.droide.core.LspWorkspaceEdit
 import com.baystudio.droide.core.TextEditApplier
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
  
 internal object LspWorkspaceEditPreflight {
@@ -28,7 +30,9 @@ internal object LspWorkspaceEditPreflight {
                 "Document changed since the language-server request: $path. Re-run the action."
             }
             revisions[path] = doc.changeVersion
-            updates[path] = TextEditApplier.apply(doc.content, edits.map { it.range })
+            updates[path] = withContext(Dispatchers.Default) {
+                TextEditApplier.apply(expected, edits.map { it.range })
+            }
         }
         
         for ((path, revision) in revisions) {

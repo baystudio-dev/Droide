@@ -40,6 +40,17 @@ class AgentComposerShortcutsTest {
         assertNotNull(AgentComposerShortcuts.query(outsideCode, outsideCode.length))
     }
 
+    @Test fun mentionLengthAndMarkdownAreCheckedAtTheCaretInALongDraft() {
+        val prefix = "ordinary word ".repeat(2_000) + "```\ncode\n```\n"
+        val token = "@" + "x".repeat(159)
+        val end = prefix.length + token.length
+        assertEquals(AgentComposerQuery(prefix.length, end, token),
+            AgentComposerShortcuts.query(prefix + token + "\u2003suffix `", end))
+        assertNull(AgentComposerShortcuts.query(prefix + token + "x", end + 1))
+        val inline = prefix + "`code @x"
+        assertNull(AgentComposerShortcuts.query(inline, inline.length))
+    }
+
     @Test fun mentionInsertionPreservesSurroundingDraftAndCaret() {
         val text = "Use @gi for this change"
         val query = requireNotNull(AgentComposerShortcuts.query(text, 7))

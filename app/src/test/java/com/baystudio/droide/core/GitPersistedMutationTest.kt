@@ -24,7 +24,7 @@ class GitPersistedMutationTest {
             root.resolve("README.md").writeText("modified\n")
 
             authority.dirty = true
-            listOf(git.discardWorkingTree("README.md"), git.stash(), git.applyStash(0), git.pull()).forEach {
+            listOf(git.discardWorkingTree("README.md"), git.stash(), git.applyStash(GitStash(0, "0".repeat(40), "pending")), git.pull()).forEach {
                 assertTrue(it.contains("Save or discard unsaved editor changes"))
             }
             assertEquals("modified\n", root.resolve("README.md").readText())
@@ -38,6 +38,28 @@ class GitPersistedMutationTest {
         } finally {
             PathSecurity.deleteTreeNoFollow(root)
         }
+    }
+
+    @Test fun applyingAnOlderSelectionUsesItsOriginalObjectAfterAnotherStashIsCreated() = runBlocking {
+        val root = Files.createTempDirectory("droide-selected-stash-").toFile()
+        try {
+            val git = GitManager(root)
+            git.init()
+            git.configureIdentity("Droide Test", "test@example.invalid")
+            val note = root.resolve("note.txt")
+            note.writeText("base")
+            git.stage(note.name)
+            git.commitStaged("base")
+            note.writeText("draft A")
+            git.stash()
+            val selected = git.stashes().single()
+            note.writeText("draft B")
+            git.stash()
+            assertEquals(40, selected.id.length)
+            assertTrue(git.applyStash(selected).startsWith("Applied"))
+            assertEquals("draft A", note.readText())
+            assertEquals(2, git.stashes().size)
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
     }
 
     private class RecordingAuthority : WorkspaceDocumentAuthority {

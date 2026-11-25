@@ -582,7 +582,7 @@ internal fun IdeScreen(
         if (failure != null) { snackbarHostState.showSnackbar("Cannot check: save needs attention for ${failure.first}"); return }
         runSuspendCatching { execution.lintFile(path) }
             .onSuccess { result ->
-                androidOutputTitle = "Lint: ${path.substringAfterLast('/')}"
+                androidOutputTitle = if (path.endsWith(".go", true)) "Go vet: ${path.substringBeforeLast('/', ".")}" else "Lint: ${path.substringAfterLast('/')}"
                 androidOutputText = result.output
                 showAndroidOutput = true
             }
@@ -666,6 +666,15 @@ internal fun IdeScreen(
         persistEditorState()
         updates.forEach { (path, updated) -> if (editorState.peek(path)?.fullIntelligence == true) runSuspendCatching { lsp.didChange(path, updated) } }
         updates.size
+    }
+    fun applyProblemFix(edit: LspWorkspaceEdit, finished: (Result<Int>) -> Boolean) {
+        // Once admitted, this edit belongs to the workbench even if the sheet closes.
+        launchUserAction {
+            val result = applyWorkspaceEdit(edit)
+            val displayed = finished(result)
+            result.onSuccess { count -> snackbarHostState.showSnackbar("Applied $count code-action edit(s) to buffers") }
+                .onFailure { if (!displayed) snackbarHostState.showSnackbar("Quick Fix failed: ${it.message}") }
+        }
     }
     DisposableEffect(recoveryBridge, recoveryStore, workspaceKey) {
         val owner = Any()
@@ -1280,7 +1289,7 @@ internal fun IdeScreen(
                             lsp = lsp,
                             buildDiagnostics = androidBuildDiagnostics,
                             onOpen = { path, line, col -> openLocation(path, line, col) },
-                            onApplyWorkspaceEdit = { edit -> launchUserAction { applyWorkspaceEdit(edit) } },
+                            onApplyWorkspaceEdit = ::applyProblemFix,
                         )
                         DroideBottomTool.Output -> Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(10.dp)) {
                             Text((if (androidOutputText.isNotBlank()) androidOutputText else runnerMsg ?: "No output yet").take(300_000), fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
@@ -1619,13 +1628,7 @@ internal fun IdeScreen(
                     showProblems = false
                     openLocation(path, line, col)
                 },
-                onApplyWorkspaceEdit = { edit ->
-                    launchUserAction {
-                        val result = applyWorkspaceEdit(edit)
-                        result.onSuccess { count -> snackbarHostState.showSnackbar("Applied $count code-action edit(s) to buffers") }
-                            .onFailure { snackbarHostState.showSnackbar("Quick Fix failed: ${it.message}") }
-                    }
-                },
+                onApplyWorkspaceEdit = ::applyProblemFix,
                 onClose = dismiss,
             )
         }

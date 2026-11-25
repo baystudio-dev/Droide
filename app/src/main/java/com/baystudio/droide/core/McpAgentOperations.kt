@@ -59,6 +59,7 @@ internal object McpAgentOperations {
                 val parameters = buildJsonObject {
                     if (operation in setOf("list_resources", "list_resource_templates", "list_prompts")) {
                         args["cursor"]?.let { put("cursor", it) }
+                        args["continuation"]?.let { put("continuation", it) }
                     }
                     if (operation == "read_resource") put("uri", args["uri"] ?: return "ERROR: MCP read_resource requires 'uri'")
                     if (operation == "get_prompt") {

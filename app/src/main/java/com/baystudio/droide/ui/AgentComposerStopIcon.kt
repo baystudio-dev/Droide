@@ -14,12 +14,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+
+private val StopSurfaceShape = RoundedCornerShape(10.dp)
+private val StopGlyphShape = RoundedCornerShape(3.dp)
+private val StopSurfaceAnimation = tween<Color>(140)
+private val StopPressAnimation = tween<Float>(120)
 
 /** Stop artwork; the composer button owns the 48 dp touch target and cancellation action. */
 @Composable
@@ -32,24 +38,23 @@ internal fun AgentComposerStopIcon(
     val accent = lerp(DroideColors.Error, DroideColors.Text, .22f)
     val surface by animateColorAsState(
         targetValue = lerp(DroideColors.Surface2, accent, if (pressed) .22f else .10f),
-        animationSpec = tween(140),
+        animationSpec = StopSurfaceAnimation,
         label = "Stop surface",
     )
     val scale by animateFloatAsState(
         targetValue = if (pressed) .94f else 1f,
-        animationSpec = tween(120),
+        animationSpec = StopPressAnimation,
         label = "Stop press",
     )
-    val shape = RoundedCornerShape(10.dp)
     Box(
         modifier = Modifier
             .size(size)
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .background(surface, shape)
-            .border(1.dp, lerp(DroideColors.Surface2, accent, .38f), shape)
+            .background(surface, StopSurfaceShape)
+            .border(1.dp, lerp(DroideColors.Surface2, accent, .38f), StopSurfaceShape)
             .semantics { contentDescription = actionLabel },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(12.dp).background(accent, RoundedCornerShape(3.dp)))
+        Box(Modifier.size(12.dp).background(accent, StopGlyphShape))
     }
 }

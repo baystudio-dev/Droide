@@ -11,6 +11,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.res.stringResource
+import com.baystudio.droide.R
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -38,6 +40,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
     var identityName by remember(git) { mutableStateOf("") }
     var identityEmail by remember(git) { mutableStateOf("") }
     var identityEditing by remember(git) { mutableStateOf(false) }
+    var pendingStash by remember(git) { mutableStateOf<GitStash?>(null) }
     var pendingDiscard by remember(git) { mutableStateOf<GitChange?>(null) }
     var pendingResolve by remember(git) { mutableStateOf<GitChange?>(null) }
     var conflictPreview by remember(git) { mutableStateOf<GitConflictPreview?>(null) }
@@ -337,14 +340,14 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
                 TextButton(onClick = { runOperation { git.stash(includeUntracked = true) } }, enabled = changes.isNotEmpty() && !busy) { Text("Stash changes") }
             }
         }
-        items(stashes, key = { it.index }) { stash ->
+        items(stashes, key = { "${it.index}:${it.id}" }) { stash ->
             ListItem(
-                headlineContent = { Text("stash@{${stash.index}} · ${stash.id}", fontFamily = FontFamily.Monospace) },
+                headlineContent = { Text("stash@{${stash.index}} · ${stash.id.take(12)}", fontFamily = FontFamily.Monospace) },
                 supportingContent = { Text(stash.message, maxLines = 2) },
                 trailingContent = {
                     Row {
-                        TextButton(onClick = { runOperation { git.applyStash(stash.index) } }, enabled = !busy) { Text("Apply") }
-                        IconButton(onClick = { runOperation { git.dropStash(stash.index) } }, enabled = !busy) { Icon(Icons.Default.DeleteOutline, "Drop stash") }
+                        TextButton(onClick = { runOperation { git.applyStash(stash) } }, enabled = !busy) { Text("Apply") }
+                        IconButton(onClick = { pendingStash = stash }, enabled = !busy) { Icon(Icons.Default.DeleteOutline, "Drop stash") }
                     }
                 },
             )
@@ -470,6 +473,18 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
         )
     }
 
+    pendingStash?.let { stash ->
+        AlertDialog(
+            onDismissRequest = { pendingStash = null },
+            title = { Text(stringResource(R.string.git_drop_stash_title)) },
+            text = { Text("${stash.id.take(12)} · ${stash.message}") },
+            confirmButton = { TextButton(enabled = !busy, onClick = {
+                pendingStash = null
+                runOperation { git.dropStash(stash) }
+            }) { Text(stringResource(R.string.git_drop_stash_action)) } },
+            dismissButton = { TextButton(onClick = { pendingStash = null }) { Text(stringResource(android.R.string.cancel)) } },
+        )
+    }
     pendingDiscard?.let { change ->
         AlertDialog(
             onDismissRequest = { pendingDiscard = null },

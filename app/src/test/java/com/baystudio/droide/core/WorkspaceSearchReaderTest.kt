@@ -113,11 +113,13 @@ class WorkspaceSearchReaderTest {
         exact.scanFile(File("unused"), { true }) { _, line -> lines += line }
         assertEquals(listOf("abcd"), lines)
         lines.clear()
-        assertEquals(WorkspaceSearchStopReason.LINE_LENGTH_LIMIT, stop {
-            WorkspaceSearchReader(budget(WorkspaceSearchLimits(lineChars = 4))) { Source("abcde\n".toByteArray()) }
-                .scanFile(File("unused"), { true }) { _, line -> lines += line }
-        })
-        assertTrue(lines.isEmpty())
+        val limited = budget(WorkspaceSearchLimits(lineChars = 4))
+        val reader = WorkspaceSearchReader(limited) { Source("abcde\r\nok\nlast!".toByteArray(), chunk = 1) }
+        reader.scanFile(File("unused"), { true }) { number, line -> lines += "$number:$line" }
+        reader.scanDirty("next", { true }) { number, line -> lines += "$number:$line" }
+        assertEquals(listOf("2:ok", "1:next"), lines)
+        assertTrue(WorkspaceSearchStopReason.LINE_LENGTH_LIMIT in limited.stopReasons)
+        lines.clear()
         val work = budget(WorkspaceSearchLimits(lines = 2))
         assertEquals(WorkspaceSearchStopReason.LINE_LIMIT, stop {
             WorkspaceSearchReader(work) { Source("a\nb\nc\n".toByteArray()) }

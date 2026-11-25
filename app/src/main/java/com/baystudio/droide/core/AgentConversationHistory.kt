@@ -1,8 +1,6 @@
 package com.baystudio.droide.core
 
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -52,11 +50,13 @@ internal class AgentConversationHistory(private val ledger: SessionHistoryLedger
     ): List<AgentMessage> {
         val request = restoreTicket ?: beginRestore()
         if (request != loadGeneration || !shouldPublish()) throw CancellationException("Agent history owner changed before restore")
+        data class Restored(val state: ExactState, val exact: Boolean, val messages: List<AgentMessage>, val active: MutableList<JsonObject>)
         val prepared = withContext(Dispatchers.IO) {
+            val live = session.apiHistory.ifEmpty { SessionForkHistory.legacyTextEntries(session.messages) }
             val migrated = when {
                 session.forkHistoryVersion == SessionForkHistory.SCHEMA_VERSION &&
                     SessionForkHistory.isExact(session.forkHistory) -> session.forkHistory
-                session.forkHistoryVersion == 0 -> SessionForkHistory.migrateLegacy(session.messages, session.apiHistory)
+                session.forkHistoryVersion == 0 -> SessionForkHistory.migrateLegacy(session.messages, live)
                 else -> null
             }
             val replacement = ExactState()
@@ -71,28 +71,15 @@ internal class AgentConversationHistory(private val ledger: SessionHistoryLedger
             }
             val messages = if (migrated != null) SessionForkHistory.annotate(session.messages, migrated)
                 else session.messages.map { it.copy(forkHistoryEnd = null) }
-            Triple(replacement, migrated != null, messages)
+            Restored(replacement, migrated != null, messages, live.toMutableList())
         }
         return publishTransaction { synchronized(ownerLock) {
         if (!shouldPublish() || request != loadGeneration) throw CancellationException("Agent history owner changed during restore")
-        active = mutableListOf()
-        if (session.apiHistory.isNotEmpty()) {
-            active.addAll(session.apiHistory)
-        } else {
-            session.messages.filter { it.streamPart == null }
-                .filterNot { it.content.startsWith("TOOL|") }
-                .filter { it.role == "user" || it.role == "assistant" }
-                .forEach { message ->
-                    active += buildJsonObject {
-                        put("role", message.role)
-                        put("content", message.content.take(8_000))
-                    }
-                }
-        }
+        active = prepared.active
 
-        state = prepared.first
-        exact = prepared.second
-        prepared.third
+        state = prepared.state
+        exact = prepared.exact
+        prepared.messages
         } }
     }
 
