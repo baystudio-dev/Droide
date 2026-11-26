@@ -73,7 +73,9 @@ NDK 28.2.13676358, Python 3.11+, GNU make and patch externally. Do not put toolc
 or signing secrets in the source distribution. The Android SDK platform identity is checked
 by the terminal source manifest. Dependency verification is strict.
 
-Export to a new directory outside the working source:
+A checkout of the published application tag is already the exported distribution. Run the build command below from the checkout root to preserve the Git revision embedded by Android Gradle Plugin. The release ZIP can also be used to compile the app. For an exact APK hash, use the [tagged checkout instructions](signing.md#verify-a-rebuild).
+
+When preparing a new distribution from the maintenance tree, export to a new directory outside the working source:
 
 ```sh
 python3 tools/export_fdroid_source.py --root "$PWD" --output /absolute/path/Droide-fdroid
@@ -85,7 +87,7 @@ It writes a manifest with every copied and excluded source path and its hash. Th
 working source remains intact. The exported distribution contains the required plaintext
 corresponding source; it is not a generic source archive for the regular binary-backed lane.
 
-Build from that exported directory, supplying absolute paths:
+Build from the tagged checkout or the exported source directory, supplying absolute paths:
 
 ```sh
 python3 tools/build_fdroid_candidate.py \
@@ -95,6 +97,8 @@ python3 tools/build_fdroid_candidate.py \
   --dependencies /absolute/path/fdroid-source-products \
   --device-storage
 ```
+
+In GitHub Actions, a successful build uploads the unsigned APK, verification receipts and checksums in `droide-fdroid-source-release`. The compiler log and lint reports are in `droide-fdroid-build-diagnostics`. The JVM regression job compiles the test fixtures from the same checkout and uploads its test reports separately.
 
 The storage flag enables the optional Android shared-file integration used by the
 1.03.3 recipe. Users still enable the preference and grant Android file access.

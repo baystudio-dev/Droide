@@ -22,7 +22,17 @@ The normalization tool is fetched by F-Droid as `reproducible-apk-tools@ca728486
 
 ## Verify a rebuild
 
-Build the exact application tag using the [source-build procedure](fdroid.md#build). Obtain the signed APK from the corresponding public release. In a separate host environment, install `fdroidserver==2.4.5`; the verifier also requires Android SDK `apksigner` and Java. Keep these tools outside the source export.
+For a byte-identical rebuild, check out the exact tag with its Git metadata before following the [source-build procedure](fdroid.md#build).
+
+```sh
+git clone --branch v1.03.3 --depth 1 https://github.com/baystudio-dev/Droide.git
+cd Droide
+git rev-parse HEAD
+```
+
+For v1.03.3 the commit is `f0fe4e64fa9c77bc8cec296e4939a40cf5a17312`. The official source ZIP also builds. Android Gradle Plugin embeds the Git revision in `META-INF/version-control-info.textproto` when the checkout has Git metadata. The ZIP-only rebuild of v1.03.3 produced 1,651 identical application entries out of 1,652, with this metadata entry accounting for the difference.
+
+Obtain the signed APK from the corresponding public release. In a separate host environment, install `fdroidserver==2.4.5`; the verifier also requires Android SDK `apksigner` and Java. Keep these tools outside the source export.
 
 Apply the recipe's normalization to a new file, preserving the original build output:
 

@@ -13,9 +13,81 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release:
+  jvm-regressions:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '17.0.20+101'
+          check-latest: false
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: 'false'
+
+      - name: Install host test SDK inputs
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
+        with:
+          gradle-version: '8.13'
+          cache-disabled: true
+
+      - name: Prepare pinned test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          frameworks="$RUNNER_TEMP/robolectric"
+          typescript="$RUNNER_TEMP/host-typescript"
+          mkdir -p "$frameworks" "$typescript"
+          for version in 10-robolectric-5803371-i7 15-robolectric-12650502-i7; do
+            jar="android-all-instrumented-$version.jar"
+            curl --fail --silent --show-error --location --retry 3 -o "$frameworks/$jar" \
+              "https://repo.maven.apache.org/maven2/org/robolectric/android-all-instrumented/$version/$jar"
+          done
+          cd "$frameworks"
+          sha256sum --check <<'HASHES'
+          700fb3bb88ff346969b955241b86d2f55d395488bf5df1e8eddfbd003980c78a  android-all-instrumented-10-robolectric-5803371-i7.jar
+          33c2d7cc4186d4605269d5d411fa1818972c5b30a9f70bfbbd3d430b076af52f  android-all-instrumented-15-robolectric-12650502-i7.jar
+          HASHES
+          cd "$typescript"
+          curl --fail --silent --show-error --location --retry 3 -o typescript.tgz \
+            https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz
+          echo '10e108c9cf7d5f2879053dff18515fb405abf2ccef63eaaf017d9c571687a1d3  typescript.tgz' | sha256sum --check
+          tar -xzf typescript.tgz
+          go version
+          node --version
+          echo "DROIDE_TEST_GO_BIN=$(dirname "$(command -v go)")" >> "$GITHUB_ENV"
+          echo "DROIDE_TEST_TYPESCRIPT_MODULE=$typescript/package" >> "$GITHUB_ENV"
+          echo "DROIDE_TEST_ROBOLECTRIC_DIR=$frameworks" >> "$GITHUB_ENV"
+
+      - name: Compile all JVM test fixtures and run release regressions
+        run: bash tools/test_fdroid_regressions.sh "$(command -v gradle)" "$RUNNER_TEMP/droide-host-products"
+
+      - name: Upload JVM test reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: droide-host-regression-reports
+          path: app/build-host-jvm-tests/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release:
+    needs: jvm-regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - name: Checkout exact source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -64,10 +136,12 @@ jobs:
             --sdk "$ANDROID_HOME" --java-home "$JAVA_HOME" \
             --gradle "$(command -v gradle)" \
             --dependencies "$RUNNER_TEMP/droide-source-products" --device-storage 2>&1 | tee fdroid-build.log
+          test -s app/build-source-release-fdroid-candidate/outputs/source-release-verification.json
+          test -s app/build-source-release-fdroid-candidate/outputs/native-reproducibility.json
           sha256sum app/build-source-release-fdroid-candidate/outputs/apk/release/*.apk > fdroid-apk-sha256.txt
 
-      - name: Upload verification and unsigned APK
-        if: always()
+      - name: Upload verified unsigned APK
+        if: success()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: droide-fdroid-source-release
@@ -75,8 +149,17 @@ jobs:
             app/build-source-release-fdroid-candidate/outputs/apk/release/*.apk
             app/build-source-release-fdroid-candidate/outputs/source-release-verification.json
             app/build-source-release-fdroid-candidate/outputs/native-reproducibility.json
-            app/build-source-release-fdroid-candidate/reports/lint-results-release.*
-            fdroid-build.log
             fdroid-apk-sha256.txt
-          if-no-files-found: warn
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: droide-fdroid-build-diagnostics
+          path: |
+            fdroid-build.log
+            app/build-source-release-fdroid-candidate/reports/lint-results-release.*
+          if-no-files-found: ignore
           retention-days: 14
