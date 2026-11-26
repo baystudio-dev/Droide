@@ -185,7 +185,7 @@ class SafMirror(private val context: Context, treeUri: String, private val local
 
     internal fun repositoryParticipant(): WorkspaceMutationParticipant = WorkspaceMutationParticipant { guard, mutation ->
         val job = currentCoroutineContext()[Job]
-        val poll: () -> Unit = { job?.ensureActive(); guard.requireRoot(localRoot) }
+        val poll = SafMirrorReadCheckpoint(job) { guard.requireRoot(localRoot) }
         guard.requireRoot(localRoot)
         val request = mutationRequest(mutation)
         val admission = admitOwned(request.paths, poll, job)
@@ -288,7 +288,7 @@ class SafMirror(private val context: Context, treeUri: String, private val local
         withContext(Dispatchers.IO) {
             checkPendingActivation(null)
             val job = currentCoroutineContext()[Job]
-            val checkCancelled: () -> Unit = { job?.ensureActive(); guard.requireRoot(localRoot) }
+            val checkCancelled = SafMirrorReadCheckpoint(job) { guard.requireRoot(localRoot) }
             val admission = admitOwned(listOf(""), checkCancelled, job)
             val admittedLegacy = admission.legacy
             require(maxFiles > 0 && maxBytes > 0 && maxDepth > 0) { "Invalid SAF mirror limits" }
@@ -689,7 +689,7 @@ class SafMirror(private val context: Context, treeUri: String, private val local
     suspend fun apply(mutation: FileRepository.Mutation) = WorkspaceFileMutationLocks.withRoot(localRoot) { guard ->
         withContext(Dispatchers.IO) {
             val job = currentCoroutineContext()[Job]
-            val poll: () -> Unit = { job?.ensureActive(); guard.requireRoot(localRoot) }
+            val poll = SafMirrorReadCheckpoint(job) { guard.requireRoot(localRoot) }
             val request = mutationRequest(mutation)
             val admission = admitOwned(request.paths, poll, job)
             requireDirectTypesUnchanged(mutation, poll)

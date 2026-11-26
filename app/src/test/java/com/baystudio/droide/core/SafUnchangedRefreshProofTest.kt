@@ -19,8 +19,14 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.junit.After
@@ -187,6 +193,61 @@ class SafUnchangedRefreshProofTest {
         assertEquals("a mutating admission must skip the no-op proof", 0L, proofBytes)
         assertEquals(Effects(0, 0, 0), f.provider.effects()); f.assertPayload(original)
         f.assertNoTemporaryArtifacts()
+    }
+
+    @Test(timeout = 30_000)
+    fun cancelWakesCooperativeProviderAndRetryPublishesOnce() = checkBlockedQuery(cooperative = true)
+
+    @Test(timeout = 30_000)
+    fun ignoredCancelRetainsWorkspaceLockUntilProviderReturns() = checkBlockedQuery(cooperative = false)
+
+    private fun checkBlockedQuery(cooperative: Boolean): Unit = runBlocking {
+        val entered = CountDownLatch(1)
+        val observedCancellation = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        val f = fixture { signal ->
+            if (first.compareAndSet(true, false)) {
+                requireNotNull(signal).setOnCancelListener { observedCancellation.countDown() }
+                entered.countDown()
+                try {
+                    val wakeup = if (cooperative) observedCancellation else release
+                    check(wakeup.await(10, TimeUnit.SECONDS))
+                    if (cooperative) signal.throwIfCanceled()
+                } finally {
+                    signal.setOnCancelListener(null)
+                }
+            }
+        }
+        f.local.resolve("sentinel.bin").writeBytes(replacement)
+        val before = f.manifest.readBytes()
+        val refresh = launch(Dispatchers.IO) { f.refresh() }
+        try {
+            assertTrue("refresh entered provider query", entered.await(5, TimeUnit.SECONDS))
+            refresh.cancel()
+            assertTrue("provider received cancellation", observedCancellation.await(5, TimeUnit.SECONDS))
+            if (!cooperative) {
+                val waiter = async(start = CoroutineStart.UNDISPATCHED) {
+                    WorkspaceFileMutationLocks.withRoot(f.local) {}
+                }
+                assertFalse("second mutation must wait for query return", waiter.isCompleted)
+                release.countDown()
+                waiter.await()
+            }
+            refresh.join()
+            assertTrue(refresh.isCancelled)
+            assertArrayEquals(before, f.manifest.readBytes())
+            assertArrayEquals(replacement, f.local.resolve("sentinel.bin").readBytes())
+            assertArrayEquals(original, f.external.resolve("sentinel.bin").readBytes())
+            assertFalse(f.journal.exists())
+            f.refresh()
+            assertEquals(1, f.core().recoverAll().count { "committed.json" in it.files })
+            f.assertPayload(replacement)
+            f.assertNoTemporaryArtifacts()
+        } finally {
+            release.countDown()
+            refresh.cancel()
+        }
     }
 
     @Test(timeout = 30_000)
@@ -391,7 +452,7 @@ class SafUnchangedRefreshProofTest {
         return out
     }
 
-    private fun fixture(): Fixture {
+    private fun fixture(beforeQuery: (CancellationSignal?) -> Unit = {}): Fixture {
         val app = RuntimeEnvironment.getApplication()
         val parent = Files.createTempDirectory("saf-unchanged-refresh-").toFile().also { roots += it }
         SafPreservationDirectoryOs.allow(parent)
@@ -416,7 +477,7 @@ class SafUnchangedRefreshProofTest {
             addOrUpdateProvider(info)
             addIntentFilterForProvider(ComponentName(info.packageName, info.name), IntentFilter(DocumentsContract.PROVIDER_INTERFACE))
         }
-        val bridge = Bridge(provider).apply { attachInfo(app, ProviderInfo().apply { this.authority = authority }) }
+        val bridge = Bridge(provider, beforeQuery).apply { attachInfo(app, ProviderInfo().apply { this.authority = authority }) }
         ShadowContentResolver.registerProviderInternal(authority, bridge)
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
         val journal = journalParent.resolve((tree.toString() + "\u0000" + local.absolutePath).toByteArray().safDigest())
@@ -535,7 +596,7 @@ class SafUnchangedRefreshProofTest {
         }
     }
 
-    private class Bridge(private val delegate: DocumentsProvider) : ContentProvider() {
+    private class Bridge(private val delegate: DocumentsProvider, private val beforeQuery: (CancellationSignal?) -> Unit) : ContentProvider() {
         override fun onCreate() = true
         override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?) =
             delegate.query(uri, projection, Bundle().apply {
@@ -543,7 +604,10 @@ class SafUnchangedRefreshProofTest {
                 if (args != null) putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, args)
                 if (sort != null) putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sort)
             }, null)
-        override fun query(uri: Uri, projection: Array<out String>?, args: Bundle?, signal: CancellationSignal?) = delegate.query(uri, projection, args, signal)
+        override fun query(uri: Uri, projection: Array<out String>?, args: Bundle?, signal: CancellationSignal?): android.database.Cursor? {
+            beforeQuery(signal)
+            return delegate.query(uri, projection, args, signal)
+        }
         override fun getType(uri: Uri) = delegate.getType(uri)
         override fun openFile(uri: Uri, mode: String) = delegate.openFile(uri, mode)
         override fun openFile(uri: Uri, mode: String, signal: CancellationSignal?) = delegate.openFile(uri, mode, signal)

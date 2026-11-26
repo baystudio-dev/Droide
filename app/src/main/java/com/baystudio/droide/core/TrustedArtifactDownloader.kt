@@ -100,6 +100,7 @@ data class TrustedArtifactSpec(
 }
 
 internal class ArtifactIntegrityException(message: String) : IllegalStateException(message)
+private class ArtifactUnavailableException(status: Int) : IllegalStateException("Artifact download failed: HTTP $status")
 
 private fun URI.httpsPort(): Int = if (port == -1) 443 else port
 
@@ -235,6 +236,11 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
                     throw ArtifactIntegrityException("Artifact ${spec.digestAlgorithm} mismatch")
                 }
                 check(!cleanRestart) { "Artifact server rejected resume more than once" }
+            } catch (failure: ArtifactUnavailableException) {
+                if (integrityRetryUrl == null || sourceUrl == integrityRetryUrl) {
+                    clearPartial(partial, metadataFile)
+                    throw failure
+                }
             } catch (failure: ArtifactIntegrityException) {
                 if (cleanRestart || (resume == null && integrityRetryUrl == null)) {
                     clearPartial(partial, metadataFile)
@@ -310,6 +316,7 @@ class TrustedArtifactDownloader internal constructor(context: Context, private v
                 if (response.code == 408 || response.code == 429 || response.code in 500..599) {
                     throw IOException("Artifact download temporarily failed: HTTP ${response.code}")
                 }
+                if (response.code == 404 || response.code == 410) throw ArtifactUnavailableException(response.code)
                 check(response.code == 200 || response.code == 206) { "Artifact download failed: HTTP ${response.code}" }
 
                 if (resumeOffset > 0L && response.code == 200) {

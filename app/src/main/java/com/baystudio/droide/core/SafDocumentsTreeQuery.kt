@@ -4,7 +4,11 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.OperationCanceledException
 import android.provider.DocumentsContract
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 
 internal data class SafDocumentNode(
     val documentId: String,
@@ -21,6 +25,14 @@ internal data class SafDocumentNode(
 }
 
 internal class SafDirectQueryException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
+/** Carries the mutation owner through the synchronous read helpers, including directory traversal. */
+internal class SafMirrorReadCheckpoint(val job: Job?, private val requireOwner: () -> Unit) : () -> Unit {
+    override fun invoke() {
+        job?.ensureActive()
+        requireOwner()
+    }
+}
 
 /** A failed or partial cursor is never proof that a document is absent. */
 internal class SafDocumentsTreeQuery(
@@ -51,8 +63,25 @@ internal class SafDocumentsTreeQuery(
     private fun read(queryUri: Uri, maxEntries: Int, checkCancelled: () -> Unit): List<SafDocumentNode> {
         require(maxEntries >= 0) { "Invalid SAF query limit" }
         checkCancelled()
-        // minSdk 29 supports the Bundle overload. Never fall back from errors to absence.
-        val cursor = context.contentResolver.query(queryUri, PROJECTION, null as Bundle?, null)
+        val job = (checkCancelled as? SafMirrorReadCheckpoint)?.job
+            ?: return readRows(queryUri, maxEntries, checkCancelled, null)
+        val signal = CancellationSignal()
+        // A child without work completes at cancellation even while its parent is blocked in Binder.
+        val queryLifetime = Job(job)
+        queryLifetime.invokeOnCompletion { if (it != null) signal.cancel() }
+        try {
+            return readRows(queryUri, maxEntries, checkCancelled, signal)
+        } catch (failure: OperationCanceledException) {
+            job.ensureActive()
+            throw failure
+        } finally {
+            queryLifetime.complete()
+        }
+    }
+
+    private fun readRows(queryUri: Uri, maxEntries: Int, checkCancelled: () -> Unit,
+        signal: CancellationSignal?): List<SafDocumentNode> {
+        val cursor = context.contentResolver.query(queryUri, PROJECTION, null as Bundle?, signal)
             ?: throw SafDirectQueryException("SAF provider returned no cursor")
         return cursor.use { rows ->
             checkCancelled()

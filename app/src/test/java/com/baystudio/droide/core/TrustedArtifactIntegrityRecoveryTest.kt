@@ -55,6 +55,34 @@ class TrustedArtifactIntegrityRecoveryTest {
         assertNull(requests[1].header("If-Range"))
     }
 
+    @Test fun missingPrimaryUsesPinnedRecovery() = checkUnavailablePrimary(404)
+
+    @Test fun retiredPrimaryUsesPinnedRecovery() = checkUnavailablePrimary(410)
+
+    private fun checkUnavailablePrimary(code: Int) = runBlocking {
+        val download = downloader { request, _ ->
+            if (request.url.toString() == spec.url) request.reply(ByteArray(0).toResponseBody(), code)
+            else request.reply(bytes.toResponseBody())
+        }
+        assertArrayEquals(bytes, download.recover().readBytes())
+        assertEquals(listOf(spec.url, recoveryUrl), requests.map { it.url.toString() })
+        assertNull(requests.last().header("Range"))
+    }
+
+    @Test fun missingRecoveryStopsAfterOneFallbackAndUnauthorizedRequestsNeverSwitch() = runBlocking {
+        var code = 404
+        val download = downloader { request, _ -> request.reply(ByteArray(0).toResponseBody(), code) }
+        assertTrue(runCatching { download.recover() }.isFailure)
+        assertEquals(listOf(spec.url, recoveryUrl), requests.map { it.url.toString() })
+        assertNull(download.cached(spec))
+        for (status in listOf(403, 503)) {
+            requests.clear()
+            code = status
+            assertTrue(runCatching { download.recover() }.isFailure)
+            assertEquals(listOf(spec.url), requests.map { it.url.toString() })
+        }
+    }
+
     @Test fun persistentMismatchStopsCleanlyAndManualRetryCanSucceed() = runBlocking {
         var healthy = false
         val download = downloader { request, _ -> request.reply((if (healthy) bytes else damaged).toResponseBody()) }
