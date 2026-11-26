@@ -312,7 +312,11 @@ fun AgentPane(
     fun stopActiveRun() {
         runUiCatching(onError = { onUiError("Could not finish stopping the Agent: ${it.message ?: it::class.java.simpleName}") }) {
             when {
-                preflightBusy -> { agentPreflightJob?.cancel(); agent.cancel() }
+                preflightBusy -> {
+                    agentPreflightJob?.cancel()
+                    if (!usingExternalAgent) agent.cancel()
+                    else if (externalController.busy) externalController.cancel(agentPlugins)
+                }
                 usingExternalAgent -> externalController.cancel(agentPlugins)
                 !busy && compactionActivity?.running == true -> agent.cancelContextCompaction()
                 else -> agent.cancel()
@@ -378,18 +382,24 @@ fun AgentPane(
             val host = agentPlugins ?: return
             val plugin = selectedPlugin ?: return
             if (!plugin.available || externalController.busy && !externalController.canAcceptWhileRunning(plugin.spec.id)) return
+            if (agentPreflightJob?.isCompleted == false) return
+            val selectedMode = if (mode == AgentMode.BUILD) WorkspaceAgentMode.EDIT else WorkspaceAgentMode.PLAN
+            val selectedDelivery = if (externalController.activeRun?.agentId == plugin.spec.id) promptDelivery else AgentPromptDelivery.STEER
             uiState.beginMediaSubmission(mediaToken)
-            val accepted = externalController.submit(
-                host = host,
-                spec = plugin.spec,
-                prompt = text,
-                mode = if (mode == AgentMode.PLAN || mode == AgentMode.EXPLORE || mode == AgentMode.REVIEW) WorkspaceAgentMode.PLAN else WorkspaceAgentMode.EDIT,
-                delivery = if (externalController.activeRun?.agentId == plugin.spec.id) promptDelivery else AgentPromptDelivery.STEER,
-                media = media,
-                mediaOwnerId = mediaToken.ownerId,
-            )
-            uiState.finishMediaSubmission(mediaToken, accepted)
-            if (accepted) input = ""
+            val admission = uiState.scope.launchUiCatching(
+                onError = { uiState.submissionError.value = "Could not save the CLI prompt: ${it.message ?: "storage error"}" },
+            ) {
+                var accepted = false
+                try {
+                    accepted = externalController.submitDurably(host, plugin.spec, text, selectedMode, selectedDelivery, media, mediaToken.ownerId) {
+                        uiState.isCurrentMediaDraft(mediaToken) && attachedContexts == submittedAttachments
+                    }
+                    if (accepted && uiState.isCurrentMediaDraft(mediaToken) && input == submittedInput) input = ""
+                } finally {
+                    uiState.finishMediaSubmission(mediaToken, accepted)
+                }
+            }
+            uiState.ownPreparation(admission)
             return
         }
         if (!configured) {
@@ -554,9 +564,11 @@ fun AgentPane(
                                 val plugin = selectedPlugin
                                 if (host != null && plugin != null) externalController.newSession(host, plugin.spec)
                             } else agent.clear()
-                            input = ""
+                            if (conversationKey.sessionId == null) {
+                                input = ""
+                                uiState.discardMediaDraft()
+                            }
                             customAnswer = ""
-                            uiState.discardMediaDraft()
                             taskCollapsed = false
                             taskHidden = false
                         },

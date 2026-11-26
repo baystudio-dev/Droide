@@ -1785,8 +1785,14 @@ internal fun IdeScreen(
                     openAgentPane()
                 } },
                 onDismiss = dismiss,
-                onDroideDeleted = { deletedId -> resetDeletedAgentConversation(agent, agentUiState, deletedId) },
-                onPluginDeleted = { entry -> agentUiState.externalController.resetDeletedConversation(entry.id, entry.agentId, agentPlugins) },
+                onDroideDeleted = { deletedId ->
+                    agentUiState.forgetDeletedComposer(AgentChatConversationKey("droide", deletedId))
+                    resetDeletedAgentConversation(agent, agentUiState, deletedId)
+                },
+                onPluginDeleted = { entry ->
+                    agentUiState.forgetDeletedComposer(AgentChatConversationKey(entry.agentId, entry.id))
+                    agentUiState.externalController.resetDeletedConversation(entry.id, entry.agentId, agentPlugins)
+                },
             )
         }
         if (showSettings) settingsNavigation.SaveableStateProvider(workspaceKey) { SettingsScreen(

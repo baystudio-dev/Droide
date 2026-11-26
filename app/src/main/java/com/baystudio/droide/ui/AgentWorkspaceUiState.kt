@@ -1,6 +1,9 @@
 package com.baystudio.droide.ui
 
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import com.baystudio.droide.core.ExitDraftAttachment
+import com.baystudio.droide.core.ExitDraftRecord
 import android.content.Context
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -26,6 +29,7 @@ class AgentWorkspaceUiState internal constructor(
     history: PluginConversationHistory? = null,
     projectId: String? = null,
     exitDraftStoreOverride: com.baystudio.droide.core.ExitDraftStore? = null,
+    private val previousWorkspaceCheckpoint: Job? = null,
 ) : AutoCloseable {
     private val parentScope = parent
     private val exitDraftStore = exitDraftStoreOverride ?: if (context != null && projectId != null) com.baystudio.droide.core.ExitDraftStore(context, projectId) else null
@@ -41,9 +45,14 @@ class AgentWorkspaceUiState internal constructor(
     private var exiting = false
     internal val scope = CoroutineScope(parent.coroutineContext + SupervisorJob(parent.coroutineContext[Job]))
     internal val pluginHistory = history ?: workspaceRoot?.let { SqlitePluginConversationHistory(it) }
-    internal val externalController = ExternalAgentSessionController(scope, context?.applicationContext, pluginHistory, workDir = workspaceRoot)
-    internal val input = mutableStateOf("")
-    internal val attachments = mutableStateOf<List<AgentAttachedContext>>(emptyList())
+    internal val externalController = ExternalAgentSessionController(scope, context?.applicationContext, pluginHistory, workDir = workspaceRoot).also {
+        it.pendingStore = exitDraftStore?.named("pending")
+        it.pendingRecoveryPublished = { rows -> recoveredExitDrafts.value = rows }
+    }
+    private val composerDrafts = AgentComposerDrafts(exitDraftStore?.named("composer"), scope) { exitDraftError.value = it }
+    private var restoringComposer = false
+    internal val input = observedDraftState("")
+    internal val attachments = observedDraftState<List<AgentAttachedContext>>(emptyList())
     internal val mediaImporting = mutableStateOf(false)
     internal val mediaPickerPending = mutableStateOf(false)
     internal val mediaImportError = mutableStateOf<String?>(null)
@@ -62,17 +71,80 @@ class AgentWorkspaceUiState internal constructor(
 
     init {
         if (exitDraftStore != null) exitDraftLoadJob = scope.launch {
-            try { recoveredExitDrafts.value = exitDraftStore.load() }
-            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { exitDraftError.value = "Saved unsent drafts could not be read. Their encrypted recovery was kept." }
+            previousWorkspaceCheckpoint?.join()
+            try {
+                loadComposer(exitDraftStore)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) { exitDraftError.value = "Chat drafts could not be read. Their encrypted recovery was kept." }
+            try {
+                recoveredExitDrafts.value = externalController.recoverPendingInputs(exitDraftStore)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                // Keep older selectable copies accessible when there is no room for the pending ones.
+                try { recoveredExitDrafts.value = exitDraftStore.load() }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { /* Keep any previously displayed copies. */ }
+                exitDraftError.value = "Some saved drafts could not be recovered. Their encrypted copies were kept."
+            }
             finally { exitDraftLoading.value = false }
         }
+    }
+
+    private suspend fun loadComposer(archive: com.baystudio.droide.core.ExitDraftStore) {
+        val conflicts = composerDrafts.load(archive)
+        if (conflicts.isNotEmpty()) recoveredExitDrafts.value = conflicts
+        if (input.value.isEmpty() && attachments.value.isEmpty()) {
+            mediaConversation?.let { key -> composerDrafts[key]?.let(::restoreComposer) }
+        }
+    }
+
+    private fun <T> observedDraftState(initial: T): MutableState<T> {
+        val state = mutableStateOf(initial)
+        return object : MutableState<T> by state {
+            override var value: T
+                get() = state.value
+                set(value) {
+                    if (value == state.value) return
+                    state.value = value
+                    if (!restoringComposer && !exiting) saveComposer()
+                }
+            override fun component2(): (T) -> Unit = { value = it }
+        }
+    }
+
+    private fun saveComposer() {
+        val key = mediaConversation ?: return
+        val current = if (input.value.isEmpty() && attachments.value.isEmpty()) null else
+            ExitDraftRecord(key.backendId, key.sessionId, input.value, attachments.value.map {
+                ExitDraftAttachment(it.name, it.text, it.media, it.previewTruncated, it.imagePath)
+            }, mediaOwner = mediaOwnerId)
+        composerDrafts.update(key, current)
+    }
+
+    private fun restoreComposer(record: ExitDraftRecord?) {
+        restoringComposer = true
+        try {
+            input.value = record?.text.orEmpty()
+            attachments.value = record?.attachments.orEmpty().map {
+                AgentAttachedContext(it.name, it.preview, it.imagePath, it.media, it.previewTruncated)
+            }
+            mediaOwnerId = record?.mediaOwner ?: "draft-${UUID.randomUUID()}"
+            mediaGeneration++
+        } finally { restoringComposer = false }
+    }
+
+    internal suspend fun flushComposerDrafts() {
+        val store = exitDraftStore ?: return
+        previousWorkspaceCheckpoint?.join()
+        loadComposer(store)
+        composerDrafts.flush()
     }
 
     internal suspend fun preserveDraftsForExit(nativePending: List<com.baystudio.droide.core.AgentPendingInput> = emptyList()) {
         exiting = true
         exitDraftsFrozen.value = true
         exitDraftLoadJob?.join()
+        flushComposerDrafts()
         preflightJob.value?.cancel(); preflightJob.value?.join()
         val importing = mediaImportOperation
         importing?.cancel(parentScope); importing?.job?.join()
@@ -93,8 +165,7 @@ class AgentWorkspaceUiState internal constructor(
                         }))
             }
             externalController.snapshotPendingPromptsForExit().forEach { queued ->
-                add(com.baystudio.droide.core.ExitDraftRecord(queued.agentId, queued.sessionId, queued.input.text,
-                    queued.media.map { com.baystudio.droide.core.ExitDraftAttachment(it.name, "Queued attachment", it) }))
+                add(queued.asRecoveryRecord())
             }
         }.filter { it.text.isNotEmpty() || it.attachments.isNotEmpty() }
         val store = exitDraftStore
@@ -123,6 +194,8 @@ class AgentWorkspaceUiState internal constructor(
                     "Attachment copies could not be retained. Keep Droide open and Retry, or open Review saved drafts to explicitly save text and attachment references only."
                 }
                 recoveredExitDrafts.value = store.preserve(records)
+                mediaConversation?.let { composerDrafts.update(it, null) }
+                composerDrafts.flush()
                 exitDraftError.value = null
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (failure: Exception) {
@@ -167,7 +240,19 @@ class AgentWorkspaceUiState internal constructor(
         }
         exitDraftOperationBusy.value = true
         return try {
-            recoveredExitDrafts.value = store.remove(record.identity)
+            val remaining = store.remove(record.identity)
+            recoveredExitDrafts.value = remaining
+            val root = mediaRoot
+            if (root != null && record.attachments.any { it.media != null }) {
+                val original = record.mediaOwner
+                val releaseOriginal = original != null && original != mediaOwnerId && !composerDrafts.hasOwner(original) &&
+                    remaining.none { it.mediaOwner == original }
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    val media = ChatMediaStore(root)
+                    runCatching { media.releaseOwner("exit-draft-${record.identity.take(40)}") }
+                    if (releaseOriginal) runCatching { media.releaseOwner(checkNotNull(original)) }
+                }
+            }
             exitDraftError.value = null
             exitDraftNotice.value = "Selected saved copy deleted. The current composer is unchanged."
             true
@@ -196,9 +281,36 @@ class AgentWorkspaceUiState internal constructor(
         if (mediaRoot == root && previous == conversation) return
         val firstSessionAdmission = mediaRoot == root && mediaSubmissionPending && previous != null &&
             previous.backendId == conversation.backendId && previous.sessionId == null && conversation.sessionId != null
-        if (mediaRoot != null && !firstSessionAdmission) discardMediaDraft()
+        if (firstSessionAdmission) {
+            composerDrafts.update(checkNotNull(previous), null)
+            mediaConversation = conversation
+            saveComposer()
+            return
+        }
+        cancelMediaImport()
+        mediaImporting.value = false
+        mediaImportError.value = null
+        mediaSubmissionPending = false
         mediaRoot = root
         mediaConversation = conversation
+        if (previous == null && (input.value.isNotEmpty() || attachments.value.isNotEmpty())) {
+            saveComposer()
+        } else restoreComposer(composerDrafts[conversation])
+    }
+
+    internal fun forgetDeletedComposer(key: AgentChatConversationKey) {
+        val stored = composerDrafts[key]
+        if (mediaConversation == key) {
+            input.value = ""
+            discardMediaDraft()
+        } else {
+            val root = mediaRoot
+            val owner = stored?.mediaOwner
+            if (root != null && owner != null) parentScope.launch(Dispatchers.IO) {
+                runCatching { ChatMediaStore(root).releaseOwner(owner) }
+            }
+        }
+        composerDrafts.update(key, null)
     }
 
     internal fun mediaDraftToken(): AgentMediaDraftToken = AgentMediaDraftToken(
@@ -219,6 +331,12 @@ class AgentWorkspaceUiState internal constructor(
             attachments.value = emptyList()
             mediaImportError.value = null
             rotateMediaOwner()
+            saveComposer()
+            if (exitDraftStore != null) scope.launch {
+                try { flushComposerDrafts() }
+                catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) { exitDraftError.value = "Could not finish saving the chat draft." }
+            }
         }
     }
 
@@ -299,8 +417,19 @@ class AgentWorkspaceUiState internal constructor(
         // Do not release archived media owners or erase the retained draft on a failed later stage.
     }
 
+    internal var closeCheckpoint: Job? = null
+        private set
+
     override fun close() {
-        discardMediaDraft()
+        if (exitDraftStore == null) discardMediaDraft() else if (closeCheckpoint == null) {
+            cancelMediaImport()
+            // Only this final bounded disk operation may outlive runtime cancellation.
+            // A replacement waits for it before loading the same project's drafts.
+            closeCheckpoint = parentScope.launch(kotlinx.coroutines.NonCancellable, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                try { flushComposerDrafts() }
+                catch (_: Exception) { exitDraftError.value = "Could not finish saving the chat draft." }
+            }
+        }
         chatPositions.clear()
         externalController.close()
         scope.cancel("Workspace replaced")

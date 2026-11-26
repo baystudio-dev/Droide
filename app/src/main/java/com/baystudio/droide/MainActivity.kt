@@ -455,6 +455,7 @@ class MainActivity : ComponentActivity() {
             if (ApplicationWorkAdmission.isOpen && ::workspaceModel.isInitialized) {
                 editorRecoveryBridge.captureRequest()?.let(workspaceModel::persistEditorRecovery)
                 workspaceModel.persistTerminalRecovery()
+                workspaceModel.persistAgentDrafts()
             }
         } catch (error: Exception) {
             Log.w("DroideLifecycle", "Best-effort onStop recovery skipped", error)

@@ -26,10 +26,13 @@ internal data class ExitDraftAttachment(
     val preview: String,
     val media: ChatMediaRef? = null,
     val previewTruncated: Boolean = false,
+    val imagePath: String? = null,
 )
 internal data class ExitDraftRecord(
     val backend: String, val session: String?, val text: String,
     val attachments: List<ExitDraftAttachment> = emptyList(),
+    val slot: String? = null,
+    val mediaOwner: String? = null,
 ) {
     val identity: String by lazy { MessageDigest.getInstance("SHA-256")
         .digest(ExitDraftCodec.utf8(ExitDraftCodec.encodeOne(this).toString()))
@@ -52,12 +55,15 @@ internal object ExitDraftCodec {
     fun encodeOne(r: ExitDraftRecord): JsonObject = buildJsonObject {
         require(r.backend.length in 1..200 && r.text.length <= 500_000 && r.attachments.size <= 8) { "Unsent draft exceeds recovery limits; keep Droide open" }
         put("backend", r.backend)
+        r.slot?.let { require(it.length in 1..512); put("slot", it) }
+        r.mediaOwner?.let { require(it.length in 1..160); put("owner", it) }
         r.session?.let { require(it.length <= 200) { "Draft session metadata exceeds recovery limits" }; put("session", it) }
         put("text", r.text)
         put("attachments", JsonArray(r.attachments.map { a -> buildJsonObject {
             require(a.name.length <= 512 && a.preview.length <= 100_000) { "Attachment preview exceeds recovery limits; no text was shortened" }
             put("name", a.name); put("preview", a.preview)
             if (a.previewTruncated) put("previewTruncated", true)
+            a.imagePath?.let { require(it.length in 1..2048); put("imagePath", it) }
             a.media?.let { m -> put("media", buildJsonObject {
                 require(m.id.length in 1..200 && m.path.length in 1..2_048 && m.name.length <= 512 && m.mediaType.length in 1..200 &&
                     m.bytes >= 0L && m.createdAt >= 0L && m.expiresAt >= m.createdAt) { "Invalid attachment recovery metadata" }
@@ -106,9 +112,10 @@ internal object ExitDraftCodec {
                 val truncated = a["previewTruncated"]?.let { value ->
                     (value as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: error("Invalid preview completeness")
                 } ?: false
-                ExitDraftAttachment(string(a,"name"),string(a,"preview"),m,truncated)
+                ExitDraftAttachment(string(a,"name"),string(a,"preview"),m,truncated,a["imagePath"]?.let { string(a, "imagePath") })
             }
-            ExitDraftRecord(string(r,"backend"),session,string(r,"text"),attachments)
+            ExitDraftRecord(string(r,"backend"),session,string(r,"text"),attachments,
+                r["slot"]?.let { string(r, "slot") }, r["owner"]?.let { string(r, "owner") })
         }.also { encode(it) }
     }
     fun merge(previous: List<ExitDraftRecord>, current: List<ExitDraftRecord>): List<ExitDraftRecord> =
@@ -130,18 +137,38 @@ internal class ExitDraftStore internal constructor(
     context: Context,
     projectId: String,
     private val cipher: ExitDraftCipher,
+    private val namespace: String = "exit",
     private val directorySyncOverride: ((File) -> Unit)? = null,
 ) {
     constructor(context: Context, projectId: String) : this(context, projectId, PlatformExitDraftCipher())
     private val applicationContext = context.applicationContext
     private val appFilesDir by lazy { applicationContext.filesDir.canonicalFile }
     private val metadataRoot by lazy { File(appFilesDir, ".droide") }
-    private val root by lazy { File(metadataRoot, "exit-drafts") }
+    private val root by lazy { File(metadataRoot, namespace + "-drafts") }
     private val project = PathSecurity.safeLeafName(projectId)
     private val file by lazy { File(root, "$project.bin") }
-    private val aad = project.toByteArray(Charsets.UTF_8)
+    private val aad = (if (namespace == "exit") project else "$namespace/$project").toByteArray(Charsets.UTF_8)
     // A second workspace instance for the same project cannot overwrite another instance's archive.
     private val mutex by lazy { locks.getOrPut(file.absolutePath) { Mutex() } }
+
+    fun named(name: String): ExitDraftStore {
+        require(name == "composer" || name == "pending")
+        return ExitDraftStore(applicationContext, project, cipher, name, directorySyncOverride)
+    }
+
+    suspend fun slots(): Map<String, ExitDraftRecord> = load().associate { record ->
+        requireNotNull(record.slot) to record.copy(slot = null)
+    }
+
+    suspend fun putSlot(slot: String, record: ExitDraftRecord?) = putSlots(mapOf(slot to record))
+
+    /** Apply only changed slots under the file's shared lock. Archive records stay separate. */
+    suspend fun putSlots(changes: Map<String, ExitDraftRecord?>) = withContext(Dispatchers.IO) { mutex.withLock {
+        require(namespace != "exit")
+        val previous = loadLocked()
+        val updated = previous.filterNot { it.slot in changes } + changes.mapNotNull { (key, record) -> record?.copy(slot = key) }
+        if (updated.associateBy { it.slot } != previous.associateBy { it.slot }) publishLocked(updated)
+    } }
 
     suspend fun load(): List<ExitDraftRecord> = withContext(Dispatchers.IO) { mutex.withLock { loadLocked() } }
     suspend fun preserve(current: List<ExitDraftRecord>): List<ExitDraftRecord> = withContext(Dispatchers.IO) { mutex.withLock {

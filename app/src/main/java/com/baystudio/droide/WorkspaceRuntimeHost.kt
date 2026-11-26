@@ -90,6 +90,7 @@ internal class WorkspaceRuntimeHost(
     private var retainedEditorState = EditorWorkspaceState()
     private var retainedEditorRecoveryStore: EditorStateStore? = null
     private var retainedAgentRuntime: WorkspaceRuntime? = null
+    private var agentDraftHandoff: Job? = null
     private var retainedAgentUiState: com.baystudio.droide.ui.AgentWorkspaceUiState? = null
     private val retainedExplorerStates = linkedMapOf<String, ExplorerWorkspaceState>()
     // Historical UI state owns no worker. The single active binding survives Activity recreation.
@@ -135,11 +136,19 @@ internal class WorkspaceRuntimeHost(
 
     fun agentUiStateFor(runtime: WorkspaceRuntime): com.baystudio.droide.ui.AgentWorkspaceUiState {
         if (retainedAgentRuntime !== runtime) {
-            retainedAgentUiState?.close()
+            retireAgentUi()
             retainedAgentRuntime = runtime
-            retainedAgentUiState = com.baystudio.droide.ui.AgentWorkspaceUiState(runtimeScope, application, runtime.files.root, projectId = runtime.project.id)
+            retainedAgentUiState = com.baystudio.droide.ui.AgentWorkspaceUiState(runtimeScope, application, runtime.files.root, projectId = runtime.project.id, previousWorkspaceCheckpoint = agentDraftHandoff)
         }
         return checkNotNull(retainedAgentUiState)
+    }
+
+    private fun retireAgentUi() {
+        val previous = retainedAgentUiState ?: return
+        previous.close()
+        agentDraftHandoff = previous.closeCheckpoint
+        retainedAgentUiState = null
+        retainedAgentRuntime = null
     }
 
     private fun reportWorkspaceFailure(failure: Throwable) {
@@ -244,9 +253,7 @@ internal class WorkspaceRuntimeHost(
                 }
                 // Project replacement is a deliberate runtime transition. Closing a panel is not.
                 if (retainedAgentRuntime != null && retainedAgentRuntime !== runtime) {
-                    retainedAgentUiState?.close()
-                    retainedAgentUiState = null
-                    retainedAgentRuntime = null
+                    retireAgentUi()
                 }
             }
         }
@@ -279,6 +286,15 @@ internal class WorkspaceRuntimeHost(
     }
 
      
+    fun persistAgentDrafts() {
+        val state = retainedAgentUiState ?: return
+        runtimeScope.launch {
+            runSuspendCatching { state.flushComposerDrafts() }.onFailure {
+                state.exitDraftError.value = "Could not finish saving the chat draft."
+            }
+        }
+    }
+
     fun persistTerminalRecovery() {
         runtimeScope.launch {
             runSuspendCatching { coordinator.runtime.value?.terminals?.flushReviveState() }
@@ -413,7 +429,7 @@ internal class WorkspaceRuntimeHost(
         com.baystudio.droide.core.OwnedResourceCleanup.run(
             { application.unregisterComponentCallbacks(memoryCallbacks) },
             { browserTimers.close() },
-            { retainedAgentUiState?.close() },
+            { retireAgentUi() },
             { closeExplorerRefresh() },
             { editorAuthorityBinding?.close() },
             { editorAuthorityBinding = null },

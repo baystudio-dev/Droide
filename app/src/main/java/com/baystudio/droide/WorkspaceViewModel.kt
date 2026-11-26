@@ -26,5 +26,6 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
     fun explorerRefreshFor(runtime: WorkspaceRuntime) = host.explorerRefreshFor(runtime)
     fun agentUiStateFor(runtime: WorkspaceRuntime) = host.agentUiStateFor(runtime)
     fun persistEditorRecovery(request: EditorRecoveryRequest) = host.persistEditorRecovery(request)
+    fun persistAgentDrafts() = host.persistAgentDrafts()
     fun persistTerminalRecovery() = host.persistTerminalRecovery()
 }

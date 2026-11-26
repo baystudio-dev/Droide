@@ -162,6 +162,98 @@ class AgentExitDraftRecoveryR64Test {
 
     private suspend fun rejected(block: suspend () -> Unit): Throwable = try { block(); throw AssertionError("Expected rejection") }
         catch (failure: Exception) { failure }
+    @Test(timeout = 10_000) fun conversationDraftsKeepTheirTextAndOwnedMediaAcrossNavigationAndRecreation() = fixture { f ->
+        val first = f.ui()
+        val a = AgentChatConversationKey("droide", "thread-A")
+        val b = AgentChatConversationKey("codex", "thread-B")
+        first.bindMediaConversation(f.root, a)
+        val token = first.mediaDraftToken()
+        val media = com.baystudio.droide.core.ChatMediaStore(f.root)
+        val ref = media.import(token.ownerId, "note.txt", "text/plain", "original".byteInputStream())
+        val attachment = AgentAttachedContext("note.txt", "original", media = ref)
+        first.input.value = "from A"
+        first.attachments.value = listOf(attachment)
+        first.bindMediaConversation(f.root, b)
+        assertEquals("", first.input.value)
+        assertTrue(first.attachments.value.isEmpty())
+        first.input.value = "from B"
+        first.bindMediaConversation(f.root, a)
+        assertEquals("from A", first.input.value)
+        assertEquals(listOf(attachment), first.attachments.value)
+        assertFalse(first.isCurrentMediaDraft(token))
+        assertEquals(listOf(ref), media.ownerRefs(first.mediaDraftToken().ownerId))
+
+        first.flushComposerDrafts()
+        assertTrue("Automatic drafts must not accumulate in the explicit Exit archive", f.store.load().isEmpty())
+        val reopened = f.ui()
+        reopened.bindMediaConversation(f.root, a)
+        assertEquals("from A", reopened.input.value)
+        assertEquals(listOf(attachment), reopened.attachments.value)
+        assertEquals(token.ownerId, reopened.mediaDraftToken().ownerId)
+        reopened.bindMediaConversation(f.root, b)
+        assertEquals("from B", reopened.input.value)
+        assertTrue(reopened.attachments.value.isEmpty())
+    }
+
+    @Test(timeout = 10_000) fun clearingDraftOnlyRemovesItsOwnRecoveryAndExitOffersOneArchivedCopy() = fixture { f ->
+        val ui = f.ui()
+        val a = AgentChatConversationKey("droide", "a")
+        val b = AgentChatConversationKey("droide", "b")
+        ui.bindMediaConversation(f.root, a)
+        ui.input.value = "first"
+        ui.flushComposerDrafts()
+        ui.bindMediaConversation(f.root, b)
+        ui.input.value = "second"
+        ui.flushComposerDrafts()
+        ui.bindMediaConversation(f.root, a)
+        ui.input.value = ""
+        ui.flushComposerDrafts()
+        assertEquals(listOf("second"), f.store.named("composer").slots().values.map { it.text })
+        ui.bindMediaConversation(f.root, b)
+        ui.preserveDraftsForExit()
+        assertTrue(f.store.named("composer").slots().isEmpty())
+        assertEquals(listOf("second"), f.store.load().map { it.text })
+    }
+
+    @Test(timeout = 10_000) fun projectRetirementCheckpointsBeforeNextInstanceOpensDrafts() = fixture { f ->
+        val old = f.ui()
+        val key = AgentChatConversationKey("droide", "switch")
+        old.bindMediaConversation(f.root, key)
+        old.input.value = "typed immediately before switching projects"
+        old.close()
+        checkNotNull(old.closeCheckpoint).join()
+        val reopened = f.ui()
+        reopened.bindMediaConversation(f.root, key)
+        assertEquals("typed immediately before switching projects", reopened.input.value)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun checkpointWaitsForQuietButContinuousTypingHasAFiveSecondCeiling() = kotlinx.coroutines.test.runTest {
+        val edits = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+        val first = async { awaitComposerDraftCheckpoint(edits) }
+        repeat(5) {
+            testScheduler.advanceTimeBy(100)
+            edits.trySend(Unit)
+            testScheduler.runCurrent()
+        }
+        testScheduler.advanceTimeBy(649)
+        assertFalse(first.isCompleted)
+        testScheduler.advanceTimeBy(1)
+        testScheduler.runCurrent()
+        assertTrue(first.isCompleted)
+        val second = async { awaitComposerDraftCheckpoint(edits) }
+        repeat(49) {
+            testScheduler.advanceTimeBy(100)
+            edits.trySend(Unit)
+            testScheduler.runCurrent()
+        }
+        assertFalse(second.isCompleted)
+        testScheduler.advanceTimeBy(100)
+        testScheduler.runCurrent()
+        assertTrue(second.isCompleted)
+        edits.close()
+    }
+
     private fun fixture(block: suspend (Fixture) -> Unit) = runBlocking {
         val f = Fixture()
         try { block(f) } finally { f.close() }

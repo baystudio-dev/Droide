@@ -21,6 +21,9 @@ import com.baystudio.droide.core.ChatMediaStore
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import com.baystudio.droide.core.AgentPendingInput
+import com.baystudio.droide.core.ExitDraftStore
+import com.baystudio.droide.core.ExitDraftAttachment
+import com.baystudio.droide.core.ExitDraftRecord
 import com.baystudio.droide.core.AgentPromptDelivery
 import com.baystudio.droide.core.WorkspaceAgentEvent
 import com.baystudio.droide.core.WorkspaceAgentSyncPhase
@@ -90,7 +93,12 @@ internal data class ExternalAgentPendingPrompt(
     val configurationKnown: Boolean,
     val media: List<ChatMediaRef> = emptyList(),
     val mediaOwnerId: String? = null,
-)
+    val journalRecord: ExitDraftRecord? = null,
+) {
+    val recoverySlot: String? get() = journalRecord?.slot
+    fun asRecoveryRecord(): ExitDraftRecord = journalRecord ?: ExitDraftRecord(agentId, sessionId, input.text,
+        media.map { ExitDraftAttachment(it.name, "Queued attachment", it) })
+}
 
  
 internal class ExternalAgentSessionController(
@@ -138,7 +146,7 @@ internal class ExternalAgentSessionController(
         ownedHistory?.cancel()
         livePreviewJob?.cancel()
         steerRequestJob?.cancel()
-        pendingPrompts.mapNotNull { it.mediaOwnerId }.distinct().forEach(::releaseMediaOwner)
+        pendingPrompts.filter { it.recoverySlot == null }.mapNotNull { it.mediaOwnerId }.distinct().forEach(::releaseMediaOwner)
         pendingPrompts = emptyList(); activeBackend = null
         activeRun = null
         lifecycleBusyAgentId = null
@@ -208,6 +216,34 @@ internal class ExternalAgentSessionController(
         val identity: PluginHistoryTurnIdentity?,
     )
     private var pendingFinish: PendingFinish? = null
+    internal var pendingStore: ExitDraftStore? = null
+    internal var pendingRecoveryPublished: (List<ExitDraftRecord>) -> Unit = {}
+    private val recoveryMutex = Mutex()
+    private var recoveryArchive: ExitDraftStore? = null
+    private var recoveredPending = false
+    private val pendingRemovals = mutableSetOf<String>()
+    private var deferredPromotion: (() -> Unit)? = null
+
+    /** A previous process cannot establish whether its CLI is still alive. Restore only a
+     * user-visible draft. Commit the archive first so an interrupted migration can be retried. */
+    suspend fun recoverPendingInputs(archive: ExitDraftStore): List<ExitDraftRecord> = recoveryMutex.withLock {
+        recoveryArchive = archive
+        val store = pendingStore ?: return@withLock archive.load()
+        if (recoveredPending) return@withLock archive.load()
+        val entries = store.slots()
+        if (entries.isEmpty()) {
+            // A separate, unreadable historical archive cannot block new CLI input.
+            recoveredPending = true
+            return@withLock archive.load()
+        }
+        val drafts = entries.map { (slot, record) -> record.copy(slot = slot) }
+        val saved = archive.preserve(drafts)
+        store.putSlots(entries.mapValues { null })
+        recoveredPending = true
+        pendingRecoveryPublished(saved)
+        saved
+    }
+
     private var uncheckpointedPrompt: ExternalAgentPendingPrompt? = null
     private val pendingOutput = ArrayDeque<ExternalTranscriptUpdate>()
     private var transcript = ExternalAgentTranscript()
@@ -266,6 +302,9 @@ internal class ExternalAgentSessionController(
         if (closed) return@withLock
         check(exiting && exitCheckpointSucceeded && pendingFinish == null) { "Checkpoint plugin history before closing it" }
         (listOfNotNull(runJob, lifecycleJob, historyJob, checkpointJob, livePreviewJob, steerRequestJob, stopJob) + auxiliaryJobs + mediaCleanupJobs).distinct().joinAll()
+        // The host has already archived the final snapshot at this point.
+        val archivedSlots = snapshotPendingPromptsForExit().mapNotNull { it.recoverySlot }
+        if (archivedSlots.isNotEmpty()) checkNotNull(pendingStore).putSlots(archivedSlots.associateWith { null })
         history?.close() // A failed close remains visible and retryable; no detached cleanup job.
         closed = true
         pendingPrompts = emptyList(); uncheckpointedPrompt = null
@@ -276,8 +315,38 @@ internal class ExternalAgentSessionController(
     fun pendingInputsFor(agentId: String): List<AgentPendingInput> = pendingPrompts.filter { it.agentId == agentId }.map { it.input }
     fun removePendingInput(id: String) {
         if (!admissionOpen()) return
-        pendingPrompts.firstOrNull { it.input.id == id }?.mediaOwnerId?.let(::releaseMediaOwner)
-        pendingPrompts = pendingPrompts.filterNot { it.input.id == id }
+        val pending = pendingPrompts.firstOrNull { it.input.id == id } ?: return
+        val slot = pending.recoverySlot
+        if (slot == null) {
+            forgetPendingInput(pending)
+            return
+        }
+        if (!pendingRemovals.add(id)) return
+        launchAuxiliary {
+            try {
+                withContext(NonCancellable) {
+                    checkNotNull(pendingStore).putSlot(slot, null)
+                    forgetPendingInput(pending)
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                deferredPromotion = null
+                states[pending.agentId] = this@ExternalAgentSessionController[pending.agentId].copy(
+                    connectionError = "Cannot remove the pending prompt from storage. Retry removal.")
+            } finally {
+                pendingRemovals.remove(id)
+                if (pendingRemovals.isEmpty()) {
+                    val promote = deferredPromotion
+                    deferredPromotion = null
+                    if (!busy && admissionOpen()) promote?.invoke()
+                }
+            }
+        }
+    }
+
+    private fun forgetPendingInput(pending: ExternalAgentPendingPrompt) {
+        releaseMediaOwner(pending.mediaOwnerId)
+        pendingPrompts = pendingPrompts.filterNot { it.input.id == pending.input.id }
         val run = activeRun ?: return
         if (pendingPrompts.any { it.agentId == run.agentId && it.input.delivery == AgentPromptDelivery.STEER }) return
         val host = activeBackend ?: return
@@ -525,6 +594,50 @@ internal class ExternalAgentSessionController(
         return true
     }
 
+    /** Do not acknowledge the composer until its input can survive process termination. */
+    suspend fun submitDurably(
+        host: WorkspaceAgentChatBackend, spec: WorkspaceAgentPluginSpec, prompt: String,
+        mode: WorkspaceAgentMode, delivery: AgentPromptDelivery,
+        media: List<ChatMediaRef>, mediaOwnerId: String?, ownsDraft: () -> Boolean,
+    ): Boolean {
+        val store = pendingStore ?: return ownsDraft() && submit(host, spec, prompt, mode, delivery, media, mediaOwnerId)
+        if (!recoveredPending) {
+            val archive = recoveryArchive
+            if (archive == null) {
+                states[spec.id] = this[spec.id].copy(connectionError = "Pending prompt recovery is starting. Keep this draft and retry.")
+                return false
+            }
+            recoverPendingInputs(archive)
+        }
+        if (!admissionOpen() || !ownsDraft() || prompt.isBlank() || prompt.length > 200_000) return false
+        val run = activeRun?.runId
+        val initial = this[spec.id]
+        val slot = java.util.UUID.randomUUID().toString()
+        val record = ExitDraftRecord(spec.id, initial.sessionId, prompt,
+            media.map { ExitDraftAttachment(it.name, "Queued attachment", it) }, slot = slot, mediaOwner = mediaOwnerId)
+        val owner = currentCoroutineContext()
+        // If cancelled just as the IO commit returns, explicitly retire the record unless
+        // submit transferred ownership to the queue or to a running history transaction.
+        return withContext(NonCancellable) {
+            var accepted = false
+            try {
+                store.putSlot(slot, record)
+                val current = this@ExternalAgentSessionController[spec.id]
+                val sameConfiguration = initial.configuration == null ||
+                    (initial.configuration.currentModelId == current.configuration?.currentModelId &&
+                        initial.configuration.currentReasoningId == current.configuration?.currentReasoningId)
+                if (owner.isActive && ownsDraft() && sameConfiguration && run == activeRun?.runId &&
+                    (initial.historyId == current.historyId || initial.historyId == null && run != null) &&
+                    (initial.sessionId == current.sessionId || initial.sessionId == null && run != null)) {
+                    accepted = submit(host, spec, prompt, mode, delivery, media, mediaOwnerId, record)
+                }
+                accepted
+            } finally {
+                if (!accepted) store.putSlot(slot, null)
+            }
+        }
+    }
+
     fun submit(
         host: WorkspaceAgentChatBackend,
         spec: WorkspaceAgentPluginSpec,
@@ -533,6 +646,7 @@ internal class ExternalAgentSessionController(
         delivery: AgentPromptDelivery = AgentPromptDelivery.STEER,
         media: List<ChatMediaRef> = emptyList(),
         mediaOwnerId: String? = null,
+        journalRecord: ExitDraftRecord? = null,
     ): Boolean {
         if (!admissionOpen() || !scope.isActive || prompt.isBlank() || prompt.length > 200_000) return false
         if (rejectUnverifiedInitialHistory(spec.id)) return false
@@ -546,7 +660,8 @@ internal class ExternalAgentSessionController(
             states[spec.id] = this[spec.id].copy(connectionError = it)
             return false
         }
-        if (busy) return enqueue(host, spec, prompt, mode, delivery, media, mediaOwnerId)
+        if (busy) return enqueue(host, spec, prompt, mode, delivery, media, mediaOwnerId, journalRecord)
+        val recoverySlot = journalRecord?.slot
         val agentId = spec.id
         val initial = this[agentId]
         if (initial.historyRestored && initial.sessionId == null) {
@@ -569,7 +684,7 @@ internal class ExternalAgentSessionController(
         uncheckpointedPrompt = ExternalAgentPendingPrompt(
             AgentPendingInput("plugin-input-$runId", prompt, delivery, agentId, initial.configuration?.currentModelId.orEmpty(), media = media),
             agentId, runId, initial.sessionId, initial.historyId, mode, initial.configuration?.currentModelId,
-            initial.configuration?.currentReasoningId, initial.configuration != null, media, mediaOwnerId,
+            initial.configuration?.currentReasoningId, initial.configuration != null, media, mediaOwnerId, journalRecord,
         )
         activeRun = ExternalAgentActiveRun(runId, agentId, initial.sessionId)
         activeBackend = host
@@ -601,6 +716,7 @@ internal class ExternalAgentSessionController(
                         savedTurn = true
                         // Preserve admission identity even if Stop/close suppresses presentation.
                         checkpointRunId = runId
+                        if (recoverySlot != null) checkNotNull(pendingStore).putSlot(recoverySlot, null)
                         if (uncheckpointedPrompt?.originRunId == runId) uncheckpointedPrompt = null
                         if (!closed && activeRun?.runId == runId) {
                             publishWindow(agentId, admitted, restored = false)
@@ -633,7 +749,10 @@ internal class ExternalAgentSessionController(
                     }
                 }
                 val result = try {
-                    if (history == null && uncheckpointedPrompt?.originRunId == runId) uncheckpointedPrompt = null
+                    if (history == null && uncheckpointedPrompt?.originRunId == runId) {
+                        check(recoverySlot == null) { "Durable plugin admission requires conversation history" }
+                        uncheckpointedPrompt = null
+                    }
                     foreground("${spec.displayName} task") {
                         requireAdmissionOpen()
                         host.runMediaTurn(agentId, prompt, media, this@ExternalAgentSessionController[agentId].historyId ?: mediaOwnerId,
@@ -1043,7 +1162,7 @@ internal class ExternalAgentSessionController(
     }
 
     private fun enqueue(host: WorkspaceAgentChatBackend, spec: WorkspaceAgentPluginSpec, prompt: String,
-                        mode: WorkspaceAgentMode, delivery: AgentPromptDelivery, media: List<ChatMediaRef>, mediaOwnerId: String?): Boolean {
+                        mode: WorkspaceAgentMode, delivery: AgentPromptDelivery, media: List<ChatMediaRef>, mediaOwnerId: String?, journalRecord: ExitDraftRecord?): Boolean {
         if (!canAcceptWhileRunning(spec.id)) return false
         val run = activeRun ?: return false
         val state = this[spec.id]
@@ -1054,7 +1173,7 @@ internal class ExternalAgentSessionController(
         val input = AgentPendingInput(id = "plugin-input-${runIds.getAndIncrement()}", text = prompt,
             delivery = delivery, providerId = spec.id, modelId = state.configuration?.currentModelId.orEmpty(), media = media)
         pendingPrompts = pendingPrompts + ExternalAgentPendingPrompt(input, spec.id, run.runId, state.sessionId,
-            state.historyId, mode, state.configuration?.currentModelId, state.configuration?.currentReasoningId, state.configuration != null, media, mediaOwnerId)
+            state.historyId, mode, state.configuration?.currentModelId, state.configuration?.currentReasoningId, state.configuration != null, media, mediaOwnerId, journalRecord)
         if (delivery == AgentPromptDelivery.STEER) requestSteerIfPending(host, run.runId, spec.id)
         return true
     }
@@ -1097,6 +1216,11 @@ internal class ExternalAgentSessionController(
 
     private fun promoteNext(host: WorkspaceAgentChatBackend, spec: WorkspaceAgentPluginSpec) {
         if (!admissionOpen() || pendingFinish != null) return
+        if (pendingRemovals.isNotEmpty()) {
+            // The just-completed run may promote a successor only after requested removals commit.
+            deferredPromotion = { promoteNext(host, spec) }
+            return
+        }
         val candidates = pendingPrompts.filter { it.agentId == spec.id }
         val next = candidates.firstOrNull { it.input.delivery == AgentPromptDelivery.STEER } ?: candidates.firstOrNull() ?: return
         val state = this[spec.id]
@@ -1106,6 +1230,6 @@ internal class ExternalAgentSessionController(
             return
         }
         pendingPrompts = pendingPrompts.filterNot { it.input.id == next.input.id }
-        if (!submit(host, spec, next.input.text, next.mode, media = next.media, mediaOwnerId = next.mediaOwnerId)) pendingPrompts = listOf(next) + pendingPrompts
+        if (!submit(host, spec, next.input.text, next.mode, media = next.media, mediaOwnerId = next.mediaOwnerId, journalRecord = next.journalRecord)) pendingPrompts = listOf(next) + pendingPrompts
     }
 }
