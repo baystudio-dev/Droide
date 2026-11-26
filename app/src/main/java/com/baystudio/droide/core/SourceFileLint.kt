@@ -61,12 +61,30 @@ internal object SourceFileLint {
             if (diagnostics.length) process.stderr.write(ts.formatDiagnostics(diagnostics, format));
             if (diagnostics.some(d => d.category === ts.DiagnosticCategory.Error)) process.exitCode = 2;
         };
-        const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, {
-            ...ts.sys, onUnRecoverableConfigFileDiagnostic: diagnostic => report([diagnostic])
-        });
-        if (!parsed) process.exit(2);
-        // TS18003 describes an empty project root set. This action supplies the open file explicitly.
-        report(parsed.errors.filter(diagnostic => diagnostic.code !== 18003));
+        const parseHost = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: diagnostic => report([diagnostic]) };
+        const rootProject = ts.getParsedCommandLineOfConfigFile(config, {}, parseHost);
+        if (!rootProject) process.exit(2);
+        function projectForFile(root) {
+            const pending = [root], seen = new Set([config]);
+            for (let i = 0; i < pending.length; i++) {
+                const project = pending[i];
+                if (project.fileNames.includes(file)) return project;
+                for (const ref of project.projectReferences || []) {
+                    const name = ts.resolveProjectReferencePath(ref);
+                    if (seen.has(name)) continue;
+                    seen.add(name);
+                    const child = ts.getParsedCommandLineOfConfigFile(name, {}, parseHost);
+                    if (child) pending.push(child);
+                }
+            }
+            return root; // An explicitly opened file can be outside every project's include list.
+        }
+        // An empty root set (TS18003) is allowed when explicitly checking an open file.
+        const reportConfig = project => report(project.errors.filter(diagnostic => diagnostic.code !== 18003));
+        reportConfig(rootProject);
+        if (process.exitCode) process.exit(process.exitCode);
+        const parsed = projectForFile(rootProject);
+        if (parsed !== rootProject) reportConfig(parsed);
         if (process.exitCode) process.exit(process.exitCode);
         if (!parsed.fileNames.includes(file)) console.log("Checking the selected file explicitly with " + config);
         const rootNames = Array.from(new Set([...parsed.fileNames, file]));

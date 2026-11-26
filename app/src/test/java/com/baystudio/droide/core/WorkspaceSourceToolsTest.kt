@@ -109,6 +109,34 @@ class WorkspaceSourceToolsTest {
         assertTrue(SourceFileLint.execute(shell, root, selected.name).output.contains("TS7006"))
     }
 
+    @Test fun typeCheckUsesOwningReferencedProjectBeforeAndAfterDeclarationBuild() = runBlocking {
+        val module = System.getenv("DROIDE_TEST_TYPESCRIPT_MODULE")?.let(::File)
+        org.junit.Assume.assumeTrue("Provide an installed TypeScript package", module?.resolve("package.json")?.isFile == true)
+        val root = temp.newFolder()
+        file(root, "tsconfig.json", """{"files":[],"references":[{"path":"./tsconfig.group.json"}]}""")
+        file(root, "tsconfig.group.json", """{"files":[],"references":[{"path":"./tsconfig.app.json"}]}""")
+        file(root, "tsconfig.app.json", """{"include":["src"],"compilerOptions":{"strict":true,"composite":true,"outDir":"dist"}}""")
+        val selected = "src/format.ts"
+        file(root, selected, "export function format(value) { return String(value) }")
+        Files.createSymbolicLink(root.resolve("node_modules").also { it.mkdir() }.resolve("typescript").toPath(), requireNotNull(module).toPath())
+        val shell = Shell(System.getenv("PATH"), root)
+        suspend fun checkError() {
+            val result = SourceFileLint.execute(shell, root, selected)
+            assertEquals(result.output, 2, result.exitCode)
+            assertTrue(result.output, result.output.contains("TS7006") && result.output.contains("format.ts"))
+        }
+        checkError()
+        val compiler = ProcessBuilder("node", module.resolve("bin/tsc").absolutePath, "--build")
+            .directory(root).redirectErrorStream(true).start()
+        val diagnostics = compiler.inputStream.bufferedReader().use { it.readText() }
+        assertNotEquals(0, compiler.waitFor())
+        assertTrue(diagnostics, diagnostics.contains("TS7006"))
+        assertTrue(root.resolve("dist/src/format.d.ts").isFile)
+        checkError()
+        root.resolve(selected).writeText("export function format(value: string) { return value }")
+        assertEquals(0, SourceFileLint.execute(shell, root, selected).exitCode)
+    }
+
     @Test fun goVetHandlesNestedModulesAndUsesSiblingDeclarations() = runBlocking {
         val go = System.getenv("DROIDE_TEST_GO_BIN")
         org.junit.Assume.assumeTrue("Provide a Go toolchain", go != null && File(go, "go").canExecute())
