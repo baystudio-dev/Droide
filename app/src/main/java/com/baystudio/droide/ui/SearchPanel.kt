@@ -35,9 +35,9 @@ fun SearchPanel(
     onOpen: (String, Int, Int) -> Unit = { _, _, _ -> },
 ) {
     val workspaceKey = files.root.absolutePath
-    var query by rememberSaveable(workspaceKey) { mutableStateOf("") }
-    var globQuery by rememberSaveable(workspaceKey) { mutableStateOf("**/*.py") }
-    var includeGlob by rememberSaveable(workspaceKey) { mutableStateOf("") }
+    var query by rememberSaveable(workspaceKey, stateSaver = SearchTextStateSaver) { mutableStateOf("") }
+    var globQuery by rememberSaveable(workspaceKey, stateSaver = SearchTextStateSaver) { mutableStateOf("**/*.py") }
+    var includeGlob by rememberSaveable(workspaceKey, stateSaver = SearchTextStateSaver) { mutableStateOf("") }
     var caseSensitive by rememberSaveable(workspaceKey) { mutableStateOf(false) }
     var wholeWord by rememberSaveable(workspaceKey) { mutableStateOf(false) }
     var results by remember(workspaceKey) { mutableStateOf<TextSearchPage?>(null) }

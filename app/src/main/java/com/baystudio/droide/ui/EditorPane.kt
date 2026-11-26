@@ -89,8 +89,8 @@ internal fun EditorPane(
     val accessoryModifiers = remember(workspaceKey, path) { AccessoryModifierController() }
     val accessoryFocusOwner = remember(workspaceKey, path) { accessoryInputFocus.owner(AccessoryInputTarget.EDITOR) }
     var showFind by rememberSaveable(workspaceKey, path) { mutableStateOf(false) }
-    var findQuery by rememberSaveable(workspaceKey, path) { mutableStateOf("") }
-    var replaceQuery by rememberSaveable(workspaceKey, path) { mutableStateOf("") }
+    var findQuery by rememberSaveable(workspaceKey, path, stateSaver = SearchTextStateSaver) { mutableStateOf("") }
+    var replaceQuery by rememberSaveable(workspaceKey, path, stateSaver = SearchTextStateSaver) { mutableStateOf("") }
     var findCount by remember(workspaceKey, path) { mutableIntStateOf(0) }
     var confirmReload by remember(workspaceKey, path) { mutableStateOf(false) }
     var lastAppliedRevision by remember(workspaceKey, path) { mutableIntStateOf(-1) }
@@ -452,11 +452,7 @@ internal fun EditorPane(
         if (findQuery.isEmpty()) return
         val cur = ed.cursor?.left ?: 0
         val idx = text.indexOf(findQuery, cur).let { if (it >= 0) it else text.indexOf(findQuery) }
-        if (idx != -1) {
-            
-            ed.setSelectionOffsets(idx, idx + findQuery.length)
-            ed.commitText(replaceQuery, false)
-        }
+        if (idx != -1) ed.replaceLiteralMatch(idx, findQuery.length, replaceQuery)
     }
     fun replaceAll() {
         if (!document.canEdit) { document.status = "Review Mode · replace is disabled"; return }

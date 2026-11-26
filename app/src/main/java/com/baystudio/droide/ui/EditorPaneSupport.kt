@@ -28,8 +28,15 @@ internal fun CodeEditor.setSelectionOffsets(startOffset: Int, endOffset: Int = s
 }
 
 
+/** Replace an explicit match literally, bypassing typing shortcuts and symbol pairing. */
+internal fun CodeEditor.replaceLiteralMatch(start: Int, length: Int, replacement: String) {
+    if (!isEditable) return
+    setSelectionOffsets(start, start + length)
+    commitText(replacement, false, false)
+}
+
 internal fun CodeEditor.replaceAllBounded(query: String, replacement: String, maxMatches: Int = 50_000): Int? {
-    if (query.isEmpty()) return 0
+    if (query.isEmpty() || !isEditable) return 0
     val source: CharSequence = text
     val matches = ArrayList<Int>()
     var from = 0
@@ -40,9 +47,14 @@ internal fun CodeEditor.replaceAllBounded(query: String, replacement: String, ma
         matches += idx
         from = idx + query.length
     }
-    for (idx in matches.asReversed()) {
-        setSelectionOffsets(idx, idx + query.length)
-        commitText(replacement, false)
+    if (matches.isEmpty()) return 0
+    text.beginBatchEdit()
+    try {
+        for (idx in matches.asReversed()) {
+            replaceLiteralMatch(idx, query.length, replacement)
+        }
+    } finally {
+        text.endBatchEdit()
     }
     return matches.size
 }
