@@ -1,6 +1,5 @@
 package com.baystudio.droide.core
 
-import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.io.File
@@ -13,7 +12,7 @@ import org.junit.Test
 class OwnedChatTransportTest {
     @Test fun multiMillionPrivateReasoningTinyToolProjectsPublicAndReplaysExactNative() = runBlocking {
         val root=Files.createTempDirectory("owned-private-large-").toFile()
-        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0);val requests=AtomicInteger()
+        val server=ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1",0),0);val requests=AtomicInteger()
         val chunk="private-".repeat(1024);val args="""{"path":"a.txt","note":"quote\" slash\\ newline\n 🌍"}"""
         var exactReplay=false
         server.createContext("/chat/completions") { e ->
@@ -23,7 +22,7 @@ class OwnedChatTransportTest {
                 val native=messages[0].jsonObject
                 exactReplay=native["reasoning_content"]!!.jsonPrimitive.content==chunk.repeat(260) && native["tool_calls"]!!.jsonArray[0].jsonObject["function"]!!.jsonObject["arguments"]!!.jsonPrimitive.content==args
             }
-            e.responseHeaders.add("Content-Type","text/event-stream");e.sendResponseHeaders(200,0)
+            e.responseHeaders.set("Content-Type","text/event-stream");e.sendResponseHeaders(200,0)
             e.responseBody.use{out ->
                 fun send(value:JsonObject){out.write(("data: "+value.toString()+"\n\n").toByteArray())}
                 fun event(delta:JsonObject,reason:String?=null)=buildJsonObject{put("choices",buildJsonArray{add(buildJsonObject{put("delta",delta);reason?.let{put("finish_reason",it)}})})}
@@ -55,11 +54,11 @@ class OwnedChatTransportTest {
     }
     @Test fun sameResponseBufferedSmallToolAndMislabeledSseRemainCompatible() = runBlocking {
         val root=Files.createTempDirectory("owned-compat-").toFile()
-        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0);val calls=AtomicInteger()
+        val server=ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1",0),0);val calls=AtomicInteger()
         val raw="""{"id":"buffered","choices":[{"message":{"role":"assistant","reasoning_content":"private","tool_calls":[{"id":"c","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":5}}"""
         server.createContext("/chat/completions") { e ->
             val n=calls.incrementAndGet();e.requestBody.use{it.readBytes()}
-            if(n<3)e.responseHeaders.add("Content-Type","application/json")
+            if(n<3)e.responseHeaders.set("Content-Type","application/json")
             val body=if(n==1)raw else "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
             e.sendResponseHeaders(200,0);e.responseBody.use{it.write(body.toByteArray())}
         };server.start()
@@ -100,14 +99,14 @@ class OwnedChatTransportTest {
     }
     @Test fun realLlmClientLargeArgumentsAndReplayThroughSecuredConfiguredLoopback() = runBlocking {
         val root=Files.createTempDirectory("owned-transport-").toFile()
-        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
+        val server=ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1",0),0)
         val requests=AtomicInteger();var replayBytes=0L;var firstRequest=""
         val chunk="x".repeat(8192)
         server.createContext("/v1/chat/completions") { exchange ->
             val number=requests.incrementAndGet(); var count=0L
             exchange.requestBody.use { input -> if(number==1){firstRequest=input.readBytes().toString(Charsets.UTF_8);count=firstRequest.toByteArray().size.toLong()}else{val b=ByteArray(8192);while(true){val n=input.read(b);if(n<0)break;count+=n}} }
             if(number==2) replayBytes=count
-            exchange.responseHeaders.add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0)
+            exchange.responseHeaders.set("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0)
             exchange.responseBody.use { out ->
                 fun send(s:String){out.write("data: $s\n\n".toByteArray());out.flush()}
                 fun args(s:String,first:Boolean=false){send(buildJsonObject{put("choices",buildJsonArray{add(buildJsonObject{put("delta",buildJsonObject{put("tool_calls",buildJsonArray{add(buildJsonObject{put("index",0);if(first)put("id","c");put("function",buildJsonObject{if(first)put("name","write_file");put("arguments",s)})})})})})})}.toString())}
@@ -155,11 +154,11 @@ class OwnedChatTransportTest {
     }
     @Test fun cancellationDuringBlockedRealResponseCancelsCallAndNeverRetries() = runBlocking {
         val root=Files.createTempDirectory("owned-stop-").toFile()
-        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
+        val server=ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1",0),0)
         val started=java.util.concurrent.CountDownLatch(1);val release=java.util.concurrent.CountDownLatch(1)
         val count=AtomicInteger();val recoveries=AtomicInteger();val received=java.util.concurrent.CountDownLatch(1)
         server.createContext("/chat/completions") { e ->
-            count.incrementAndGet();e.requestBody.use { it.readBytes() };e.responseHeaders.add("Content-Type","text/event-stream");e.sendResponseHeaders(200,0)
+            count.incrementAndGet();e.requestBody.use { it.readBytes() };e.responseHeaders.set("Content-Type","text/event-stream");e.sendResponseHeaders(200,0)
             try {e.responseBody.write("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n".toByteArray());e.responseBody.flush();started.countDown();release.await(10,java.util.concurrent.TimeUnit.SECONDS)}finally{e.close()}
         };server.start()
         val p=AiProvider("owned-stop","Stop","http://127.0.0.1:${server.address.port}","model",false,false,"","",authScheme=ProviderAuthScheme.NONE,networkScope=ProviderNetworkScope.LOOPBACK_ONLY)

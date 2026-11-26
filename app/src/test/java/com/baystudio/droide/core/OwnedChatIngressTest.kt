@@ -9,7 +9,6 @@ import okio.Timeout
 import okio.buffer
 import org.junit.Assert.*
 import org.junit.Test
-import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
@@ -44,10 +43,10 @@ class OwnedChatIngressTest {
         session.openPages(source.handle).use { pages -> buildString { while (true) append(pages.readPage() ?: break) } }
 
     @Test fun realHttpFragmentedLargeArgumentsReachTypedPlannerAndPreserveReplayMetadata() = fixture { c ->
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val server = ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val chunk = "0123456789abcdef".repeat(512)
         server.createContext("/chat") { exchange ->
-            exchange.responseHeaders.add("Content-Type", "text/event-stream; charset=utf-8")
+            exchange.responseHeaders.set("Content-Type", "text/event-stream; charset=utf-8")
             exchange.sendResponseHeaders(200, 0)
             exchange.responseBody.use { output ->
                 fun send(payload: String) {
@@ -205,9 +204,9 @@ class OwnedChatIngressTest {
 
     @Test fun realHttpCallCancellationInterruptsBlockedReadWithoutTypedCompletion() = fixture { c ->
         val release = java.util.concurrent.CountDownLatch(1)
-        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val server = ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/chat") { exchange ->
-            exchange.responseHeaders.add("Content-Type", "text/event-stream")
+            exchange.responseHeaders.set("Content-Type", "text/event-stream")
             exchange.sendResponseHeaders(200, 0)
             try {
                 exchange.responseBody.use { output ->

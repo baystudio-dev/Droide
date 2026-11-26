@@ -1,6 +1,5 @@
 package com.baystudio.droide.core
 
-import com.sun.net.httpserver.HttpServer
 import java.io.File
 import java.net.InetSocketAddress
 import java.nio.file.Files
@@ -14,7 +13,7 @@ class TypedChatCompactorTest {
     private fun entry(role:String,text:String)=TypedChatEntry.Legacy(buildJsonObject { put("role",role);put("content",text) })
     private class Fixture : AutoCloseable {
         val root=Files.createTempDirectory("typed-compact-").toFile()
-        val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),0)
+        val server=ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1",0),0)
         val requests=AtomicInteger()
         var received=""
         val bodies = java.util.concurrent.CopyOnWriteArrayList<String>()
@@ -38,7 +37,7 @@ class TypedChatCompactorTest {
                     exchange.responseBody.use { it.write(message) }
                     return@createContext
                 }
-                exchange.responseHeaders.add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0)
+                exchange.responseHeaders.set("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0)
                 exchange.responseBody.use { it.write(("data: $reply\n\ndata: [DONE]\n\n").toByteArray()) }
             };server.start()
             ProviderModelCertificationRegistry.certify(provider,listOf("model"));ModelContextRegistry.remember(provider.id,"model",64_000)
