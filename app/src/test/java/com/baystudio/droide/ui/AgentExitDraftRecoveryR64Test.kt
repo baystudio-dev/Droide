@@ -22,6 +22,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class AgentExitDraftRecoveryR64Test {
+    @org.junit.After fun settleSnapshotWrites() {
+        // Deliver pending Compose state notifications before Robolectric resets the main looper.
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    }
+
     @Test(timeout = 10_000) fun restoreCopiesAllTextKeepsBackendAndArchiveAndDoesNotSend() = fixture { f ->
         val record = ExitDraftRecord("codex", "old-session", "Preserve \uD83D\uDE80\n" + "x".repeat(60_000))
         f.store.preserve(listOf(record))

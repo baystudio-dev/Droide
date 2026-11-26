@@ -18,6 +18,11 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [35], manifest = Config.NONE)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ExternalPendingRecoveryTest {
+    @org.junit.After fun settleSnapshotWrites() {
+        // Deliver pending Compose state notifications before Robolectric resets the main looper.
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    }
+
     private val spec = WorkspaceAgentPluginCatalog.entries.first()
 
     private class Backend : WorkspaceAgentChatBackend {

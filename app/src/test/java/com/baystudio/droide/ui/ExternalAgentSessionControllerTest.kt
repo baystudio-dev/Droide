@@ -13,6 +13,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = android.app.Application::class, sdk = [35])
 class ExternalAgentSessionControllerTest {
+    @org.junit.After fun settleSnapshotWrites() {
+        // Deliver pending Compose state notifications before Robolectric resets the main looper.
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    }
+
     @Before fun admitExplicitUserLaunch() {
         ApplicationWorkAdmission.initialize(RuntimeEnvironment.getApplication())
         ApplicationWorkAdmission.reopenFromUser()
