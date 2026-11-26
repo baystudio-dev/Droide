@@ -36,6 +36,15 @@ suites=(
 test -f "$DROIDE_TEST_TYPESCRIPT_MODULE/package.json"
 test -x "$DROIDE_TEST_GO_BIN/go"
 command -v node >/dev/null
+
+# Host-side file publication uses the same JNI implementation with Linux headers.
+# Compile in the host-products directory, outside of the APK packaging inputs.
+host_jni="$product_directory/test-jni"
+mkdir -p "$host_jni"
+cc -O2 -fPIC -shared -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+    app/src/main/cpp/droide_files.c -o "$host_jni/libdroide_files.so"
+export LD_LIBRARY_PATH="$host_jni${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
 framework_args=()
 if [[ -n "${DROIDE_TEST_ROBOLECTRIC_DIR:-}" ]]; then
     framework_args+=("-Ddroide.robolectric.dir=$DROIDE_TEST_ROBOLECTRIC_DIR")
