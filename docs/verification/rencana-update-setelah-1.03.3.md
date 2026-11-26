@@ -1,6 +1,6 @@
 # Rencana perbaikan setelah Droide v1.03.3
 
-Basis kerja adalah commit rilis `f0fe4e64fa9c77bc8cec296e4939a40cf5a17312`, versi kode 50. Kandidat ini disiapkan untuk pengujian pengembang. Penentuan nomor dan publikasi rilis berikutnya dilakukan terpisah.
+Basis kerja adalah commit rilis `f0fe4e64fa9c77bc8cec296e4939a40cf5a17312`, versi kode 50. Kandidat privat v1.03.4 (kode 51) disiapkan untuk pengujian pengembang. [Catatan kandidat](../releases/1.03.4.md)
 
 | Urutan | Tanggung jawab | Bukti penerimaan |
 |---|---|---|

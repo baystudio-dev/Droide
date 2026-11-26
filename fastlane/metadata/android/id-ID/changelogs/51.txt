@@ -1,0 +1,1 @@
+Replace All mengganti kurung dan kutip secara literal dan dapat dibatalkan dengan satu Undo. Draf chat tersimpan per percakapan. Instruksi agen eksternal yang terputus dapat dipulihkan untuk ditinjau. Perbaikan juga mencakup pemilihan proyek TypeScript, Unicode pada terminal, respons streaming, pembacaan folder Android, dan unduhan Ubuntu opsional.

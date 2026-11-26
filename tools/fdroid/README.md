@@ -85,7 +85,8 @@ F-Droid packaging has been [requested](https://gitlab.com/fdroid/rfp/-/work_item
 | [Build from source](docs/distribution/fdroid.md) | Required tools, source export and the release build procedure |
 | [Architecture](docs/ARCHITECTURE.md) | Application structure and ownership boundaries |
 | [Testing](docs/TESTING.md) | Regression tests, dependency checks and verification scope |
-| [Release notes](docs/releases/1.03.3.md) | What changed in this release and how to upgrade |
+| [Published release notes](docs/releases/1.03.3.md) | Changes and upgrade instructions for the GitHub release |
+| [Private candidate notes](docs/releases/1.03.4.md) | Changes under test in version 1.03.4 (51) |
 
 This repository contains the complete source distribution for the GitHub release and the [F-Droid packaging recipe](tools/fdroid/com.baystudio.droide.yml). Application and native components build from corresponding source with locked, checksum-verified dependencies. Version metadata is defined in `app/build.gradle.kts`.
 

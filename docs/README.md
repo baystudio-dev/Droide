@@ -82,6 +82,7 @@ Generated build output, backup archives and signing credentials are not reposito
 
 ## Release assets and evidence
 
+- [Droide 1.03.4 private candidate notes](releases/1.03.4.md)
 - [Droide 1.03.3 release and upgrade guidance](releases/1.03.3.md)
 - [Droide 1.03.2 release and upgrade guidance](releases/1.03.2.md)
 - [Droide 1.03.1 release and upgrade guidance](releases/1.03.1.md)

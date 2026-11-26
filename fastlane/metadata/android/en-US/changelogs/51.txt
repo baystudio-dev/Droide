@@ -1,0 +1,1 @@
+Replace All handles brackets and quotes literally and can be undone in one step. Chat drafts follow their conversations. Interrupted external agent prompts can be recovered for review. Updates cover TypeScript project selection, Unicode in terminal output, streamed responses, Android folder reads and optional Ubuntu downloads.
