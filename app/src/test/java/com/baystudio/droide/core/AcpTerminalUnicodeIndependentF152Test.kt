@@ -144,6 +144,24 @@ class AcpTerminalUnicodeIndependentF152Test {
         }
     }
 
+    @Test(timeout = 35_000) fun smallRequestedCapsRetainOnlyCompleteUtf8WithinTheBudget() = fixture {
+        val ascii = "a".repeat(1024) + "b".repeat(1024)
+        val limited = capture(ascii.toByteArray(), cap = 1024)
+        assertEquals("b".repeat(1024), limited.text())
+        assertTrue(limited.truncated())
+
+        val payload = "A😀"
+        for (limit in 0..5) {
+            val result = capture(payload.toByteArray(), cap = limit, chunk = 1)
+            assertEquals("limit=$limit", suffixByCodePoint(payload, limit), result.text())
+            assertEquals(limit < 5, result.truncated())
+            assertEquals(0, result.code())
+        }
+        val empty = capture(byteArrayOf(), cap = 0)
+        assertEquals("", empty.text())
+        assertFalse(empty.truncated())
+    }
+
     @Test(timeout = 35_000) fun minimumCapPreservesExactSupplementaryTailAcrossOldCharBoundaries() = fixture {
         println("controllerOrigin=" + AcpTerminalController::class.java.protectionDomain.codeSource.location)
         println("decoderOrigin=" + Utf8StreamDecoder::class.java.protectionDomain.codeSource.location)

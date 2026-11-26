@@ -180,7 +180,7 @@ class TerminalSession(
         } },
         output = { text ->
             activity.observedOutput()
-            recording.append(text.toByteArray(Charsets.UTF_8))
+            recording.appendText(text)
             emit(Ansi.strip(directoryStream.consume(text)))
         },
         onFinished = { activity.closed(it) },
@@ -341,7 +341,7 @@ class TerminalSession(
                     }
                     catch (failure: Throwable) { recordCleanupFailure(failure); throw failure }
                 },
-                onOutput = { chunk -> recording.append(chunk.toByteArray(Charsets.UTF_8)); runCatching { onOutput(Ansi.strip(chunk)) } },
+                onOutput = { chunk -> recording.appendText(chunk); runCatching { onOutput(Ansi.strip(chunk)) } },
                 keepTail = true,
                 streamInput = streamInput,
                 onCleanupCompleted = { failure -> if (failure != null) recordCleanupFailure(failure) },

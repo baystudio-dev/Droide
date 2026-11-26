@@ -25,6 +25,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import okio.Buffer
 
 // Agents receive process semantics, never a free-form shell string.
 
@@ -43,7 +44,7 @@ internal class AcpTerminalController(
         val id: String,
         val process: HostedStdioProcess,
         val outputLimitBytes: Int,
-        val output: StringBuilder = StringBuilder(),
+        val output: Buffer = Buffer(),
         val lock: Any = Any(),
         @Volatile var truncated: Boolean = false,
         @Volatile var exitCode: Int? = null,
@@ -88,7 +89,7 @@ internal class AcpTerminalController(
         val cwd = params["cwd"]?.jsonPrimitive?.contentOrNull ?: mapper.remoteRoot
         val cwdLocal = mapper.remoteToLocal(cwd) ?: error("ACP terminal cwd escaped the workspace")
         val outputLimit = (params["outputByteLimit"]?.jsonPrimitive?.longOrNull ?: DEFAULT_OUTPUT_BYTES.toLong())
-            .coerceIn(MIN_OUTPUT_BYTES.toLong(), MAX_OUTPUT_BYTES.toLong()).toInt()
+            .coerceIn(0L, MAX_OUTPUT_BYTES.toLong()).toInt()
         val resolved = processHost.resolveExecutable(command) ?: error("ACP terminal executable '$command' is unavailable")
         val argv = listOf(resolved) + args
         ProcessSecurityPolicy.validateArgv(argv)
@@ -211,15 +212,16 @@ internal class AcpTerminalController(
     private val releasedPreviews = linkedMapOf<String, String>()
     fun preview(id: String): String? = synchronized(lifecycleLock) {
         terminals[id]?.let { session -> synchronized(session.lock) {
-            session.output.toString().takeLast(32_000) +
-                if (session.truncated || session.output.length > 32_000) "\n[Preview truncated]" else ""
+            val text = session.output.copy().readUtf8()
+            val start = terminalTextTailStart(text, 32_000)
+            text.substring(start) + if (session.truncated || start > 0) "\n[Preview truncated]" else ""
         } } ?: releasedPreviews[id]
     }
 
     fun output(params: JsonObject): JsonObject {
         val terminal = requireTerminal(params)
         val (snapshot, truncated, code) = synchronized(terminal.lock) {
-            Triple(terminal.output.toString(), terminal.truncated, terminal.exitCode)
+            Triple(terminal.output.copy().readUtf8(), terminal.truncated, terminal.exitCode)
         }
         return buildJsonObject {
             put("output", snapshot)
@@ -302,15 +304,18 @@ internal class AcpTerminalController(
         synchronized(session.lock) {
             // A cancelled blocking reader may wake late. Completion freezes the snapshot.
             if (session.exitCode != null) return
-            session.output.append(value)
-            val bytes = session.output.toString().toByteArray(Charsets.UTF_8)
-            if (bytes.size <= session.outputLimitBytes) return
+            if (session.outputLimitBytes == 0) {
+                session.truncated = true
+                return
+            }
+            val output = session.output
+            output.writeUtf8(value)
+            val excess = output.size - session.outputLimitBytes
+            if (excess <= 0) return
             session.truncated = true
-            val kept = bytes.copyOfRange(bytes.size - session.outputLimitBytes, bytes.size)
-            var start = 0
-            while (start < kept.size && (kept[start].toInt() and 0xC0) == 0x80) start++
-            session.output.setLength(0)
-            session.output.append(kept.copyOfRange(start, kept.size).toString(Charsets.UTF_8))
+            output.skip(excess)
+            // Both stream decoders emit complete scalars. Only the new leading edge can split one.
+            while (!output.exhausted() && (output[0].toInt() and 0xC0) == 0x80) output.skip(1)
         }
     }
 
@@ -330,7 +335,6 @@ internal class AcpTerminalController(
     override fun close() { cancelActive().getOrThrow() }
 
     private companion object {
-        const val MIN_OUTPUT_BYTES = 4 * 1024
         const val DEFAULT_OUTPUT_BYTES = 256 * 1024
         const val MAX_OUTPUT_BYTES = 1024 * 1024
         const val MAX_TERMINALS = 8

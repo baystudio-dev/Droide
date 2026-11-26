@@ -65,9 +65,21 @@ class TerminalOutputRecording(private val workspace: File, private val limitByte
         if (!mutable.value.active) return@synchronized
         require(count in 0..bytes.size)
         if (count == 0) return@synchronized
+        enqueue(current, count) { bytes.copyOf(count) }
+    }
+
+    internal fun appendText(text: String): Unit = synchronized(lock) {
+        val current = writer ?: return@synchronized
+        if (!mutable.value.active || text.isEmpty()) return@synchronized
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        enqueue(current, bytes.size) { bytes }
+    }
+
+    // Caller holds the lock through admission so bytes cannot move to a later recording.
+    private inline fun enqueue(current: Writer, count: Int, ownedBytes: () -> ByteArray) {
         val problem = when {
             count > 65536 || current.accepted + count > limitBytes -> "Recording stopped at its storage limit; later output was not recorded"
-            !current.queue.trySend(bytes.copyOf(count)).isSuccess -> "Recording incomplete: output exceeded the disk writer's queue"
+            !current.queue.trySend(ownedBytes()).isSuccess -> "Recording incomplete: output exceeded the disk writer's queue"
             else -> null
         }
         if (problem == null) current.accepted += count else {

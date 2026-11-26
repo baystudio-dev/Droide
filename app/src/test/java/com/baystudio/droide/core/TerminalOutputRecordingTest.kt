@@ -6,6 +6,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TerminalOutputRecordingTest {
+    @Test fun textRecordingIncludesOnlyActiveUtf8Output() = runBlocking {
+        val root = Files.createTempDirectory("terminal-recording-").toFile()
+        try {
+            val log = TerminalOutputRecording(root)
+            log.appendText("before")
+            assertTrue(root.listFiles()!!.isEmpty())
+            log.start()
+            val text = "café 😀\r\n"
+            log.appendText(text)
+            log.stop()
+            log.appendText("after")
+            withTimeout(5000) { log.awaitClosed() }
+            assertArrayEquals(text.toByteArray(Charsets.UTF_8), root.resolve(log.state.value.path!!).readBytes())
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
+
     @Test fun recordsBeyondScrollbackWithoutChangingBytesAndCopiesReusedBuffers() = runBlocking {
         val root = Files.createTempDirectory("terminal-recording-").toFile()
         try {
