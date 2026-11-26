@@ -19,7 +19,6 @@ class ProviderEventIdleTest {
      assertThrows(IllegalArgumentException::class.java){ProviderEndpointCatalog.parseWorkspaceConfig(config(value))}
  }
  @Test fun bodyReadRestoresTimeoutAndHonorsEarlierDeadlineEvenOnFailure() {
-   val method=LlmClient::class.java.getDeclaredMethod("readStreamLine",BufferedSource::class.java,ProviderStreamIdleGuard::class.java).apply{isAccessible=true}
    for(fail in listOf(false,true)) {
      val timeout=Timeout().timeout(12,TimeUnit.MILLISECONDS).deadlineNanoTime(System.nanoTime()+5_000_000_000L)
      val oldDeadline=timeout.deadlineNanoTime()
@@ -35,8 +34,8 @@ class ProviderEventIdleTest {
        }
      }
      upstream.buffer().use {source->
-       if(fail)assertThrows(java.lang.reflect.InvocationTargetException::class.java){method.invoke(LlmClient(),source,guard)}
-       else assertEquals("x",method.invoke(LlmClient(),source,guard))
+       if(fail)assertThrows(java.io.IOException::class.java){ProviderLineReader(source).readLine(guard)}
+       else assertEquals("x",ProviderLineReader(source).readLine(guard))
        assertEquals(oldDeadline,timeout.deadlineNanoTime())
        assertEquals(TimeUnit.MILLISECONDS.toNanos(12),timeout.timeoutNanos())
      }
@@ -45,6 +44,16 @@ class ProviderEventIdleTest {
  @Test(timeout=15000) fun metadataEventsKeepAllProtocolsAliveWithoutVisibleOutput() = runBlocking {
    for(protocol in ProviderWireProtocol.entries) fixture(protocol,Behavior.METADATA) { client,p,request ->
      val result=client.chatCompletionsStream(p.id,p.baseUrl,"",p.model,request){}
+     assertTrue(result.responseBody.contains("ok"))
+   }
+ }
+ @Test(timeout=15000) fun bomAndCrOnlyStreamsDeliverTheFirstDeltaAcrossProtocols() = runBlocking {
+   for (protocol in ProviderWireProtocol.entries) fixture(protocol, Behavior.BOM_CR) { client, provider, request ->
+     val text = StringBuilder()
+     val result = client.chatCompletionsStream(provider.id, provider.baseUrl, "", provider.model, request) {
+       if (it is LlmStreamEvent.TextDelta) text.append(it.text)
+     }
+     assertEquals(protocol.name, "ok", text.toString())
      assertTrue(result.responseBody.contains("ok"))
    }
  }
@@ -78,7 +87,7 @@ class ProviderEventIdleTest {
      assertTrue(result.responseBody.contains("ok"))
    }
  }
- private enum class Behavior { METADATA,COMMENTS,SILENT,HEARTBEATS,EMPTY_FLUSHES }
+ private enum class Behavior { METADATA,COMMENTS,SILENT,HEARTBEATS,EMPTY_FLUSHES,BOM_CR }
  private suspend fun fixture(protocol:ProviderWireProtocol,behavior:Behavior,block:suspend(LlmClient,AiProvider,String)->Unit) {
    val server=ProviderLoopbackServer.create(InetSocketAddress("127.0.0.1",0),0)
    val model=when(protocol){ProviderWireProtocol.OPENAI_RESPONSES->"gpt-5";ProviderWireProtocol.ANTHROPIC_MESSAGES->"claude-sonnet-4-5";ProviderWireProtocol.GOOGLE_GENERATE_CONTENT->"gemini-2.5-flash";else->"fixture"}
@@ -93,8 +102,14 @@ class ProviderEventIdleTest {
     ProviderWireProtocol.GOOGLE_GENERATE_CONTENT->event("""{"candidates":[{"finishReason":"STOP"}]}""")
    }
    server.createContext("/"){ex->try{
-     ex.requestBody.close();ex.responseHeaders.set("Content-Type","text/event-stream");ex.sendResponseHeaders(200,0)
+     ex.requestBody.close()
+     ex.responseHeaders.set("Content-Type", if (behavior == Behavior.BOM_CR) "application/octet-stream" else "text/event-stream")
+     ex.sendResponseHeaders(200,0)
      ex.responseBody.use{out->
+       if (behavior == Behavior.BOM_CR) {
+         out.write(("\uFEFF" + event(text) + finish).replace('\n', '\r').toByteArray())
+         return@use
+       }
        if(behavior==Behavior.SILENT) {out.flush();Thread.sleep(450)} else repeat(6){
          val chunk=when(behavior){
            Behavior.METADATA -> event(metadata)

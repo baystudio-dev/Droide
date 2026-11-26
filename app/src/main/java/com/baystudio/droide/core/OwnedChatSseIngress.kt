@@ -44,6 +44,7 @@ internal object OwnedChatSseIngress {
         checkCancelled: () -> Unit = {},
         progress: (OwnedChatStreamAccumulator.Progress) -> Unit = {},
     ): OwnedChatResult {
+        val lines = ProviderLineReader(source)
         val framing = ProviderSseFraming()
         val idle = ProviderStreamIdleGuard(idleMillis)
         fun dispatch(payload: String): Boolean {
@@ -55,7 +56,7 @@ internal object OwnedChatSseIngress {
         }
         while (true) {
             checkCancelled(); idle.check()
-            val line = readLine(source, idle)
+            val line = lines.readLine(idle)
             if (line == null) {
                 val last = framing.finish()
                 if (last != null && dispatch(last)) return accumulator.finishAtTransportEnd(OwnedChatStreamAccumulator.TransportEnd.DONE_MARKER)
@@ -66,24 +67,4 @@ internal object OwnedChatSseIngress {
             if (payload != null && dispatch(payload)) return accumulator.finishAtTransportEnd(OwnedChatStreamAccumulator.TransportEnd.DONE_MARKER)
         }
     }
-    private fun readLine(source: BufferedSource, idle: ProviderStreamIdleGuard): String? {
-        val timeout = source.timeout()
-        val hadDeadline = timeout.hasDeadline()
-        val previousDeadline = if (hadDeadline) timeout.deadlineNanoTime() else 0L
-        val previousTimeout = timeout.timeoutNanos()
-        val now = System.nanoTime()
-        val idleDeadline = idle.deadlineNanos()
-        val effective = if (hadDeadline && previousDeadline - now < idleDeadline - now) previousDeadline else idleDeadline
-        return try {
-            // Match the tested provider transport: body event-idle policy owns this read,
-            // while an earlier explicit caller deadline remains authoritative.
-            timeout.timeout(idle.timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
-            timeout.deadlineNanoTime(effective)
-            ProviderPayloadLimits.readLine(source)
-        } finally {
-            if (hadDeadline) timeout.deadlineNanoTime(previousDeadline) else timeout.clearDeadline()
-            timeout.timeout(previousTimeout, java.util.concurrent.TimeUnit.NANOSECONDS)
-        }
-    }
-
 }

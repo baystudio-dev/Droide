@@ -1,20 +1,8 @@
 package com.baystudio.droide.core
 
-import okio.BufferedSource
-
 /** Bound wire data before creating Strings or entering the recursive JSON parser. */
 internal object ProviderPayloadLimits {
     const val MAX_JSON_DEPTH = 128
-
-    fun readLine(source: BufferedSource, maxBytes: Int = LlmClient.MAX_RESPONSE_CHARS): String? {
-        require(maxBytes > 0)
-        val newline = source.indexOf('\n'.code.toByte(), 0, maxBytes.toLong() + 1)
-        if (newline >= 0) return source.readUtf8LineStrict(newline)
-        // indexOf reads at most the bounded prefix plus an Okio segment. Never call an
-        // unbounded readUtf8Line: a server can otherwise send an endless line and OOM.
-        check(source.buffer.size <= maxBytes) { "Provider response line exceeds the mobile response capacity" }
-        return if (source.buffer.size == 0L) null else source.readUtf8()
-    }
 
     /** Bounds all direct decoder entry points, including string-encoded tool arguments. */
     fun checkedJson(text: String, maxChars: Int = LlmClient.MAX_RESPONSE_CHARS): String {

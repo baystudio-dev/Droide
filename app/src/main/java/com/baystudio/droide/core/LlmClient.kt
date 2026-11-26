@@ -268,9 +268,9 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                     val accumulator = OwnedChatStreamAccumulator(responseSession, callSession, replayTarget, json, checkCancelled)
                     var primaryFailure: Exception? = null
                     try {
-                        val source = requireNotNull(response.body?.source()) { "Empty provider stream response" }
+                        val lines = ProviderLineReader(requireNotNull(response.body?.source()) { "Empty provider stream response" })
                         val idle = ProviderStreamIdleGuard(ProviderStreamPolicy.idleTimeoutMillis(provider))
-                        val first = readStreamLine(source, idle) ?: error("Empty provider stream response")
+                        val first = lines.readLine(idle) ?: error("Empty provider stream response")
                         var done = false
                         val emittedToolNames = mutableMapOf<Int, String>()
                         suspend fun accept(payload: String) {
@@ -291,7 +291,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                             val buffered=StringBuilder(first)
                             while(true) {
                                 checkCancelled()
-                                val line=readStreamLine(source,idle) ?: break
+                                val line=lines.readLine(idle) ?: break
                                 require(buffered.length.toLong()+1+line.length <= MAX_RESPONSE_CHARS) { "Buffered provider response exceeds the bounded compatibility limit" }
                                 buffered.append('\n').append(line)
                             }
@@ -299,7 +299,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                             progress.observe(spec.protocol,raw,buffered=true)
                             accept(OwnedChatBufferedCompatibility.event(raw,json))
                         } else {
-                            readSsePayloads(source, first, idle) { payload ->
+                            readSsePayloads(lines, first, idle) { payload ->
                                 progress.observe(spec.protocol, payload)
                                 accept(payload)
                                 done = payload.trim() == "[DONE]"; done
@@ -345,19 +345,19 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
             }
-            val source = response.body?.source() ?: throw IllegalStateException("Empty provider stream response")
+            val lines = ProviderLineReader(response.body?.source() ?: throw IllegalStateException("Empty provider stream response"))
 
             
 
             val streamIdle = ProviderStreamIdleGuard(ProviderStreamPolicy.idleTimeoutMillis(provider))
-            val firstLine = readStreamLine(source, streamIdle) ?: throw IllegalStateException("Empty provider stream response")
+            val firstLine = lines.readLine(streamIdle) ?: throw IllegalStateException("Empty provider stream response")
             var streamedChars = firstLine.length
             check(streamedChars <= MAX_RESPONSE_CHARS) { "LLM streamed response is too large" }
             val eventStream = isEventStream(firstLine, response.header("Content-Type"))
             if (!eventStream) {
                 val remainder = StringBuilder(firstLine)
                 while (true) {
-                    val line = ProviderPayloadLimits.readLine(source) ?: break
+                    val line = lines.readLine() ?: break
                     streamedChars += line.length + 1
                     if (streamedChars > MAX_RESPONSE_CHARS) throw IllegalStateException("LLM response is too large")
                     remainder.append('\n').append(line)
@@ -374,7 +374,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             }
 
             val accumulator = OpenAiChatStreamAccumulator(json)
-            readSsePayloads(source, firstLine, streamIdle) { payload ->
+            readSsePayloads(lines, firstLine, streamIdle) { payload ->
                 progress.observe(ProviderWireProtocol.OPENAI_CHAT_COMPLETIONS, payload)
                 if (payload.trim() == "[DONE]") true else {
                     accumulator.accept(payload).forEach { progress.emit(it, onEvent) }
@@ -408,9 +408,9 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
             }
-            val source = response.body?.source() ?: throw IllegalStateException("Empty OpenAI Responses response")
+            val lines = ProviderLineReader(response.body?.source() ?: throw IllegalStateException("Empty OpenAI Responses response"))
             val streamIdle = ProviderStreamIdleGuard(ProviderStreamPolicy.idleTimeoutMillis(provider))
-            val firstLine = readStreamLine(source, streamIdle) ?: throw IllegalStateException("Empty OpenAI Responses response")
+            val firstLine = lines.readLine(streamIdle) ?: throw IllegalStateException("Empty OpenAI Responses response")
             var streamedChars = firstLine.length + 1
             if (streamedChars > MAX_RESPONSE_CHARS) throw IllegalStateException("LLM streamed response is too large")
             val eventStream = firstLine.startsWith("event:") || firstLine.startsWith("data:") ||
@@ -418,7 +418,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             if (!eventStream) {
                 val remainder = StringBuilder(firstLine)
                 while (true) {
-                    val line = ProviderPayloadLimits.readLine(source) ?: break
+                    val line = lines.readLine() ?: break
                     streamedChars += line.length + 1
                     if (streamedChars > MAX_RESPONSE_CHARS) throw IllegalStateException("LLM response is too large")
                     remainder.append('\n').append(line)
@@ -434,7 +434,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             }
 
             val accumulator = OpenAiResponsesAdapter.StreamAccumulator(json)
-            readSsePayloads(source, firstLine, streamIdle) { payload ->
+            readSsePayloads(lines, firstLine, streamIdle) { payload ->
                 if (payload.trim() == "[DONE]") false else {
                     progress.observe(ProviderWireProtocol.OPENAI_RESPONSES, payload)
                     accumulator.accept(payload).forEach { progress.emit(it, onEvent) }
@@ -470,16 +470,16 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
             }
-            val source = response.body?.source() ?: throw IllegalStateException("Empty provider stream response")
+            val lines = ProviderLineReader(response.body?.source() ?: throw IllegalStateException("Empty provider stream response"))
             val streamIdle = ProviderStreamIdleGuard(ProviderStreamPolicy.idleTimeoutMillis(provider))
-            val firstLine = readStreamLine(source, streamIdle) ?: throw IllegalStateException("Empty provider stream response")
+            val firstLine = lines.readLine(streamIdle) ?: throw IllegalStateException("Empty provider stream response")
             var streamedChars = firstLine.length
             check(streamedChars <= MAX_RESPONSE_CHARS) { "LLM streamed response is too large" }
             val eventStream = isEventStream(firstLine, response.header("Content-Type"))
             if (!eventStream) {
                 val remainder = StringBuilder(firstLine)
                 while (true) {
-                    val line = ProviderPayloadLimits.readLine(source) ?: break
+                    val line = lines.readLine() ?: break
                     streamedChars += line.length + 1
                     if (streamedChars > MAX_RESPONSE_CHARS) throw IllegalStateException("LLM response is too large")
                     remainder.append('\n').append(line)
@@ -496,7 +496,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
 
             val accumulator = AnthropicMessagesAdapter.StreamAccumulator(json)
             var stopped = false
-            readSsePayloads(source, firstLine, streamIdle) { payload ->
+            readSsePayloads(lines, firstLine, streamIdle) { payload ->
                 progress.observe(ProviderWireProtocol.ANTHROPIC_MESSAGES, payload)
                 accumulator.accept(payload).forEach { progress.emit(it, onEvent) }
                 val type = json.parseToJsonElement(payload).jsonObject["type"]?.jsonPrimitive?.contentOrNull
@@ -532,16 +532,16 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
             }
-            val source = response.body?.source() ?: throw IllegalStateException("Empty provider stream response")
+            val lines = ProviderLineReader(response.body?.source() ?: throw IllegalStateException("Empty provider stream response"))
             val streamIdle = ProviderStreamIdleGuard(ProviderStreamPolicy.idleTimeoutMillis(provider))
-            val firstLine = readStreamLine(source, streamIdle) ?: throw IllegalStateException("Empty provider stream response")
+            val firstLine = lines.readLine(streamIdle) ?: throw IllegalStateException("Empty provider stream response")
             var streamedChars = firstLine.length
             check(streamedChars <= MAX_RESPONSE_CHARS) { "LLM streamed response is too large" }
             val eventStream = isEventStream(firstLine, response.header("Content-Type"))
             if (!eventStream) {
                 val remainder = StringBuilder(firstLine)
                 while (true) {
-                    val line = ProviderPayloadLimits.readLine(source) ?: break
+                    val line = lines.readLine() ?: break
                     streamedChars += line.length + 1
                     if (streamedChars > MAX_RESPONSE_CHARS) throw IllegalStateException("LLM response is too large")
                     remainder.append('\n').append(line)
@@ -563,7 +563,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             }
             val accumulator = GoogleGenerateContentAdapter.StreamAccumulator(json)
             var terminal: String? = null
-            readSsePayloads(source, firstLine, streamIdle) { payload ->
+            readSsePayloads(lines, firstLine, streamIdle) { payload ->
                 progress.observe(ProviderWireProtocol.GOOGLE_GENERATE_CONTENT, payload)
                 val root = json.parseToJsonElement(payload) as? JsonObject
                     ?: throw IllegalStateException("Invalid Google SSE JSON")
@@ -584,7 +584,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             contentType.orEmpty().contains("text/event-stream", ignoreCase = true)
 
     private suspend fun readSsePayloads(
-        source: BufferedSource,
+        lines: ProviderLineReader,
         firstLine: String,
         idle: ProviderStreamIdleGuard,
         consume: suspend (String) -> Boolean,
@@ -608,34 +608,12 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         while (!done) {
             currentCoroutineContext().ensureActive()
             idle.check()
-            val next = readStreamLine(source, idle)
+            val next = lines.readLine(idle)
             if (next == null) {
                 dispatch(framing.finish())
                 break
             }
             done = line(next)
-        }
-    }
-
-    private fun readStreamLine(source: BufferedSource, idle: ProviderStreamIdleGuard): String? {
-        idle.check()
-        // Do not give partial/comment traffic another full socket timeout.
-        val timeout = source.timeout()
-        val hadDeadline = timeout.hasDeadline()
-        val oldDeadline = if (hadDeadline) timeout.deadlineNanoTime() else 0L
-        val remainingDeadline = idle.deadlineNanos()
-        val oldReadTimeout = timeout.timeoutNanos()
-        val now = System.nanoTime()
-        val effectiveDeadline = if (hadDeadline && oldDeadline - now < remainingDeadline - now) oldDeadline else remainingDeadline
-        return try {
-            // A configured longer idle window must not be preempted by the client's inherited shorter body read
-            // timeout. Headers still use the existing client timeout; this override owns only body reads.
-            timeout.timeout(idle.timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
-            timeout.deadlineNanoTime(effectiveDeadline)
-            ProviderPayloadLimits.readLine(source)
-        } finally {
-            if (hadDeadline) timeout.deadlineNanoTime(oldDeadline) else timeout.clearDeadline()
-            timeout.timeout(oldReadTimeout, java.util.concurrent.TimeUnit.NANOSECONDS)
         }
     }
 
@@ -671,7 +649,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         choice?.get("message")?.jsonObject?.get("content")?.jsonPrimitive?.contentOrNull.orEmpty()
     }.getOrDefault("")
 
-    private fun readBoundedBody(source: okio.BufferedSource?): String {
+    private fun readBoundedBody(source: BufferedSource?): String {
         if (source == null) return ""
         source.request(MAX_RESPONSE_CHARS.toLong() + 1L)
         if (source.buffer.size > MAX_RESPONSE_CHARS) throw IllegalStateException("LLM response is too large")
