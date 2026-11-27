@@ -2,6 +2,7 @@ package com.baystudio.droide.ui
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.compose.foundation.Image
@@ -12,9 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -36,13 +36,17 @@ internal fun DonationQrCard() {
     val scope = rememberCoroutineScope()
     var saveState by remember { mutableStateOf(QrSaveState.READY) }
     val recipient = stringResource(R.string.settings_qris_merchant)
+    val resources = context.resources
+    val qr = remember(resources) {
+        resources.openRawResource(R.raw.donation_qris).use { BitmapFactory.decodeStream(it).asImageBitmap() }
+    }
 
     Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.settings_qris_title), style = MaterialTheme.typography.titleMedium)
         OutlinedCard(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 272.dp).fillMaxWidth()) {
             Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Image(
-                    bitmap = ImageBitmap.imageResource(R.drawable.donation_qris),
+                    bitmap = qr,
                     contentDescription = stringResource(R.string.settings_qris_image, recipient),
                     modifier = Modifier.fillMaxWidth().aspectRatio(1f),
                     filterQuality = FilterQuality.None,
@@ -93,7 +97,7 @@ internal suspend fun saveDonationQrToGallery(context: Context) = withContext(Dis
     try {
         val stream = resolver.openOutputStream(uri, "w") ?: throw IOException("Cannot open gallery image")
         stream.use { output ->
-            context.resources.openRawResource(R.drawable.donation_qris).use { input -> input.copyTo(output) }
+            context.resources.openRawResource(R.raw.donation_qris).use { input -> input.copyTo(output) }
         }
         currentCoroutineContext().ensureActive()
         val ready = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }

@@ -33,7 +33,7 @@ class SettingsDonationGalleryTest {
         saveDonationQrToGallery(app)
         assertEquals(1, store.deletes)
         assertEquals(1, store.published)
-        val packaged = app.resources.openRawResource(R.drawable.donation_qris).use { it.readBytes() }
+        val packaged = app.resources.openRawResource(R.raw.donation_qris).use { it.readBytes() }
         assertArrayEquals(packaged, store.bytes.toByteArray())
     }
 
