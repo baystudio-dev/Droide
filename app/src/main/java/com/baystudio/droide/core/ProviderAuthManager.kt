@@ -42,7 +42,7 @@ object ProviderAuthManager {
                 val builder = Request.Builder().url(target.url).addHeader("Accept", "application/json")
                 ProviderTransportV2.applyAuth(builder, provider, apiKey)
                 val req = ProviderRequestAuthorizer.authorize(builder.get().build(), provider, apiKey)
-                client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req).awaitResponse().use { response ->
+                target.newProviderCall(client, req).awaitResponse().use { response ->
                     val responseLimit = if (ProviderModelCatalog.limit(provider) > ProviderModelCatalog.DEFAULT_LIMIT)
                         ProviderModelCatalog.GATEWAY_RESPONSE_BYTES else MAX_MODEL_RESPONSE_BYTES
                     val body = boundedBody(response, responseLimit)

@@ -139,7 +139,8 @@ Useful routes:
 - **Performance & Storage → Capability Health**: inspect runtime/toolchain readiness.
 - **Notifications → Android notification settings**: Android controls notification visibility.
 - **Accounts & Services**: connect GitHub, grant repository access, reconnect, or disconnect.
-- **About & Legal**: installed version, licenses, official links, and support.
+- **About & Legal** shows the installed version, licenses, official links, and support.
+- **About & Legal → Support Droide** offers voluntary donations. Open the Bayyy page on SociaBuzz or scan the QRIS for Baystudio, Konter. **Save QRIS to gallery** lets you use the payment app on the same phone.
 
 **Landscape and keyboard behavior**
 Landscape uses a desktop-style workbench: editor in the center, optional sidebar and Agent panel beside it. Either or both side panels can be open; the editor uses the remaining width. Editor focus with the keyboard can reclaim header space. Terminal input can expand over the editor/header and offers an X control to restore its previous position. Typing in chat should keep the chat panel's size stable. Report which surface held focus when a resize problem occurred; keyboard visibility alone does not identify the input owner. Portrait keeps its own arrangement.
@@ -703,7 +704,7 @@ For a blank/local page, check that the server is still running in the intended e
 ## 27. Set up 9Router
 
 1. Open **Settings → Providers & Models → Manage providers → 9Router**.
-2. Enter your instance's address in **API base URL**. If the server runs on this device, the preset is `http://127.0.0.1:20128/v1`. A hosted instance uses its HTTPS URL. The preset accepts the base URL, models endpoint or chat-completions endpoint.
+2. Enter your instance's address in **API base URL**. Use `http://127.0.0.1:20128/v1` on this device or the server's private IPv4 address and port on a trusted LAN. HTTP sends the API key and chat unencrypted. Use HTTPS for a public server. The preset accepts the base URL, models endpoint or chat-completions endpoint.
 3. Set **Requires API key** according to that server, then choose **Save & connect**. Enter the key in Droide when prompted and validate the connection.
 4. Choose a model or combo by its full ID, including any prefix shown. Refresh models after changing the server's routes. Tool support, vision, reasoning and context limits depend on the selected route.
 

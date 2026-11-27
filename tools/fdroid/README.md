@@ -12,13 +12,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/baystudio-dev/Droide/releases/tag/v1.03.3"><img src="https://img.shields.io/badge/release-1.03.3-076BFD?style=flat-square" alt="Release 1.03.3"></a>
+  <a href="https://github.com/baystudio-dev/Droide/releases/tag/v1.03.5"><img src="https://img.shields.io/badge/release-1.03.5-076BFD?style=flat-square" alt="Release 1.03.5"></a>
   <a href="#get-started"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?style=flat-square" alt="Android 10 or newer"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-LGPL--3.0--only-555555?style=flat-square" alt="License: LGPL-3.0-only"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/baystudio-dev/Droide/releases/tag/v1.03.3"><strong>Download 1.03.3</strong></a> ·
+  <a href="https://github.com/baystudio-dev/Droide/releases/tag/v1.03.5"><strong>Download 1.03.5</strong></a> ·
+  <a href="https://droide-android-demo.aarie437.chatgpt.site/">Watch the demo</a> ·
   <a href="docs/README.md">Documentation</a> ·
   <a href="https://droide.rekacipta.biz.id">Website</a> ·
   <a href="https://github.com/baystudio-dev/Droide/issues">Report a bug</a>
@@ -65,7 +66,7 @@ Select a screenshot to view it at full size.
 
 ## Get started
 
-1. **Install Droide.** Download the production APK from [GitHub Releases](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.3). Android 10 or newer is required; the Ubuntu environment requires ARM64.
+1. **Install Droide.** Download the production APK from [GitHub Releases](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.5). Android 10 or newer is required; the Ubuntu environment requires ARM64.
 2. **Open a project.** Create or import a project. Choose **Install environment** when you need Linux tools, or **Not now** to start editing without setup.
 3. **Configure development tools.** Install language services and toolchains on demand. Configure an AI provider or external agent if needed.
 
@@ -73,7 +74,7 @@ The first Ubuntu download is approximately 30 MB and comes from Canonical after 
 
 For Android storage, see the [shared-file and Android Files guide](docs/releases/1.02.md#changes). Shared-file access requires Android 11 or newer and an explicit permission grant. Android 10 supports the file picker and export workflows.
 
-The GitHub 1.03.3 APK uses the original production signing identity. Install it over an existing GitHub production release to retain application data. Read the [upgrade guidance](docs/releases/1.03.3.md#download-and-upgrade) before switching from a test APK or another distribution.
+Install the official 1.03.5 APK over the GitHub 1.03.4 production build to keep your projects and app data. The release page includes the signing certificate and APK checksum. [1.03.5 release notes](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.5) · [Upgrade guidance](docs/releases/1.03.5.md#download-and-upgrade)
 
 F-Droid packaging has been [requested](https://gitlab.com/fdroid/rfp/-/work_items/4776). Availability depends on its independent build and review process.
 
@@ -85,8 +86,9 @@ F-Droid packaging has been [requested](https://gitlab.com/fdroid/rfp/-/work_item
 | [Build from source](docs/distribution/fdroid.md) | Required tools, source export and the release build procedure |
 | [Architecture](docs/ARCHITECTURE.md) | Application structure and ownership boundaries |
 | [Testing](docs/TESTING.md) | Regression tests, dependency checks and verification scope |
-| [Published release notes](docs/releases/1.03.3.md) | Changes and upgrade instructions for the GitHub release |
-| [Private candidate notes](docs/releases/1.03.4.md) | Changes under test in version 1.03.4 (51) |
+| [Droide 1.03.5 release notes](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.5) | Changes, APK download and verification for the current release |
+| [Droide 1.03.4 release notes](docs/releases/1.03.4.md) | Changes and upgrade guidance for the previous release |
+| [Droide 1.03.3 release notes](docs/releases/1.03.3.md) | Changes and upgrade guidance for version 1.03.3 |
 
 This repository contains the complete source distribution for the GitHub release and the [F-Droid packaging recipe](tools/fdroid/com.baystudio.droide.yml). Application and native components build from corresponding source with locked, checksum-verified dependencies. Version metadata is defined in `app/build.gradle.kts`.
 

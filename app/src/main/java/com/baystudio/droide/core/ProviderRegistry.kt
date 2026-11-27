@@ -23,7 +23,7 @@ enum class ProviderAuthScheme {
     GITHUB_COPILOT,
 }
 
-enum class ProviderNetworkScope { PUBLIC_HTTPS, LOOPBACK_ONLY }
+enum class ProviderNetworkScope { PUBLIC_HTTPS, LOOPBACK_ONLY, NINE_ROUTER_LAN }
 
 data class AiProvider(
     val id: String,
@@ -152,6 +152,7 @@ object ProviderRegistry {
                         when (provider.networkScope) {
                             ProviderNetworkScope.PUBLIC_HTTPS -> uri.scheme.equals("https", true)
                             ProviderNetworkScope.LOOPBACK_ONLY -> uri.scheme.equals("http", true) || uri.scheme.equals("https", true)
+                            ProviderNetworkScope.NINE_ROUTER_LAN -> false
                         }
                     }.getOrDefault(false)
             }

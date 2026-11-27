@@ -160,7 +160,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
             val unsigned = builder.post(policyOwnedRequestBody(requestBody)).build()
             val req = ProviderRequestAuthorizer.authorize(unsigned, provider, apiKey)
             val execute: suspend () -> String = {
-                client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
+                target.newProviderCall(client, req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
                     if (!response.isSuccessful) {
                         val errorBody = readBoundedBody(response.body?.source())
                         throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
@@ -262,7 +262,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         ProviderTransportV2.applyAuth(builder, provider, apiKey)
         val req = ProviderRequestAuthorizer.authorize(builder.post(requestBody).build(), provider, apiKey)
         ProviderRetryPolicy.beforeStreamingEvents(onEvent) { safeEvent ->
-            client.newBuilder().dns(NetworkSecurity.pinnedDns(networkTarget)).build().newCall(req.withPolicyRetryHeader())
+            networkTarget.newProviderCall(client, req.withPolicyRetryHeader())
                 .withProviderResponse(req, apiKey, provider.id) { response, progress ->
                     if (!response.isSuccessful) throw httpFailure(response.code, readBoundedBody(response.body?.source()), req, retryAfter(response), response.header("retry-after-ms"))
                     val accumulator = OwnedChatStreamAccumulator(responseSession, callSession, replayTarget, json, checkCancelled)
@@ -340,7 +340,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         val unsigned = builder.post(policyOwnedRequestBody(requestBody)).build()
         val req = ProviderRequestAuthorizer.authorize(unsigned, provider, apiKey)
 
-        return client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
+        return target.newProviderCall(client, req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
             if (!response.isSuccessful) {
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
@@ -403,7 +403,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         ProviderTransportV2.applyAuth(builder, provider, apiKey)
         val unsigned = builder.post(policyOwnedRequestBody(requestBody)).build()
         val req = ProviderRequestAuthorizer.authorize(unsigned, provider, apiKey)
-        return client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
+        return target.newProviderCall(client, req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
             if (!response.isSuccessful) {
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
@@ -465,7 +465,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         val unsigned = builder.post(policyOwnedRequestBody(requestBody)).build()
         val req = ProviderRequestAuthorizer.authorize(unsigned, provider, apiKey)
 
-        return client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
+        return target.newProviderCall(client, req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
             if (!response.isSuccessful) {
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))
@@ -527,7 +527,7 @@ class LlmClient(private val providerConfiguration: ProviderRegistry.ConfiguredSn
         ProviderTransportV2.applyAuth(builder, provider, apiKey)
         val unsigned = builder.post(policyOwnedRequestBody(requestBody)).build()
         val req = ProviderRequestAuthorizer.authorize(unsigned, provider, apiKey)
-        return client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
+        return target.newProviderCall(client, req.withPolicyRetryHeader()).withProviderResponse(req, apiKey, provider.id) { response, progress ->
             if (!response.isSuccessful) {
                 val errorBody = readBoundedBody(response.body?.source())
                 throw httpFailure(response.code, errorBody, req, retryAfter(response), response.header("retry-after-ms"))

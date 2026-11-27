@@ -88,7 +88,7 @@ internal class AgentAudioTranscription(private val transport: Transport = HttpTr
             }.build()
         override suspend fun execute(provider: AiProvider, request: Request): Pair<Int, ByteArray> {
             val target = NetworkSecurity.validateProviderTarget(provider, request.url.toString())
-            return client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(request).withCancellableResponse { response ->
+            return target.newProviderCall(client, request).withCancellableResponse { response ->
                 if (!response.isSuccessful) response.code to ByteArray(0) else {
                     val source = requireNotNull(response.body?.source()) { "Empty speech response" }
                     source.request(MAX_RESPONSE + 1L); require(source.buffer.size <= MAX_RESPONSE)

@@ -10,11 +10,11 @@ This configuration does not establish F-Droid acceptance. The official applicati
 
 ## Published release and packaging recipe
 
-The GitHub release tag `v1.03.3` and packaging tag `v1.03.3-fdroid` identify the same application source. The signed APK is `Droide-1.03.3-release.apk`, version 1.03.3 (50). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.3)
+The GitHub release tag `v1.03.5` and packaging tag `v1.03.5-fdroid` identify the same application source. The signed APK is `Droide-1.03.5-release.apk`, version 1.03.5 (52). [GitHub release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.5)
 
 For the historical 1.02 release, `v1.02` and `v1.02-fdroid` identify commit `ad75df7763aa6458b0c102818b891e0898af3a58`.
 
-The [current recipe](../../tools/fdroid/com.baystudio.droide.yml) is maintained independently of those immutable tags. Use that recipe for the packaging submission; do not move an existing release tag to update metadata. Its `Binaries` URL identifies each version's signed release, while `AllowedAPKSigningKeys` restricts the accepted certificate. The recipe in this checkout prepares the private candidate 1.03.4 (51) for a future packaging tag. For verification of a published version, use the recipe from its own tag. The commands below use the published 1.03.3 tag, which includes the recipe for version code 50.
+Use the recipe from the tag of the release you are verifying. Its `Binaries` URL identifies the signed APK for that version. `AllowedAPKSigningKeys` pins the production certificate. The commands below verify version 1.03.5 with version code 52. [Packaging recipe](../../tools/fdroid/com.baystudio.droide.yml)
 
 Local and independent GitHub CI builds of the 1.02 commit produced the same raw unsigned APK. That alone does not prove upstream-signature compatibility. Android Build Tools 36 changed ZIP alignment padding during signing, so the recipe normalizes the rebuilt APK before F-Droid copies and verifies the existing signature. No application entry is replaced with data from the upstream APK.
 
@@ -25,12 +25,12 @@ The normalization tool is fetched by F-Droid as `reproducible-apk-tools@ca728486
 For a byte-identical rebuild, check out the exact tag with its Git metadata before following the [source-build procedure](fdroid.md#build).
 
 ```sh
-git clone --branch v1.03.3 --depth 1 https://github.com/baystudio-dev/Droide.git
+git clone --branch v1.03.5 --depth 1 https://github.com/baystudio-dev/Droide.git
 cd Droide
 git rev-parse HEAD
 ```
 
-For v1.03.3 the commit is `f0fe4e64fa9c77bc8cec296e4939a40cf5a17312`. The official source ZIP also builds. Android Gradle Plugin embeds the Git revision in `META-INF/version-control-info.textproto` when the checkout has Git metadata. The ZIP-only rebuild of v1.03.3 produced 1,651 identical application entries out of 1,652, with this metadata entry accounting for the difference.
+Compare the reported revision with the release attachment `VERIFICATION-SUMMARY.json`. Android Gradle Plugin embeds the Git revision in `META-INF/version-control-info.textproto`. Keep the Git checkout when reproducing the published APK byte for byte. The official source ZIP also contains the buildable source tree.
 
 Obtain the signed APK from the corresponding public release. In a separate host environment, install `fdroidserver==2.4.5`; the verifier also requires Android SDK `apksigner` and Java. Keep these tools outside the source export.
 
@@ -46,10 +46,10 @@ Use the current repository's verifier with the rebuilt artifact:
 
 ```sh
 python3 tools/verify_upstream_apk.py \
-  --signed-apk /absolute/path/Droide-1.03.3-release.apk \
+  --signed-apk /absolute/path/Droide-1.03.5-release.apk \
   --unsigned-apk /absolute/path/normalized-unsigned.apk \
   --apksigner /absolute/path/android-sdk/build-tools/36.0.0/apksigner \
-  --version-code 50 \
+  --version-code 52 \
   --output /absolute/path/new-verification.json
 ```
 
@@ -58,7 +58,7 @@ The verifier checks the enabled recipe, package/version, allowed certificate, a 
 Real-artifact regressions require explicit inputs:
 
 ```sh
-DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03.3-release.apk \
+DROIDE_UPSTREAM_SIGNED_APK=/absolute/path/Droide-1.03.5-release.apk \
 DROIDE_UPSTREAM_UNSIGNED_APK=/absolute/path/normalized-unsigned.apk \
 DROIDE_APKSIGNER=/absolute/path/android-sdk/build-tools/36.0.0/apksigner \
 python3 -B -m unittest discover -s tools/tests -p 'test_upstream_apk_verification.py' -v

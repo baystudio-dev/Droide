@@ -1,6 +1,6 @@
 package com.baystudio.droide.ui
 
-/** Fixed destinations published by Droide's website; never populated from project or remote input. */
+/** Official destinations fixed in the app source. */
 internal enum class SettingsOfficialLink(val title: String, val url: String) {
     WEBSITE("Official website", "https://droide.rekacipta.biz.id/"),
     SOURCE("Source repository", "https://github.com/baystudio-dev/Droide"),
@@ -11,6 +11,7 @@ internal enum class SettingsOfficialLink(val title: String, val url: String) {
     DISCORD("Discord community", "https://discord.gg/jw3B5mFv6"),
     REPORT_BUG("Report a bug", "https://droide.rekacipta.biz.id/report-bug.html"),
     SUPPORT("Email BayStudio support", "mailto:supportbaystudio@gmail.com"),
+    SOCIABUZZ("SociaBuzz · Bayyy", "https://sociabuzz.com/ndknbayy/tribe"),
     PRIVACY("Open website Privacy Policy", "https://droide.rekacipta.biz.id/privacy.html"),
     TERMS("Open website Terms of Service", "https://droide.rekacipta.biz.id/terms.html");
 

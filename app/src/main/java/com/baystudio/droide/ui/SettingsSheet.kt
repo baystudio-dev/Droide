@@ -71,7 +71,7 @@ internal enum class SettingsCategory(val icon: ImageVector, val group: SettingsG
     val subtitle get() = entry.subtitle
 }
 
-private enum class LegalRoute { OPEN_SOURCE, THIRD_PARTY, BRAND_ASSETS, DROIDE_LICENSE, PRIVACY, TERMS, UPDATES }
+private enum class LegalRoute { OPEN_SOURCE, THIRD_PARTY, BRAND_ASSETS, DROIDE_LICENSE, PRIVACY, TERMS, UPDATES, DONATIONS }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -751,6 +751,9 @@ private fun SettingsDetail(
                 InfoRow("Version", "Droide v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                 InfoRow("Developer", SettingsOfficialLinks.DEVELOPER_DESCRIPTION)
                 InfoRow("Engineering", "BayZov")
+                ActionRow(stringResource(R.string.settings_donate_title), stringResource(R.string.settings_donate_description)) {
+                    onLegalRoute(LegalRoute.DONATIONS)
+                }
                 ActionRow("Release status", "View packaged release and distribution information", { onLegalRoute(LegalRoute.UPDATES) })
                 ActionRow("Privacy", "Published website policy and app-specific notice status", { onLegalRoute(LegalRoute.PRIVACY) })
                 ActionRow("Terms of Service", "Read the published website terms", { onLegalRoute(LegalRoute.TERMS) })
@@ -835,6 +838,13 @@ private fun LegalSettingsContent(
 ) {
     val context = LocalContext.current
     when (route) {
+        LegalRoute.DONATIONS -> {
+            Column(modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp)) {
+                LegalPageTitle(stringResource(R.string.settings_donate_title), onBack, showBackHeader)
+                OfficialLinkRow(SettingsOfficialLink.SOCIABUZZ, onOpenOfficialLink)
+                DonationQrCard()
+            }
+        }
         LegalRoute.OPEN_SOURCE -> {
             val manifestResult by produceState<Result<OpenSourceLicenseManifest>?>(null, context) {
                 value = withContext(Dispatchers.IO) {
