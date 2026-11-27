@@ -7,6 +7,16 @@
     <string name="settings_clear">Clear search</string>
     <string name="settings_no_results">No matching settings</string>
     <string name="settings_try_search">Try a different search.</string>
+    <string name="settings_donate_title">Support Droide</string>
+    <string name="settings_donate_description">Donate voluntarily through QRIS or SociaBuzz.</string>
+    <string name="settings_qris_title" translatable="false">QRIS</string>
+    <string name="settings_qris_merchant" translatable="false">Baystudio, Konter</string>
+    <string name="settings_qris_nmid" translatable="false">NMID ID1026536955861</string>
+    <string name="settings_qris_image">QRIS code for %1$s</string>
+    <string name="settings_qris_instructions">Scan the code or select the saved image from your payment app. Check that the recipient is %1$s and enter your amount.</string>
+    <string name="settings_qris_save">Save QRIS to gallery</string>
+    <string name="settings_qris_saved">Saved to Pictures/Droide.</string>
+    <string name="settings_qris_save_failed">Could not save the image. Check your free storage and try again.</string>
     <string name="settings_user">User</string>
     <string name="settings_workspace">Workspace</string>
     <string name="settings_group_workbench">Workbench</string>

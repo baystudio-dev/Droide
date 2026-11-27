@@ -16,13 +16,14 @@ class SettingsOfficialLinksR74Test {
         SettingsOfficialLink.DISCORD to "https://discord.gg/jw3B5mFv6",
         SettingsOfficialLink.REPORT_BUG to "https://droide.rekacipta.biz.id/report-bug.html",
         SettingsOfficialLink.SUPPORT to "mailto:supportbaystudio@gmail.com",
+        SettingsOfficialLink.SOCIABUZZ to "https://sociabuzz.com/ndknbayy/tribe",
         SettingsOfficialLink.PRIVACY to "https://droide.rekacipta.biz.id/privacy.html",
         SettingsOfficialLink.TERMS to "https://droide.rekacipta.biz.id/terms.html",
     )
 
     @Test fun catalogMatchesEveryApprovedTargetExactly() {
         assertEquals(expected, SettingsOfficialLink.entries.associateWith { it.url })
-        assertEquals(11, SettingsOfficialLink.entries.map { it.url }.distinct().size)
+        assertEquals(expected.size, SettingsOfficialLink.entries.map { it.url }.distinct().size)
     }
 
     @Test fun onlyExactHttpsAndSingleMailtoTargetsAreRepresentable() {
@@ -32,7 +33,7 @@ class SettingsOfficialLinksR74Test {
             assertNull(uri.userInfo)
             assertNull(uri.fragment)
             assertEquals(-1, uri.port)
-            if (!link.isEmail) assertTrue(uri.host in setOf("droide.rekacipta.biz.id", "github.com", "bsky.app", "instagram.com", "discord.gg"))
+            if (!link.isEmail) assertTrue(uri.host in setOf("droide.rekacipta.biz.id", "github.com", "bsky.app", "instagram.com", "discord.gg", "sociabuzz.com"))
             assertTrue(SettingsOfficialLinks.isAllowedTarget(link.url))
         }
         assertEquals(listOf(SettingsOfficialLink.SUPPORT), SettingsOfficialLink.entries.filter { it.isEmail })
@@ -40,6 +41,7 @@ class SettingsOfficialLinksR74Test {
 
     @Test fun arbitraryOrDangerousTargetsNeverPassTheExactAllowlist() {
         listOf("", "javascript:alert(1)", "intent://droide", "file:///data/private", "content://droide/private",
+            "https://sociabuzz.com/other/tribe", "https://sociabuzz.com/ndknbayy",
             "http://droide.rekacipta.biz.id/", "https://example.com/", "mailto:attacker@example.com",
             "https://droide.rekacipta.biz.id.evil.test/privacy.html", "https://droide.rekacipta.biz.id@evil.test/",
             "https://evil.test@droide.rekacipta.biz.id/", "https://droide.rekacipta.biz.id:443/",
@@ -155,7 +157,7 @@ class SettingsOfficialLinksR74Test {
 
     @Test fun aboutSearchIncludesAllNewLinkAndContactLabels() {
         (SettingsOfficialLinks.about + SettingsOfficialLinks.support).forEach { assertTrue(it.title, SettingsDiscovery.matches("ABOUT", it.title)) }
-        listOf("official website", "supportbaystudio@gmail.com", "GitHub", "Discord", "Privacy", "Terms of Service", "app-specific notice").forEach {
+        listOf("donasi QRIS", "donation", "SociaBuzz", "Dukung Droide", "official website", "supportbaystudio@gmail.com", "GitHub", "Discord", "Privacy", "Terms of Service", "app-specific notice").forEach {
             assertTrue(it, SettingsDiscovery.matches("ABOUT", it))
         }
     }

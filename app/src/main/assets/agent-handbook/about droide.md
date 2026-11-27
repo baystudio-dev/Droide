@@ -139,7 +139,8 @@ Useful routes:
 - **Performance & Storage → Capability Health**: inspect runtime/toolchain readiness.
 - **Notifications → Android notification settings**: Android controls notification visibility.
 - **Accounts & Services**: connect GitHub, grant repository access, reconnect, or disconnect.
-- **About & Legal**: installed version, licenses, official links, and support.
+- **About & Legal** shows the installed version, licenses, official links, and support.
+- **About & Legal → Support Droide** offers voluntary donations. Open the Bayyy page on SociaBuzz or scan the QRIS for Baystudio, Konter. **Save QRIS to gallery** lets you use the payment app on the same phone.
 
 **Landscape and keyboard behavior**
 Landscape uses a desktop-style workbench: editor in the center, optional sidebar and Agent panel beside it. Either or both side panels can be open; the editor uses the remaining width. Editor focus with the keyboard can reclaim header space. Terminal input can expand over the editor/header and offers an X control to restore its previous position. Typing in chat should keep the chat panel's size stable. Report which surface held focus when a resize problem occurred; keyboard visibility alone does not identify the input owner. Portrait keeps its own arrangement.

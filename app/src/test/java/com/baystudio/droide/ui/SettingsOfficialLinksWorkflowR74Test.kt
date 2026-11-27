@@ -6,6 +6,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.provider.MediaStore
+import android.view.View
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -15,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -34,6 +40,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
@@ -54,6 +61,7 @@ class SettingsOfficialLinksWorkflowR74Test {
     private val development by lazy { AndroidDevelopmentManager(app, root, bridge) }
     private val size = mutableStateOf(900.dp to 640.dp)
     private val mounted = mutableStateOf(true)
+    private lateinit var view: View
     private val launched = mutableListOf<Intent>()
     private var closes = 0
     private var failLaunch: (Intent) -> Boolean = { false }
@@ -73,6 +81,7 @@ class SettingsOfficialLinksWorkflowR74Test {
         val formatters = FormatterManager(root, terminals)
         val github = GitHubAccountManager(app)
         val content: @Composable () -> Unit = {
+            view = LocalView.current
             val density = LocalDensity.current
             CompositionLocalProvider(LocalContext provides launchContext, LocalDensity provides Density(density.density, fontScale)) {
                 DroideTheme { Box(Modifier.size(size.value.first, size.value.second)) {
@@ -238,5 +247,69 @@ class SettingsOfficialLinksWorkflowR74Test {
         compose.onNodeWithText("About & Legal").performClick()
         compose.onNodeWithText(SettingsOfficialLink.BLUESKY.title).performScrollTo().assertIsDisplayed()
         compose.runOnIdle { assertTrue(launched.isEmpty()) }
+    }
+
+    @Test
+    @Config(qualifiers = "in-rID-w360dp-h640dp-mdpi")
+    fun donationSearchOpensBothMethodsAndSociaBuzzRequiresItsOwnTap() {
+        size.value = 360.dp to 640.dp
+        mount(category = null)
+        compose.onNodeWithText("Cari pengaturan").performTextInput("donasi")
+        compose.onNodeWithText("About & Legal").performClick()
+        compose.onNodeWithText("Dukung Droide").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Kode QRIS untuk Baystudio, Konter").assertExists()
+        compose.onNodeWithText("NMID ID1026536955861").assertExists()
+        compose.onNodeWithText("Simpan QRIS ke galeri").assertHasClickAction()
+        compose.runOnIdle { assertTrue(launched.isEmpty()) }
+        compose.onNodeWithText(SettingsOfficialLink.SOCIABUZZ.title).performScrollTo().performClick()
+        compose.runOnIdle {
+            val intent = launched.single()
+            assertEquals(Intent.ACTION_VIEW, intent.action)
+            assertEquals("https://sociabuzz.com/ndknbayy/tribe", intent.dataString)
+            assertNull(intent.extras)
+        }
+        compose.onNodeWithContentDescription("Kembali").performClick()
+        compose.onNodeWithText("Dukung Droide").assertHasClickAction()
+    }
+
+    @Test fun galleryExportRequiresATapAndReportsCompletionInsideSettings() {
+        val gallery = Robolectric.setupContentProvider(SettingsDonationGalleryTest.Gallery::class.java, MediaStore.AUTHORITY)
+        mount()
+        compose.onNodeWithText("Support Droide").performScrollTo().performClick()
+        compose.onNodeWithText("Save QRIS to gallery").performScrollTo().assertIsEnabled()
+        assertEquals(0, gallery.published)
+        compose.onNodeWithText("Save QRIS to gallery").performClick()
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Saved to Pictures/Droide.").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Save QRIS to gallery").assertIsNotEnabled()
+        compose.runOnIdle { assertEquals(1, gallery.published); assertTrue(launched.isEmpty()) }
+    }
+
+    @Test fun donationQrRendersTheIssuersOriginalModulesAndWhiteMargin() {
+        size.value = 360.dp to 640.dp
+        mount()
+        compose.onNodeWithText("Support Droide").performScrollTo().performClick()
+        val bounds = compose.onNodeWithContentDescription("QRIS code for Baystudio, Konter")
+            .performScrollTo().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertEquals(bounds.width, bounds.height, 1f)
+        val modules = compose.runOnIdle {
+            val image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            try {
+                view.draw(Canvas(image))
+                // Sample the original 53×53 symbol and its four-module quiet zone.
+                val side = 61
+                ByteArray(side * side) { index ->
+                    val x = bounds.left + (index % side + .5f) * bounds.width / side
+                    val y = bounds.top + (index / side + .5f) * bounds.height / side
+                    if (Color.red(image.getPixel(x.toInt(), y.toInt())) > 127) 1 else 0
+                }
+            } finally {
+                image.recycle()
+            }
+        }
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(modules)
+        assertEquals("4857ffdfd47b074ad1bfd49613d26590c72694ae85a991e422c2bfa5a35e41aa",
+            digest.joinToString("") { "%02x".format(it) })
     }
 }

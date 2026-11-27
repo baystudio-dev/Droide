@@ -182,6 +182,7 @@ internal object SettingsDiscovery {
                 "Brand Asset Terms provider and project logo usage", "Search libraries",
                 "Official links website", "Source repository GitHub", "How Droide works technology",
                 "BayStudio on GitHub", "Bluesky", "Instagram", "Discord community",
+                "Support Droide donate donation QRIS SociaBuzz", "Dukung Droide donasi sukarela QRIS SociaBuzz",
                 "Support & contact", "Report a bug", "Email BayStudio support supportbaystudio@gmail.com",
             ),
         ),

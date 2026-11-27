@@ -7,6 +7,13 @@
     <string name="settings_clear">Hapus pencarian</string>
     <string name="settings_no_results">Pengaturan tidak ditemukan</string>
     <string name="settings_try_search">Coba kata kunci lain.</string>
+    <string name="settings_donate_title">Dukung Droide</string>
+    <string name="settings_donate_description">Donasi sukarela melalui QRIS atau SociaBuzz.</string>
+    <string name="settings_qris_image">Kode QRIS untuk %1$s</string>
+    <string name="settings_qris_instructions">Pindai kode atau pilih gambarnya dari galeri lewat aplikasi pembayaran. Pastikan penerimanya %1$s, lalu masukkan nominal.</string>
+    <string name="settings_qris_save">Simpan QRIS ke galeri</string>
+    <string name="settings_qris_saved">Tersimpan di Pictures/Droide.</string>
+    <string name="settings_qris_save_failed">Gambar gagal disimpan. Periksa ruang penyimpanan dan coba lagi.</string>
     <string name="settings_user">Pengguna</string>
     <string name="settings_workspace">Ruang kerja</string>
     <string name="settings_group_workbench">Area kerja</string>
