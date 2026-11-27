@@ -2,13 +2,20 @@ package com.baystudio.droide.core
 
 import android.app.Application
 import java.io.File
+import java.net.Inet4Address
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
+import java.net.Proxy
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.junit.After
 import org.junit.Assert.*
+import org.junit.Assume.assumeNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -58,6 +65,112 @@ class NineRouterConnectionTest {
         for (url in listOf("https://user:pass@example.org/v1", "https://example.org/v1?key=secret", "http://example.org/v1")) {
             assertThrows(IllegalArgumentException::class.java) { saved.copy(baseUrl = url).normalized() }
         }
+    }
+
+    @Test fun lanAccessIsBoundToThePresetAndExactConfiguredOrigin() {
+        val preset = NineRouterProvider.defaults
+        for (host in listOf("10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.100.130")) {
+            for (scheme in listOf("http", "https")) {
+                val base = "$scheme://$host:20128/prefix/v1"
+                val definition = preset.copy(baseUrl = "$base/models").normalized()
+                assertEquals(definition, UserProviderCodec.decode(UserProviderCodec.encode(listOf(definition))).single())
+                val provider = definition.provider()
+                assertEquals(ProviderNetworkScope.NINE_ROUTER_LAN, provider.networkScope)
+                val url = "$base/chat/completions"
+                val target = NetworkSecurity.validateProviderTarget(provider, url)
+                assertEquals(host, target.addresses.single().hostAddress)
+                assertEquals(url, NetworkSecurity.validateProviderUrl(provider, url).toASCIIString())
+                for (other in listOf("$scheme://192.168.1.23:20128/v1", "$scheme://$host:20129/v1",
+                        "${if (scheme == "https") "http" else "https"}://$host:20128/v1",
+                        "$scheme://localhost:20128/v1", "$scheme://creds@$host:20128/v1", "$base#fragment")) {
+                    assertThrows(IllegalArgumentException::class.java) { NetworkSecurity.validateProviderTarget(provider, other) }
+                }
+                val request = Request.Builder().url(url).build()
+                val outbound = target.newProviderCall(OkHttpClient(), request).request()
+                if (scheme == "https") assertEquals(request.url, outbound.url) else {
+                    assertEquals("$host:20128", outbound.header("Host"))
+                    assertEquals(request.url.encodedPath, outbound.url.encodedPath)
+                    assertEquals(request.url.port, outbound.url.port)
+                    assertEquals("${host.replace('.', '-')}.nine-router-lan.invalid", outbound.url.host)
+                }
+                assertThrows(IllegalArgumentException::class.java) {
+                    target.newProviderCall(OkHttpClient(), request.newBuilder().url("$base/models").build())
+                }
+                assertThrows(IllegalArgumentException::class.java) { NetworkSecurity.validateProviderTarget(provider.copy(id = "custom.forged"), url) }
+                assertTrue(ProviderRegistry.prepareConfigured(listOf(provider)).providers.isEmpty())
+            }
+        }
+        for (host in listOf("8.8.8.8", "172.15.255.255", "172.32.0.0", "100.64.0.1", "169.254.1.1",
+                "0.0.0.0", "224.0.0.1", "192.168.001.2", "192.168.1.2.", "10.1", "router.local", "[fd00::1]")) {
+            assertThrows(IllegalArgumentException::class.java) { preset.copy(baseUrl = "http://$host:20128/v1").normalized() }
+        }
+        val privateUrl = "http://192.168.100.130:20128/v1"
+        assertThrows(IllegalArgumentException::class.java) { preset.copy(id = "user.router", baseUrl = privateUrl).normalized() }
+        assertThrows(IllegalArgumentException::class.java) { NetworkSecurity.validatePublicHttpsTarget(privateUrl.replace("http:", "https:")) }
+        assertEquals(ProviderNetworkScope.LOOPBACK_ONLY, preset.provider().networkScope)
+        assertEquals(ProviderNetworkScope.PUBLIC_HTTPS, preset.copy(baseUrl = "https://router.example/v1").provider().networkScope)
+    }
+
+    @Test(timeout = 60_000) fun authenticatedLanDiscoveryAndChatReachOnlyTheChosenServer() = runBlocking {
+        // Bind only to an address of this test host. Offline hosts still run the origin and UI cases.
+        val address = NetworkInterface.getNetworkInterfaces().asSequence()
+            .flatMap { it.inetAddresses.asSequence() }.filterIsInstance<Inet4Address>().firstOrNull { it.isSiteLocalAddress }
+        assumeNotNull(address)
+        val server = ProviderLoopbackServer.create(InetSocketAddress(requireNotNull(address), 0), 0)
+        val host = "${address.hostAddress}:${server.address.port}"
+        val base = "http://$host/proxy/v1"
+        val key = "fixture-only"
+        val paths = CopyOnWriteArrayList<String>()
+        val redirect = AtomicBoolean(false)
+        server.createContext("/") { exchange ->
+            paths += exchange.requestURI.path
+            val (code, type, body) = when {
+                exchange.requestHeaders["Host"] != host -> Triple(400, "text/plain", "unexpected host")
+                exchange.requestHeaders["Authorization"] != "Bearer $key" -> Triple(401, "text/plain", "invalid key")
+                redirect.get() -> {
+                    exchange.responseHeaders.set("Location", "$base/redirected")
+                    Triple(302, "text/plain", "redirect")
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/proxy/v1/models" ->
+                    Triple(200, "application/json", """{"data":[{"id":"My-Combo"}]}""")
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/proxy/v1/chat/completions" -> {
+                    val request = Json.parseToJsonElement(exchange.requestBody.bufferedReader().use { it.readText() }).jsonObject
+                    if (request["stream"] == JsonPrimitive(true)) {
+                        val chunk = """{"choices":[{"index":0,"delta":{"content":"LAN reply"},"finish_reason":"stop"}]}"""
+                        Triple(200, "text/event-stream", "data: $chunk\n\ndata: [DONE]\n\n")
+                    } else Triple(200, "application/json", """{"choices":[{"message":{"role":"assistant","content":"LAN reply"},"finish_reason":"stop"}]}""")
+                }
+                else -> Triple(404, "text/plain", "unknown path")
+            }
+            val bytes = body.toByteArray()
+            exchange.responseHeaders.set("Content-Type", type)
+            exchange.sendResponseHeaders(code, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+            exchange.close()
+        }
+        server.start()
+        try {
+            val definition = ProviderConnectionBackend(app).saveCustomProvider(NineRouterProvider.defaults.copy(baseUrl = base)).getOrThrow()
+            val provider = definition.provider()
+            assertTrue(ProviderAuthManager.validate(provider, "wrong").isFailure)
+            val models = ProviderAuthManager.validate(provider, key).getOrThrow()
+            assertEquals(listOf(alias), models)
+            ProviderModelCertificationRegistry.certify(provider, models)
+            val client = LlmClient()
+            val chat = """{"model":"My-Combo","messages":[{"role":"user","content":"test"}]}"""
+            assertTrue(client.chatCompletions(id, base, key, alias, chat).contains("LAN reply"))
+            val events = mutableListOf<LlmStreamEvent>()
+            client.chatCompletionsStream(id, base, key, alias, chat) { events += it }
+            assertTrue(events.filterIsInstance<LlmStreamEvent.TextDelta>().any { it.text == "LAN reply" })
+            assertEquals(OwnedChatEndpointIdentity.fromValidatedUrl("$base/chat/completions"), client.ownedChatTarget(id, base, alias)?.endpointIdentity)
+
+            redirect.set(true)
+            val target = NetworkSecurity.validateProviderTarget(provider, "$base/models")
+            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", 1))
+            val request = Request.Builder().url(target.url).header("Authorization", "Bearer $key").build()
+            target.newProviderCall(OkHttpClient.Builder().proxy(proxy).build(), request).execute().use { assertEquals(302, it.code) }
+            assertEquals(listOf("/proxy/v1/models", "/proxy/v1/models", "/proxy/v1/chat/completions", "/proxy/v1/chat/completions", "/proxy/v1/models"), paths)
+        } finally { server.stop(0) }
     }
 
     @Test fun reasoningFollowsRouterMetadataAndRefreshDropsRemovedModels() {

@@ -107,14 +107,22 @@ class CustomProviderFormTest {
     }
 
     @Test fun nineRouterSetupIsSearchableAndSavesTheEnteredServer() {
+        saveNineRouter("https://router.example/api/v1/chat/completions", "https://router.example/api/v1")
+    }
+
+    @Test fun nineRouterAcceptsPrivateLanAddressAndOpensKeyEntry() {
+        saveNineRouter("http://192.168.100.130:20128/v1", "http://192.168.100.130:20128/v1")
+    }
+
+    private fun saveNineRouter(input: String, expected: String) {
         show()
         compose.onNodeWithText("Search provider…").performTextInput("9router")
         compose.onNodeWithText("9Router").performClick()
         compose.onNodeWithText("Provider ID").assertDoesNotExist()
         compose.onNodeWithText("API base URL").performScrollTo()
-            .performTextReplacement("https://router.example/api/v1/chat/completions")
+            .performTextReplacement(input)
         compose.onNodeWithText("Save & connect").performScrollTo().performClick()
-        compose.waitUntil(10000) { ProviderRegistry.findById("9router")?.baseUrl == "https://router.example/api/v1" }
+        compose.waitUntil(10000) { ProviderRegistry.findById("9router")?.baseUrl == expected }
         compose.onNodeWithText("API key").performScrollTo().assertIsDisplayed()
     }
 }

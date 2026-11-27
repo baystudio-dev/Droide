@@ -703,7 +703,7 @@ For a blank/local page, check that the server is still running in the intended e
 ## 27. Set up 9Router
 
 1. Open **Settings → Providers & Models → Manage providers → 9Router**.
-2. Enter your instance's address in **API base URL**. If the server runs on this device, the preset is `http://127.0.0.1:20128/v1`. A hosted instance uses its HTTPS URL. The preset accepts the base URL, models endpoint or chat-completions endpoint.
+2. Enter your instance's address in **API base URL**. Use `http://127.0.0.1:20128/v1` on this device or the server's private IPv4 address and port on a trusted LAN. HTTP sends the API key and chat unencrypted. Use HTTPS for a public server. The preset accepts the base URL, models endpoint or chat-completions endpoint.
 3. Set **Requires API key** according to that server, then choose **Save & connect**. Enter the key in Droide when prompted and validate the connection.
 4. Choose a model or combo by its full ID, including any prefix shown. Refresh models after changing the server's routes. Tool support, vision, reasoning and context limits depend on the selected route.
 

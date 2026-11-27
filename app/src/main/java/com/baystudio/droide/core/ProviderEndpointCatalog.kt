@@ -151,6 +151,7 @@ object ProviderEndpointCatalog {
         val host = uri.host ?: error("Provider baseUrl host is missing")
         when (scope) {
             ProviderNetworkScope.PUBLIC_HTTPS -> require(uri.scheme.equals("https", true)) { "Public provider baseUrl must use HTTPS" }
+            ProviderNetworkScope.NINE_ROUTER_LAN -> error("LAN access requires a user-configured 9Router endpoint")
             ProviderNetworkScope.LOOPBACK_ONLY -> {
                 require(uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) { "Loopback provider must use HTTP(S)" }
                 require(isLoopbackHost(host)) { "Loopback provider must target localhost/127.0.0.1/::1" }

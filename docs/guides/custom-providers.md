@@ -15,7 +15,7 @@ Definitions are user settings shared across projects, stored separately from `.d
 
 ## Validation and security boundaries
 
-- Remote URLs require public HTTPS. HTTP is supported only for explicit loopback hosts; network target resolution uses the existing pinned-DNS policy. Private LAN addresses and arbitrary HTTP endpoints are not enabled by this form.
+- Custom providers use public HTTPS or an explicit loopback address. The 9Router preset also accepts a private IPv4 address entered in Settings.
 - URL credentials, queries, fragments, invalid ports and unsupported fields are rejected. API keys and arbitrary headers never enter the definition file. The four protocols determine the appropriate authorization header.
 - Automatic discovery uses the existing bounded, paginated catalog flow. Manual models instead receive short non-streaming requests using the selected protocol. These requests can be billed by the provider. The form and connection view disclose this before validation. Refreshing/revalidating manual models repeats validation.
 - A successful probe establishes that the endpoint accepts the model, protocol and credential. It does not certify every model capability such as images, reasoning or function tools. Existing runtime/model capability checks remain authoritative.
@@ -27,4 +27,6 @@ Definitions are user settings shared across projects, stored separately from `.d
 
 ## 9Router
 
-Select 9Router in the provider menu. Use the URL of your instance and its credentials if required. The default local address is `http://127.0.0.1:20128/v1`. For a remote instance use HTTPS. Droide accepts the base URL, the models endpoint or the chat-completions endpoint. Refresh models after changing the routes on your instance. Select a model using its complete ID, including any prefix supplied by the router.
+Select 9Router in the provider menu. On the same device, use the default `http://127.0.0.1:20128/v1`. For a server on your trusted LAN, enter its private IPv4 address and port, for example `http://192.168.1.20:20128/v1`. The phone must be able to reach that address, and the server must listen on its LAN interface. HTTP sends the API key and chat in cleartext. Use HTTPS on public networks. LAN HTTPS requires a trusted certificate valid for the entered IP address.
+
+Droide accepts the base URL, the models endpoint or the chat-completions endpoint. Match **Requires API key** to the server, then choose **Save & connect** and **Connect & validate**. Select a model or combo by its complete ID. Refresh models after changing routes on the server.

@@ -263,7 +263,7 @@ class AgentImageGeneration internal constructor(
         override suspend fun execute(provider: AiProvider, request: Request): Reply {
             val target = NetworkSecurity.validateProviderTarget(provider, request.url.toString())
             currentCoroutineContext().ensureActive()
-            return client.newBuilder().dns(NetworkSecurity.pinnedDns(target)).build().newCall(request)
+            return target.newProviderCall(client, request)
                 .withCancellableResponse { response ->
                     if (!response.isSuccessful) Reply(response.code, ByteArray(0), response.header("x-request-id")) else {
                         val source = response.body?.source()

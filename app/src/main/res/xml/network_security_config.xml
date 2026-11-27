@@ -10,4 +10,8 @@
         <domain includeSubdomains="false">0:0:0:0:0:0:0:1</domain>
         <domain includeSubdomains="false">ip6-localhost</domain>
     </domain-config>
+    <!-- Internal OkHttp names pinned to the private IPv4 address in the user's 9Router settings. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">nine-router-lan.invalid</domain>
+    </domain-config>
 </network-security-config>

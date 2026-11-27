@@ -27,8 +27,10 @@ data class UserProviderDefinition(
             "Base URL must include a host and cannot contain credentials, a query or a fragment."
         }
         require(uri.port == -1 || uri.port in 1..65535) { "Invalid API port." }
-        require(uri.scheme.equals("https", true) || (uri.scheme.equals("http", true) && isLoopback(uri.host))) {
-            "Use HTTPS for a remote provider, or HTTP for localhost."
+        val scope = networkScope(key, uri.host)
+        require(uri.scheme.equals("https", true) || (uri.scheme.equals("http", true) && scope != ProviderNetworkScope.PUBLIC_HTTPS)) {
+            if (key == NineRouterProvider.ID) "Use HTTPS, or use HTTP with localhost or a private IPv4 address on your trusted LAN."
+            else "Use HTTPS for a remote provider, or HTTP for localhost."
         }
         val base = if (key == NineRouterProvider.ID) NineRouterProvider.baseUrl(url, uri) else url
         require(!base.endsWith("/chat/completions") && !base.endsWith("/responses") && !base.endsWith("/messages")) {
@@ -46,9 +48,9 @@ data class UserProviderDefinition(
 
     internal fun provider(): AiProvider {
         val value = normalized()
-        val local = isLoopback(URI(value.baseUrl).host)
+        val scope = networkScope(value.id, URI(value.baseUrl).host)
         return AiProvider(
-            id = value.id, name = value.name, baseUrl = value.baseUrl, model = "", free = local,
+            id = value.id, name = value.name, baseUrl = value.baseUrl, model = "", free = scope == ProviderNetworkScope.LOOPBACK_ONLY,
             needsKey = value.requiresKey, helpUrl = "",
             note = if (value.id == NineRouterProvider.ID) "Connect your 9Router server and choose from its models." else "Custom provider · ${value.protocol.label}",
             wireProtocol = value.protocol,
@@ -57,13 +59,19 @@ data class UserProviderDefinition(
                 ProviderWireProtocol.GOOGLE_GENERATE_CONTENT -> ProviderAuthScheme.GOOGLE_API_KEY
                 else -> ProviderAuthScheme.BEARER
             },
-            networkScope = if (local) ProviderNetworkScope.LOOPBACK_ONLY else ProviderNetworkScope.PUBLIC_HTTPS,
+            networkScope = scope,
             configuredModels = Collections.unmodifiableList(ArrayList(value.models)),
         )
     }
 
     companion object {
         const val MAX_MODELS = 16
+        private fun networkScope(id: String, host: String) = when {
+            isLoopback(host) -> ProviderNetworkScope.LOOPBACK_ONLY
+            id == NineRouterProvider.ID && NineRouterProvider.privateIpv4(host) != null -> ProviderNetworkScope.NINE_ROUTER_LAN
+            else -> ProviderNetworkScope.PUBLIC_HTTPS
+        }
+
         private fun isLoopback(host: String): Boolean = host.lowercase() in setOf(
             "localhost", "127.0.0.1", "::1", "[::1]", "0:0:0:0:0:0:0:1", "[0:0:0:0:0:0:0:1]",
         )

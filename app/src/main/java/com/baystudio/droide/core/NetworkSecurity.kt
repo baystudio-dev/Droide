@@ -4,6 +4,7 @@ import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URI
+import okhttp3.Call
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -15,7 +16,12 @@ data class ValidatedNetworkTarget(
     val host: String,
     val addresses: List<InetAddress>,
     val allowLoopback: Boolean = false,
-)
+    val nineRouterLan: Boolean = false,
+) {
+    internal fun newProviderCall(client: OkHttpClient, request: Request): Call =
+        if (nineRouterLan) NineRouterProvider.lanCall(client, this, request)
+        else client.newBuilder().dns(NetworkSecurity.pinnedDns(this)).build().newCall(request)
+}
 
  
 object NetworkSecurity {
@@ -68,11 +74,13 @@ object NetworkSecurity {
     fun validateProviderTarget(provider: AiProvider, raw: String): ValidatedNetworkTarget = when (provider.networkScope) {
         ProviderNetworkScope.PUBLIC_HTTPS -> validatePublicHttpsTarget(raw)
         ProviderNetworkScope.LOOPBACK_ONLY -> validateLoopbackTarget(raw)
+        ProviderNetworkScope.NINE_ROUTER_LAN -> NineRouterProvider.lanTarget(provider, raw)
     }
 
     internal fun validateProviderUrl(provider: AiProvider, raw: String): URI = when (provider.networkScope) {
         ProviderNetworkScope.PUBLIC_HTTPS -> validatePublicHttpsUrl(raw)
         ProviderNetworkScope.LOOPBACK_ONLY -> validateLoopbackUrl(raw)
+        ProviderNetworkScope.NINE_ROUTER_LAN -> URI(NineRouterProvider.lanTarget(provider, raw).url)
     }
 
     private fun validateLoopbackUrl(raw: String): URI {

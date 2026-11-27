@@ -39,6 +39,7 @@ internal class ProviderLoopbackServer private constructor(private val server: An
         val responseBody: OutputStream get() = api.getMethod("getResponseBody").invoke(exchange) as OutputStream
         val requestMethod: String get() = api.getMethod("getRequestMethod").invoke(exchange) as String
         val requestURI: URI get() = api.getMethod("getRequestURI").invoke(exchange) as URI
+        val requestHeaders get() = Headers(requireNotNull(api.getMethod("getRequestHeaders").invoke(exchange)))
         val responseHeaders get() = Headers(requireNotNull(api.getMethod("getResponseHeaders").invoke(exchange)))
         fun sendResponseHeaders(status: Int, length: Long) {
             api.getMethod("sendResponseHeaders", Int::class.javaPrimitiveType, Long::class.javaPrimitiveType).invoke(exchange, status, length)
@@ -47,6 +48,9 @@ internal class ProviderLoopbackServer private constructor(private val server: An
     }
 
     class Headers(private val headers: Any) {
+        operator fun get(name: String): String? =
+            Class.forName("com.sun.net.httpserver.Headers").getMethod("getFirst", String::class.java).invoke(headers, name) as String?
+
         fun set(name: String, value: String) {
             Class.forName("com.sun.net.httpserver.Headers").getMethod("set", String::class.java, String::class.java).invoke(headers, name, value)
         }

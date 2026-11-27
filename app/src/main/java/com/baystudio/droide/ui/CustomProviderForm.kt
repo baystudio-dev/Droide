@@ -55,7 +55,7 @@ internal fun CustomProviderForm(
             Text(if (nineRouter) NineRouterProvider.NAME else if (initial == null) "Add custom provider" else "Edit custom provider", style = MaterialTheme.typography.titleMedium)
         }
         Column(Modifier.fillMaxWidth().weight(1f, fill = false).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(if (nineRouter) "Use the local address if 9Router runs on this device. For a hosted server, paste its HTTPS API URL."
+            Text(if (nineRouter) "Use localhost on this device, a private IPv4 address on your LAN, or a public HTTPS URL. HTTP sends your API key and chats unencrypted. Use it only on a trusted network."
                 else "Available across your projects. Save the endpoint, then connect with your API key.", style = MaterialTheme.typography.bodySmall, color = DroideColors.Muted)
             if (!nineRouter) {
                 OutlinedTextField(name, { name = it.take(160); error = null }, Modifier.fillMaxWidth(), label = { Text("Provider name") }, singleLine = true, enabled = !busy)
