@@ -39,7 +39,6 @@ internal fun DonationQrCard() {
 
     Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.settings_qris_title), style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(R.string.settings_qris_instructions, recipient), style = MaterialTheme.typography.bodyMedium)
         OutlinedCard(Modifier.align(Alignment.CenterHorizontally).widthIn(max = 272.dp).fillMaxWidth()) {
             Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Image(
@@ -75,6 +74,7 @@ internal fun DonationQrCard() {
             Text(stringResource(feedback), Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 style = MaterialTheme.typography.bodySmall)
         }
+        Text(stringResource(R.string.settings_qris_instructions, recipient), style = MaterialTheme.typography.bodyMedium)
     }
 }
 

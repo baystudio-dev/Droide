@@ -290,8 +290,10 @@ class SettingsOfficialLinksWorkflowR74Test {
         size.value = 360.dp to 640.dp
         mount()
         compose.onNodeWithText("Support Droide").performScrollTo().performClick()
+        val nmid = compose.onNodeWithText("NMID ID1026536955861").assertIsDisplayed().fetchSemanticsNode()
+        assertEquals(nmid.size.height.toFloat(), nmid.boundsInRoot.height, 1f)
         val bounds = compose.onNodeWithContentDescription("QRIS code for Baystudio, Konter")
-            .performScrollTo().assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         assertEquals(bounds.width, bounds.height, 1f)
         val modules = compose.runOnIdle {
             val image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
