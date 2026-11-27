@@ -25,9 +25,9 @@ Repo: https://github.com/baystudio-dev/Droide.git
 Binaries: https://github.com/baystudio-dev/Droide/releases/download/v%v/Droide-%v-release.apk
 
 Builds:
-  - versionName: '1.03.4'
-    versionCode: 51
-    commit: v1.03.4-fdroid
+  - versionName: '1.03.5'
+    versionCode: 52
+    commit: v1.03.5-fdroid
     sudo:
       - echo "deb https://deb.debian.org/debian bookworm main" > /etc/apt/sources.list.d/bookworm.list
       - apt-get update
@@ -53,8 +53,8 @@ Builds:
 AllowedAPKSigningKeys: 0cc1c5885fea5c5779eb4b3ddcce2a8518b7c207cab7dd7606e94c4d27ccb7ac
 
 MaintainerNotes: |-
-  The planned upstream packaging tag for this candidate is v1.03.4-fdroid.
-  Publish the tag and signed upstream APK before submitting the recipe. The init substitution is
+  The upstream packaging tag is v1.03.5-fdroid. Pin its commit when submitting the recipe.
+  The init substitution is
   semantically equivalent Kotlin: it preserves default-debug-config reads in
   inactive task definitions when remove_signing_keys runs. The normal sanitizer
   still removes the release signing configuration and signing assignments.
@@ -68,5 +68,5 @@ MaintainerNotes: |-
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^v[0-9]+\.[0-9]+(\.[0-9]+)?-fdroid$
-CurrentVersion: '1.03.4'
-CurrentVersionCode: 51
+CurrentVersion: '1.03.5'
+CurrentVersionCode: 52
