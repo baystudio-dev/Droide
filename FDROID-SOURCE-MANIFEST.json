@@ -2225,7 +2225,7 @@
     "app/src/main/java/com/baystudio/droide/ui/SettingsBugReport.kt": "e6bde12f94b71f0c96e1ef55a579cd29e6125ca519aea226739686fff01f1b23",
     "app/src/main/java/com/baystudio/droide/ui/SettingsBugReportViewModel.kt": "bbb7cc438ac791a5659893e225a0bca9f761fa0da1e8b614a19137317c00131a",
     "app/src/main/java/com/baystudio/droide/ui/SettingsDiscovery.kt": "fe9c5142a0cd1aa2f3e66ccccde130c9a708e395e4e441d4598dd262ddc55d35",
-    "app/src/main/java/com/baystudio/droide/ui/SettingsDonation.kt": "33fbff4789da1996fa3c8e9b2ed6c03c752ba3e7f43da8a9351a97dcc4d8842f",
+    "app/src/main/java/com/baystudio/droide/ui/SettingsDonation.kt": "50c01875834b1c7be2341f4fc62f69a14d54db8c0825463007b6665d886ddd66",
     "app/src/main/java/com/baystudio/droide/ui/SettingsEditorPresentation.kt": "2f3d629af56e77bb3b7f44cb1619dc3c7b970cbf9b1132cd327457a157770aae",
     "app/src/main/java/com/baystudio/droide/ui/SettingsNavigation.kt": "15a46f2fd9db31442e43bc727f377b046285953e2b8bb5f0890d0f6de2e69253",
     "app/src/main/java/com/baystudio/droide/ui/SettingsOfficialLinkActions.kt": "5d0c240a6eb6c99a1321bfef2c1481012955ff59976b7c76d5200fcfd6181644",

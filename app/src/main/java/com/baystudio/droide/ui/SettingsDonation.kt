@@ -36,9 +36,8 @@ internal fun DonationQrCard() {
     val scope = rememberCoroutineScope()
     var saveState by remember { mutableStateOf(QrSaveState.READY) }
     val recipient = stringResource(R.string.settings_qris_merchant)
-    val resources = context.resources
-    val qr = remember(resources) {
-        resources.openRawResource(R.raw.donation_qris).use { BitmapFactory.decodeStream(it).asImageBitmap() }
+    val qr = remember(context) {
+        context.resources.openRawResource(R.raw.donation_qris).use { BitmapFactory.decodeStream(it).asImageBitmap() }
     }
 
     Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -95,8 +94,8 @@ internal suspend fun saveDonationQrToGallery(context: Context) = withContext(Dis
     val uri = resolver.insert(images, metadata) ?: throw IOException("Cannot create gallery image")
     var published = false
     try {
-        val stream = resolver.openOutputStream(uri, "w") ?: throw IOException("Cannot open gallery image")
-        stream.use { output ->
+        resolver.openOutputStream(uri, "w").use { output ->
+            if (output == null) throw IOException("Cannot open gallery image")
             context.resources.openRawResource(R.raw.donation_qris).use { input -> input.copyTo(output) }
         }
         currentCoroutineContext().ensureActive()
