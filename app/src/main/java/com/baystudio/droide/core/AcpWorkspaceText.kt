@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 internal object AcpWorkspaceText {
     const val MAX_BYTES = 2_000_000L
 
+    data class Read(val content: String, val sha256: String)
     private data class Observation(val content: String?, val version: StreamFileVersion)
 
     suspend fun version(files: FileRepository, relative: String): StreamFileVersion = observe(files, relative).version
@@ -28,16 +29,50 @@ internal object AcpWorkspaceText {
         Observation(content, version)
     }
 
-    suspend fun read(files: FileRepository, relative: String): String {
+    suspend fun read(files: FileRepository, relative: String): Read {
         val observed = observe(files, relative)
         check(observed.version.existed) { "ACP execution file is unavailable: $relative" }
         observed.version.requireMatches(files.root, relative)
-        return requireNotNull(observed.content)
+        return Read(requireNotNull(observed.content), observed.version.sha256)
     }
+}
+
+/** A bounded session history. Two short hashes remember evicted paths without retaining their names.
+ * A collision only requests a new read. Ordinary first writes keep their existing admission path. */
+internal class AcpReadVersions(private val capacity: Int = 1_024) {
+    data class Version(val execution: String?, val canonical: String?)
+    private val recent = LinkedHashMap<String, Version>()
+    private val evictedPaths = java.util.BitSet()
+    init { require(capacity > 0) }
+
+    @Synchronized fun record(path: String, version: Version) {
+        recent.remove(path)
+        if (recent.size >= capacity) {
+            val oldest = recent.keys.first()
+            recent.remove(oldest)
+            val hash = oldest.hashCode()
+            evictedPaths.set(hash and 0xffff)
+            evictedPaths.set(hash ushr 16)
+        }
+        recent[path] = version
+    }
+
+    @Synchronized fun permits(path: String, canonical: String?, execution: String?, hasProjection: Boolean): Boolean {
+        val read = recent[path]
+        if (read == null) {
+            val hash = path.hashCode()
+            return !(evictedPaths[hash and 0xffff] && evictedPaths[hash ushr 16])
+        }
+        return (read.canonical == null || read.canonical == canonical.orEmpty()) &&
+            (!hasProjection || read.execution == execution)
+    }
+
+    @Synchronized fun clear() { recent.clear(); evictedPaths.clear() }
 }
 
 /** A local projection token is captured before approval; it never grants write permission. */
 internal interface AcpTextProjection {
+    val executionVersion: StreamFileVersion
     suspend fun requireUnchanged()
     suspend fun publish(content: String, requireCurrent: () -> Unit)
 }

@@ -1076,8 +1076,7 @@ class SafMirror(private val context: Context, treeUri: String, private val local
     ): Snapshot {
         val query = SafDocumentsTreeQuery(context, uri)
         val rootId = query.rootDocumentId()
-        val rootIdentity = query.readDocument(rootId, checkCancelled)?.takeIf { it.isDirectory }?.identity
-            ?: error("SAF tree permission or directory identity unavailable")
+        val rootIdentity = treeNode(checkCancelled).identity
         val entries = linkedMapOf<String, String>()
         val identities = linkedMapOf("" to rootIdentity)
         val visitedIds = hashSetOf(rootId)
@@ -1535,9 +1534,12 @@ class SafMirror(private val context: Context, treeUri: String, private val local
         })
     }
 
-    private fun treeNode(checkCancelled: () -> Unit = {}): SafDocumentNode =
-        query.readDocument(query.rootDocumentId(), checkCancelled)?.takeIf { it.isDirectory }
-            ?: throw IllegalStateException("SAF tree permission unavailable")
+    private fun treeNode(checkCancelled: () -> Unit = {}): SafDocumentNode {
+        val node = query.readDocument(query.rootDocumentId(), checkCancelled)
+            ?: throw SafProviderUnavailable("SAF tree permission or directory identity unavailable")
+        check(node.isDirectory) { "The linked folder is no longer a directory" }
+        return node
+    }
 
     private fun findNode(path: String, checkCancelled: () -> Unit = {}): SafDocumentNode? {
         var current = treeNode(checkCancelled)

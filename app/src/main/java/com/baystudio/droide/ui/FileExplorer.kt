@@ -127,7 +127,7 @@ private fun WorkspaceFileExplorer(
     }
     var showNewFolder by remember(workspaceKey) { mutableStateOf(false) }
     var showRename by remember(workspaceKey) { mutableStateOf<String?>(null) }
-    var showDelete by remember(workspaceKey) { mutableStateOf<FileEntry?>(null) }
+    var showDelete by remember(workspaceKey) { mutableStateOf<FileRepository.ExplorerDeleteSelection?>(null) }
     var actionTarget by remember(workspaceKey) { mutableStateOf<FileEntry?>(null) }
     var newName by remember(workspaceKey) { mutableStateOf("") }
     var newLang by remember(workspaceKey) { mutableStateOf("kotlin") }
@@ -376,24 +376,43 @@ private fun WorkspaceFileExplorer(
     LaunchedEffect(workspaceKey, state.refreshToken, state.sortPreferenceLoaded, refreshController, refreshLease) {
         if (state.sortPreferenceLoaded) refreshController.requestRefresh(refreshLease, state.refreshToken)
     }
-    LaunchedEffect(workspaceKey, state.query, state.refreshToken, searchRevision) {
+    val searchVisible = rememberUiResumed()
+    LaunchedEffect(workspaceKey, state.query, state.refreshToken, searchRevision, state.workspaceRevision, searchVisible) {
+        if (!searchVisible) return@LaunchedEffect
         val requestQuery = state.query
         val clean = cleanedExplorerQuery(requestQuery)
         if (clean.length < 2) {
             state.searchResults = emptyList(); state.searchNotice = null; searchBusy = false
             return@LaunchedEffect
         }
-        searchBusy = true
+        val hints = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+        val watches = mutableListOf<AutoCloseable>()
         try {
+            searchBusy = true
             delay(220)
-            val page = files.globPage("**/*$clean*", 200)
-            if (state.query == requestQuery) {
+            while (true) {
+                val traversal = WorkspaceDiscoveryTraversal { directory ->
+                    if (watches.size < 24) {
+                        runCatching { WorkspaceDirectoryEvents.subscribe(directory) { event, _ ->
+                            if (event and WorkspaceDirectoryEvents.STRUCTURE != 0) hints.trySend(Unit)
+                        } }.getOrNull()?.let(watches::add)
+                    }
+                    java.nio.file.Files.newDirectoryStream(directory.toPath())
+                }
+                val page = files.globPageBounded("**/*$clean*", max = 200, traversal = traversal)
+                if (state.query != requestQuery) break
                 state.searchResults = page.paths.filterNot(ExplorerFilePolicy::isDroideInternalPath)
                 state.searchNotice = when {
                     page.scanLimitReached -> "Scan stopped after ${page.scannedEntries} entries; results may be incomplete."
                     page.resultLimitReached -> "Showing first ${page.paths.size} files; narrow the name for more."
                     else -> null
                 }
+                searchBusy = false
+                hints.receive()
+                delay(750)
+                hints.tryReceive()
+                watches.forEach { it.close() }
+                watches.clear()
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -402,7 +421,11 @@ private fun WorkspaceFileExplorer(
                 state.searchResults = emptyList()
                 state.searchNotice = "File search failed: ${failure.message ?: failure::class.java.simpleName}"
             }
-        } finally { if (state.query == requestQuery) searchBusy = false }
+        } finally {
+            hints.close()
+            watches.forEach { it.close() }
+            if (state.query == requestQuery) searchBusy = false
+        }
     }
     LaunchedEffect(showRename) { newName = showRename?.substringAfterLast('/') ?: newName }
 
@@ -652,6 +675,7 @@ private fun WorkspaceFileExplorer(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (target.isDir) Text(target.path, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     else FileIdentityLabel(target.path, target.path, iconSize = 15.dp, monospaced = true)
+                    dialogError?.let { Text(it, color = DroideColors.Error) }
                     onExport?.let { export ->
                         OutlinedButton(onClick = { actionTarget = null; export(target.path, target.isDir) }) {
                             Icon(Icons.Default.Download, null, Modifier.size(16.dp))
@@ -665,7 +689,9 @@ private fun WorkspaceFileExplorer(
                 TextButton(onClick = { dialogError = null; moveDirectory = target.path.substringBeforeLast('/', ""); movingRecoveredFile = false; showMove = target; actionTarget = null }) { Text("Move to…") }
                 TextButton(onClick = { dialogError = null; showRename = target.path; actionTarget = null }) { Text("Rename") }
             } },
-            dismissButton = { TextButton(onClick = { dialogError = null; showDelete = target; actionTarget = null }) { Text("Delete") } },
+            dismissButton = { TextButton(enabled = !mutationBusy, onClick = {
+                mutate { showDelete = files.prepareExplorerDelete(target); actionTarget = null }
+            }) { Text("Delete") } },
         )
     }
 
@@ -885,7 +911,8 @@ private fun WorkspaceFileExplorer(
         dismissButton = { TextButton(enabled = !mutationBusy, onClick = { showRename = null }) { Text("Cancel") } },
     )
 
-    showDelete?.let { target ->
+    showDelete?.let { selection ->
+        val target = selection.entry
         AlertDialog(
             onDismissRequest = { if (!mutationBusy) showDelete = null },
             title = { Text(if (target.isDir) "Delete folder?" else "Delete file?") },
@@ -902,7 +929,18 @@ private fun WorkspaceFileExplorer(
                         check(ExplorerFilePolicy.requireUserTarget(files.root, target.path) == target.path) { "Selected path changed; refresh Explorer" }
                         preparePathMutation(listOf(target.path))
                         check(canMutatePath(target.path)) { "Save or discard unsaved editor changes before deleting this path" }
-                        check(files.delete(target.path)) { "Delete failed" }
+                        try {
+                            check(files.delete(selection)) { "Delete failed" }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            // Publication may have succeeded locally before the linked provider failed.
+                            showDelete = null
+                            refreshLocalTreeAfterMutation()
+                            searchRevision++
+                            if (selection.locallyRemoved && !files.exists(target.path) && canMutatePath(target.path)) onDeleted(target.path)
+                            err = failure.message ?: "Deletion needs review. Refresh the folder before retrying."
+                            return@mutate
+                        }
                         state.expandedPaths = state.expandedPaths.filterNot { it == target.path || it.startsWith("${target.path}/") }
                         if (state.activeDirectory == target.path || state.activeDirectory.startsWith("${target.path}/")) state.activeDirectory = target.path.substringBeforeLast('/', "")
                         onDeleted(target.path); refreshLocalTreeAfterMutation(); searchRevision++

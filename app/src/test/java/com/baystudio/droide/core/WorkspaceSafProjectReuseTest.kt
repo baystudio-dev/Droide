@@ -110,6 +110,21 @@ class WorkspaceSafProjectReuseTest {
             assertTrue(document.dirty)
             assertEquals("unsaved user work", document.content)
             assertEquals("saved source", source.readText())
+
+            // Offline handoff requires an explicit decision and a clean editor.
+            var offered = 0
+            assertTrue(runCatching { coordinator.switchProject("default") { _, _ -> offered++; true } }.isFailure)
+            assertEquals(0, offered)
+            document.capture("saved source")
+            assertTrue(document.save(active.files).isSuccess || !document.dirty)
+            assertFalse(document.dirty)
+            assertTrue(runCatching { coordinator.switchProject("default") { _, _ -> offered++; false } }.isFailure)
+            assertEquals(1, offered)
+            assertSame(active, coordinator.runtime.value)
+            coordinator.switchProject("default") { name, _ -> offered++; assertEquals("Linked", name); true }
+            assertEquals(2, offered)
+            assertEquals("default", coordinator.runtime.value?.project?.id)
+            assertEquals("saved source", source.readText())
         } finally {
             binding?.close(); coordinator.close(); bridge.close(); scope.cancel()
             ShadowProcess.setPid(previousPid)

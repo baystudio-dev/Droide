@@ -52,6 +52,7 @@ internal object AgentToolResultSemantics {
         "^\\[DROIDE_TOOL_EVIDENCE\\s+tool=([^\\s\\]]+)\\s+state=(SUCCEEDED|STARTED|FAILED|DENIED|UNAVAILABLE)\\s+operation_started=(true|false)\\s+success=(true|false|unverified)\\][ \t]*(?:\\r?\\n)?",
         RegexOption.IGNORE_CASE,
     )
+    private val pendingSaveRegex = Regex("""^\[DROIDE_SAVE saved=\d+ attention=[1-9]\d*]""")
     private val exitRegex = Regex("(?:^|\\s)exit=(-?\\d+)(?:\\s|$)")
     private val backgroundStateRegex = Regex("(?:^|\\s)state=(running|exited|failed|timed_out|killed)(?:\\s|$)", RegexOption.IGNORE_CASE)
     private val httpFailureRegex = Regex("^HTTP\\s+[45]\\d\\d(?:\\s|:)", RegexOption.IGNORE_CASE)
@@ -80,9 +81,13 @@ internal object AgentToolResultSemantics {
     fun stripAnnotation(raw: String): String = evidenceMarkerRegex.replaceFirst(raw.trimStart(), "")
 
     fun classify(tool: String, raw: String, operation: String? = null): AgentToolEvidence {
-        val text = raw.trimStart()
+        val rawText = raw.trimStart()
         val processOutput = tool in setOf("run_command", "bash", "exec_command", "write_stdin", "background_job", "capability") ||
             tool.startsWith("custom_") || tool.startsWith("plugin_")
+        val text = if (processOutput || tool == "ide" || tool.startsWith("git_")) stripDiskNotice(rawText) else rawText
+        if (tool == "save_files" && pendingSaveRegex.containsMatchIn(text)) {
+            return AgentToolEvidence(AgentToolEvidenceState.FAILED, true, false, "One or more documents still require Save")
+        }
         if (tool in setOf("read_file", "read") && text.startsWith("[DROIDE_READ_RESULT returned=true]\n"))
             return AgentToolEvidence(AgentToolEvidenceState.SUCCEEDED, true, true, "File read returned; document contents are not execution evidence")
         if (text.startsWith("DENIED", ignoreCase = true)) {
@@ -129,7 +134,7 @@ internal object AgentToolResultSemantics {
                     "Captured LSP page returned; upstream completeness is not established")
             }
         }
-        val control = if (processOutput) stripDiskNotice(text) else text
+        val control = text
         val firstLine = control.substringBefore('\n').trimEnd('\r')
         if (tool == "capability" && (operation == "run" || firstLine == "CAPABILITY_RUN"))
             return AgentCapabilityResult.evidence(control)

@@ -16,7 +16,7 @@ class LspBufProfileTest {
         for(p in listOf("a.PROTO","a.Proto","buf.yaml","buf.work.yaml","a.proto.json"))
             assertFalse(LanguageServerRegistry.forPath(p).contains(spec))
         assertEquals(listOf("buf","lsp","serve"),spec.commands.single())
-        assertEquals(55,LanguageRegistry.all.size)
+        assertEquals(56,LanguageRegistry.all.size)
     }
     @Test fun nearestTypedMarkerIsOnlyTheClientGrantRoot() {
         val root=Files.createTempDirectory("buf-root-").toFile().canonicalFile

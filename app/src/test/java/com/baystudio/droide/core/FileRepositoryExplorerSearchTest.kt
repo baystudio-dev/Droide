@@ -40,6 +40,26 @@ class FileRepositoryExplorerSearchTest {
         }
     }
 
+    @Test fun staleDeleteLeavesTheReplacementAndItsChildrenIntact() = withWorkspace { root ->
+        val file = root.resolve("target.txt").apply { writeText("A") }
+        val repo = FileRepository(root)
+        runBlocking {
+            suspend fun select() = repo.prepareExplorerDelete(repo.listFiles().single { it.path == file.name })
+            val first = select()
+            file.writeText("B")
+            assertTrue(runCatching { repo.delete(first) }.isFailure)
+            assertEquals("B", file.readText())
+            val second = select()
+            assertTrue(file.delete())
+            assertTrue(file.mkdir())
+            file.resolve("child").writeText("work from another process")
+            assertTrue(runCatching { repo.delete(second) }.isFailure)
+            assertEquals("work from another process", file.resolve("child").readText())
+            assertTrue(repo.delete(select()))
+            assertFalse(file.exists())
+        }
+    }
+
     @Test fun cancelledSearchRequestsReleasePromptlyAndLeaveRepositoryUsable() = withWorkspace { root ->
         root.resolve("visible.kt").writeText("needle")
         val repo = FileRepository(root)

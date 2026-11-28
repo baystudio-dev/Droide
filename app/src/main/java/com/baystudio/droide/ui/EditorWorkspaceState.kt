@@ -103,6 +103,7 @@ class EditorDocument internal constructor(initialPath: String) {
     internal var nativeMutationBinding: EditorNativeMutationBinding? = null
     internal val persistenceRequired: Boolean get() = dirty ||
         (editable && savedFileExisted == false)
+    internal val hasPendingTabWork: Boolean get() = persistenceRequired || isSaveInProgress || saveSynchronizationPending
     internal val needsSave: Boolean get() = persistenceRequired || saveSynchronizationPending || saveNotificationPending
     /** Observed path-mutation guard, not a reservation of native input or future saves. */
     internal val blocksPersistedPathMutation: Boolean get() = dirty || isSaveInProgress ||
@@ -1074,6 +1075,7 @@ class EditorWorkspaceState {
     }
     fun peek(path: String): EditorDocument? = documents[path]
     fun allDocuments(): List<EditorDocument> = documents.values.toList()
+    internal fun hasDirtyDocuments(): Boolean = documents.values.any { it.dirty }
     fun dirtyDocuments(): List<EditorDocument> = documents.values.filter { it.dirty }
 
     /** Called without suspension on the editor dispatcher so the captured tuple stays coherent. */

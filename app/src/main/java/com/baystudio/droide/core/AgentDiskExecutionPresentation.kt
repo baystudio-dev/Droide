@@ -89,5 +89,5 @@ internal fun BackgroundCommandManager.Snapshot.agentSummary(includeDiskNotice: B
     val dirty = if (launchDiskState.hasDirtyBuffers) " launch_dirty_buffers=${launchDiskState.dirtyCount}" else ""
     val summary = "id=$id state=${state.name.lowercase()}$exit$timeout$dirty output_incomplete=$outputIncomplete command=${command.take(500)}" +
         if (state == BackgroundCommandManager.State.KILLED) "\n${AgentCommandSessions.STOP_REQUEST_NOTICE}" else ""
-    return if (includeDiskNotice) launchDiskState.annotate("background_job:$id:launch", summary) else summary
+    return if (includeDiskNotice) launchDiskState.annotate("background_job:$id:launch", summary) + workspaceNotice else summary
 }

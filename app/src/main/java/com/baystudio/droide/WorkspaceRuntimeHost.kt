@@ -221,8 +221,8 @@ internal class WorkspaceRuntimeHost(
             explorerStateBinding = state
             activeExplorerRefresh = ExplorerRefreshController(
                 state, runtimeScope, explorerReadLane,
-                load = { path, cursor, options, budget, traversal ->
-                    runtime.files.listFilesPageBounded(path, cursor, 250, options, budget, traversal)
+                load = { path, cursor, pageSize, options, budget, traversal ->
+                    runtime.files.listFilesPageBounded(path, cursor, pageSize, options, budget, traversal)
                 },
                 watchFactory = AndroidExplorerDirectoryWatch(runtime.files.root),
             )

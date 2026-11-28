@@ -36,6 +36,23 @@ class WorkspaceToolchainExecutionTest {
             assertEquals(File(bin, "droide-fixture-compiler").path, ordinary.output.trim())
         } finally { session.destroy(); scope.cancel() }
     }
+    @Test fun projectShellUsesRootWhenTheHumanShellLastReportedARemovedDirectory() = fixture { root, host ->
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val session = TerminalSession(root, scope, TerminalLaunchSpec(shell = "/bin/sh"), host) { _, cwd, project ->
+            assertEquals(root, project)
+            assertEquals(root, cwd)
+            null
+        }
+        val oldCwd = root.resolve("renamed-directory").absolutePath
+        session.syncObservedCwd(oldCwd)
+        try {
+            val result = session.execProjectShell(root, "pwd > created.txt", 5_000)
+            assertEquals(result.output, 0, result.exitCode)
+            assertEquals(root.canonicalPath, root.resolve("created.txt").readText().trim())
+            assertEquals(oldCwd, session.workingDirectory.value)
+        } finally { session.destroy(); scope.cancel() }
+    }
+
     @Test fun unsupportedBackendKeepsItsOriginalEnvironment() = fixture { root, host ->
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val old = TerminalLaunchSpec(shell = "/bin/sh", environment = mapOf("DROIDE_FIXTURE" to "old"))

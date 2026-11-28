@@ -70,6 +70,20 @@ class MainActivity : ComponentActivity() {
         else if (!granted) Toast.makeText(this, "Allow Droide notifications to use Wake Lock and Exit from the notification shade.", Toast.LENGTH_LONG).show()
     }
 
+    private suspend fun confirmDeferredFolderSync(name: String, failure: Exception): Boolean =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            val dialog = android.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle("Leave $name with folder sync pending?")
+                .setMessage("Your saved project copy stays on this device. Droide will retry the linked folder when you reopen it.\n\n" +
+                    (failure.message ?: "The folder could not be synchronized.").take(300))
+                .setNegativeButton("Stay here") { _, _ -> decision.complete(false) }
+                .setPositiveButton("Switch project") { _, _ -> decision.complete(true) }
+                .setOnCancelListener { decision.complete(false) }
+                .show()
+            try { decision.await() } finally { dialog.dismiss() }
+        }
+
     private fun openNotificationSettings() {
         runCatching {
             startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -166,6 +180,7 @@ class MainActivity : ComponentActivity() {
                 try {
                     workspaceModel.coordinator.addSafProject(
                         uri = uri,
+                        deferUnavailable = ::confirmDeferredFolderSync,
                         onProgress = { progress -> folderImportProgress.value = progress },
                     )
                 } catch (_: CancellationException) {
@@ -339,12 +354,12 @@ class MainActivity : ComponentActivity() {
                                 onReconcileSaf = { workspaceModel.coordinator.reconcileActiveSaf() },
                                 onProjectSwitch = { id ->
                                     lifecycleScope.launch {
-                                        runSuspendCatching { workspaceModel.coordinator.switchProject(id) }
+                                        runSuspendCatching { workspaceModel.coordinator.switchProject(id, ::confirmDeferredFolderSync) }
                                             .onFailure { Toast.makeText(this@MainActivity, "Cannot switch project: ${it.message}", Toast.LENGTH_LONG).show() }
                                     }
                                 },
                                 onProjectCreate = { name, templateId ->
-                                    workspaceModel.coordinator.createProjectFromTemplateAndSwitch(name, templateId)
+                                    workspaceModel.coordinator.createProjectFromTemplateAndSwitch(name, templateId, ::confirmDeferredFolderSync)
                                 },
                                 onPermissionRuleChange = { action, effect -> workspaceModel.coordinator.updateActivePermissionSetting(rt.project.id, action, effect) },
                             )

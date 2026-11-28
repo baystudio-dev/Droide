@@ -32,6 +32,7 @@ class ExternalAgentSessionControllerTest {
         var prepareCalls = 0
         var newCalls = 0
         var modelCalls = 0
+        var publishedAtStop: String? = null
         var reviewCalls = 0
         var reviewResult = WorkspaceAgentSyncResult(listOf("accepted.html"), emptyList())
         override val workspaceSyncState = kotlinx.coroutines.flow.MutableStateFlow(WorkspaceAgentSyncState(sourceRoot = "/project"))
@@ -68,7 +69,12 @@ class ExternalAgentSessionControllerTest {
                 onEvent(WorkspaceAgentEvent.Text("Live reply"))
                 yield()
                 return WorkspaceAgentTurnResult(agentId, "same_session", "Reply to $prompt", "end_turn", emptyList(), emptyList())
-            } finally { if (!currentCoroutineContext().isActive) cancelled.complete(Unit) }
+            } finally {
+                if (!currentCoroutineContext().isActive) {
+                    publishedAtStop?.let { onEvent(WorkspaceAgentEvent.Status(it, publishedFiles = true)) }
+                    cancelled.complete(Unit)
+                }
+            }
         }
 
         override suspend fun selectModel(agentId: String, expectedSessionId: String, modelId: String): WorkspaceAgentEvent.Configuration {
@@ -219,6 +225,16 @@ class ExternalAgentSessionControllerTest {
         controller.prepare(host, spec); controller.idle()
         assertEquals("same_session", controller[spec.id].sessionId)
         assertEquals(0, host.newCalls)
+    }
+
+    @Test fun stoppingAnExternalCliKeepsEvidenceOfCompletedDirectWritesInChat() = fixture { _, controller, host ->
+        host.holdTurn = CompletableDeferred()
+        host.publishedAtStop = "Project file already saved: src/Main.kt"
+        controller.submit(host, spec, "edit", WorkspaceAgentMode.EDIT)
+        host.turnStarted.await()
+        controller.cancel(host); controller.idle()
+        assertTrue(controller[spec.id].activity.single().contains("src/Main.kt"))
+        assertTrue(controller[spec.id].messages.last().content.contains("src/Main.kt"))
     }
 
     @Test fun stopBeforeDispatchDoesNotLeaveTheControlsPermanentlyBusy() = fixture { _, controller, host ->

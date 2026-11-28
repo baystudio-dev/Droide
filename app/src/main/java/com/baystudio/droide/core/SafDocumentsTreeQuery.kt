@@ -24,7 +24,9 @@ internal data class SafDocumentNode(
     val identity: SafProviderIdentity get() = SafProviderIdentity(documentId, uri.toString(), name, mimeType)
 }
 
-internal class SafDirectQueryException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+internal open class SafDirectQueryException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
+
+internal class SafProviderUnavailable(message: String, cause: Throwable? = null) : SafDirectQueryException(message, cause)
 
 /** Carries the mutation owner through the synchronous read helpers, including directory traversal. */
 internal class SafMirrorReadCheckpoint(val job: Job?, private val requireOwner: () -> Unit) : () -> Unit {
@@ -81,8 +83,10 @@ internal class SafDocumentsTreeQuery(
 
     private fun readRows(queryUri: Uri, maxEntries: Int, checkCancelled: () -> Unit,
         signal: CancellationSignal?): List<SafDocumentNode> {
-        val cursor = context.contentResolver.query(queryUri, PROJECTION, null as Bundle?, signal)
-            ?: throw SafDirectQueryException("SAF provider returned no cursor")
+        val cursor = try { context.contentResolver.query(queryUri, PROJECTION, null as Bundle?, signal) }
+            catch (failure: SecurityException) { throw SafProviderUnavailable("Permission to access the linked folder is unavailable", failure) }
+            catch (failure: IllegalArgumentException) { throw SafProviderUnavailable("The linked folder provider is unavailable", failure) }
+            ?: throw SafProviderUnavailable("SAF provider returned no cursor")
         return cursor.use { rows ->
             checkCancelled()
             requireComplete(rows)

@@ -8,12 +8,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorktreeReviewSafetyTest {
-    @Test fun conflictingMergeReportsVerifiedRollbackAndKeepsParentCommit() = runBlocking {
+    @Test fun conflictingMergeKeepsParentClean() = verifyConflict(concurrentWriter = false)
+    @Test fun conflictingMergeKeepsAnUnrelatedConcurrentEdit() = verifyConflict(concurrentWriter = true)
+
+    private fun verifyConflict(concurrentWriter: Boolean) = runBlocking {
         val root = Files.createTempDirectory("droide-worktree-conflict-").toFile()
         try {
             Git.init().setDirectory(root).call().use { parent ->
                 root.resolve(".gitignore").writeText(".droide/\n")
                 root.resolve("note.txt").writeText("base\n")
+                root.resolve("other.txt").writeText("base\n")
                 parent.add().addFilepattern(".").call()
                 parent.commit().setMessage("initial").setAuthor("Test", "test@example.org")
                     .setCommitter("Test", "test@example.org").call()
@@ -37,13 +41,25 @@ class WorktreeReviewSafetyTest {
                 parent.commit().setMessage("parent").setAuthor("Test", "test@example.org")
                     .setCommitter("Test", "test@example.org").call().name
             }
-            val outcome = manager.merge(info.name, info.baseCommit, info.parentBranch,
-                info.parentRepositoryIdentity, info.branch, "merge conflict")
+            val injected = java.util.concurrent.atomic.AtomicBoolean(false)
+            val listener = org.eclipse.jgit.lib.Repository.getGlobalListenerList().addRefsChangedListener { event ->
+                if (concurrentWriter && event.repository.directory.canonicalFile == root.resolve(".git").canonicalFile &&
+                    root.resolve(".git/refs/droide/subagents/conflict").isFile && injected.compareAndSet(false, true)) {
+                    root.resolve("other.txt").writeText("concurrent edit")
+                }
+            }
+            val outcome = try { manager.merge(info.name, info.baseCommit, info.parentBranch,
+                info.parentRepositoryIdentity, info.branch, "merge conflict") } finally { listener.remove() }
             assertFalse(outcome.merged)
-            assertTrue(outcome.message.contains("Parent HEAD and tracked working tree were restored"))
+            if (!concurrentWriter) assertTrue("note.txt" in outcome.conflicts)
             Git.open(root).use { parent ->
                 assertTrue(parent.repository.resolve("HEAD")?.name == parentHead)
-                assertTrue(parent.status().call().isClean)
+                val status = parent.status().call()
+                if (concurrentWriter) {
+                    assertTrue(injected.get())
+                    assertTrue(status.modified == setOf("other.txt"))
+                    assertTrue(root.resolve("other.txt").readText() == "concurrent edit")
+                } else assertTrue(status.isClean)
             }
             assertTrue(root.resolve("note.txt").readText() == "parent\n")
         } finally { PathSecurity.deleteTreeNoFollow(root) }

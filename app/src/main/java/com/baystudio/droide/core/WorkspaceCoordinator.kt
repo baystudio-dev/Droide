@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import java.io.File
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -71,7 +72,7 @@ data class WorkspaceRuntime(
     private val externalIdeBinding = if (startupMode == WorkspaceStartupMode.NORMAL)
         ExternalIdeToolRegistry.bind(extensions.workspaceId, files.root, agent.externalIdeTools()) else null
 
-    suspend fun reconcileSaf(): String? {
+    suspend fun reconcileSaf(deferUnavailable: (suspend (String, Exception) -> Boolean)? = null): String? {
         val mirror = safMirror ?: return null
         val dirty = documentAuthority.dirtySnapshots()
         check(dirty.isEmpty()) {
@@ -81,8 +82,17 @@ data class WorkspaceRuntime(
         catch (failure: Throwable) {
             // A failed refresh may already have published some files. Retire the
             // old index even when editor reconciliation also fails or is cancelled.
-            try { withContext(NonCancellable + Dispatchers.IO) { documentAuthority.reconcileAfterPersistedMutation() } }
-            catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
+            val reconciled = try { withContext(NonCancellable + Dispatchers.IO) { documentAuthority.reconcileAfterPersistedMutation() } }
+            catch (cleanup: Throwable) {
+                if (cleanup !== failure) failure.addSuppressed(cleanup)
+                throw failure
+            }
+            if (failure is SafProviderUnavailable && reconciled.conflicts.isEmpty() && deferUnavailable != null &&
+                deferUnavailable(project.name, failure)) {
+                currentCoroutineContext().ensureActive()
+                check(documentAuthority.dirtySnapshots().isEmpty()) { "Save current editor changes before switching projects" }
+                return null
+            }
             throw failure
         }
         val reconciled = withContext(NonCancellable + Dispatchers.IO) { documentAuthority.reconcileAfterPersistedMutation() }
@@ -359,7 +369,7 @@ class WorkspaceCoordinator internal constructor(
         }
     }
 
-    suspend fun switchProject(id: String) = transitionMutex.withLock {
+    suspend fun switchProject(id: String, deferUnavailable: (suspend (String, Exception) -> Boolean)? = null) = transitionMutex.withLock {
         ApplicationWorkAdmission.requireOpen()
         projects.requireSelectionCertain()
         val project = projects.projects.value.firstOrNull { it.id == id } ?: error("Project not found: $id")
@@ -369,7 +379,7 @@ class WorkspaceCoordinator internal constructor(
         if (current?.project?.id == id) return@withLock
         awaitEditorHandoff(current)
 
-        current?.reconcileSaf()
+        current?.reconcileSaf(deferUnavailable)
         val prepared = buildRuntime(project, refreshSaf = true)
         commitPrepared(current, prepared)
     }
@@ -379,6 +389,7 @@ class WorkspaceCoordinator internal constructor(
     suspend fun addSafProject(
         uri: Uri,
         name: String = "SAF project",
+        deferUnavailable: (suspend (String, Exception) -> Boolean)? = null,
         onProgress: ((SafMirrorProgress) -> Unit)? = null,
     ): DroideProject = transitionMutex.withLock {
         ApplicationWorkAdmission.requireOpen()
@@ -389,7 +400,7 @@ class WorkspaceCoordinator internal constructor(
         // flush its dirty editor or repeat provider/setup work.
         if (existing != null && current?.project?.id == existing.id) return@withLock existing
         awaitEditorHandoff(current)
-        current?.reconcileSaf()
+        current?.reconcileSaf(deferUnavailable)
         val project = if (existing?.workspaceRemoved == true) projects.restoreWorkspace(existing.id)
             else existing ?: projects.add(name = name, treeUri = uri.toString())
         // Refresh may retain uncertain local/provider evidence. Keep the registered
@@ -400,13 +411,14 @@ class WorkspaceCoordinator internal constructor(
     }
 
 
-    suspend fun createProjectFromTemplateAndSwitch(name: String, templateId: String): Pair<DroideProject, String?> =
+    suspend fun createProjectFromTemplateAndSwitch(name: String, templateId: String,
+        deferUnavailable: (suspend (String, Exception) -> Boolean)? = null): Pair<DroideProject, String?> =
         transitionMutex.withLock {
         ApplicationWorkAdmission.requireOpen()
             projects.requireSelectionCertain()
             val current = _runtime.value
             awaitEditorHandoff(current)
-            current?.reconcileSaf()
+            current?.reconcileSaf(deferUnavailable)
             val created = projects.createFromTemplate(name, templateId)
             val project = created.first
             val prepared = buildRuntime(project, refreshSaf = true)

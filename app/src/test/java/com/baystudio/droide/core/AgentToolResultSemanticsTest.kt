@@ -56,6 +56,16 @@ class AgentToolResultSemanticsTest {
         assertEquals(false, evidence.success)
     }
 
+    @Test fun dirtyBufferNoticePreservesGitAndStructuredIdeOutcomes() {
+        val dirty = AgentDiskExecutionState(listOf(AgentDiskExecutionState.DirtyDocument("draft.txt", 2, 1)))
+        val failure = dirty.annotate("git_commit", "git error: set commit identity")
+        assertEquals(AgentToolEvidenceState.FAILED, AgentToolResultSemantics.classify("git_commit", failure).state)
+        val ok = dirty.annotate("ide", AgentIdeResult.succeeded("build_debug", "done"))
+        assertEquals(AgentToolEvidenceState.SUCCEEDED, AgentToolResultSemantics.classify("ide", ok, "build_debug").state)
+        val partial = "[DROIDE_SAVE saved=1 attention=1]\nnotes.txt: sync pending"
+        assertEquals(AgentToolEvidenceState.FAILED, AgentToolResultSemantics.classify("save_files", partial).state)
+    }
+
     @Test fun zeroExitIsVerifiedSuccess() {
         val evidence = AgentToolResultSemantics.classify("run_command", "exit=0\nOK")
         assertEquals(AgentToolEvidenceState.SUCCEEDED, evidence.state)

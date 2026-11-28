@@ -23,6 +23,28 @@ class AndroidWorkspaceDocumentWatchTest {
         } finally { PathSecurity.deleteTreeNoFollow(root) }
     }
 
+    @Test fun replacingAnAncestorForcesRebindingAndSiblingChangesStayQuiet() {
+        val root = Files.createTempDirectory("document-watch-ancestor-").toFile()
+        try {
+            root.resolve("src/pkg").mkdirs()
+            val callbacks = mutableMapOf<java.io.File, (Int, String?) -> Unit>()
+            val watch = AndroidWorkspaceDocumentWatch(root) { directory, listener ->
+                callbacks[directory] = listener
+                AutoCloseable { callbacks.remove(directory) }
+            }
+            val events = mutableListOf<Boolean>()
+            val handle = checkNotNull(watch.open("src/pkg/Main.kt", events::add))
+            callbacks.getValue(root)(android.os.FileObserver.MOVED_TO, "unrelated")
+            callbacks.getValue(root)(android.os.FileObserver.CLOSE_WRITE, "src")
+            assertTrue(events.isEmpty())
+            callbacks.getValue(root)(android.os.FileObserver.MOVED_TO, "src")
+            callbacks.getValue(root.resolve("src/pkg"))(android.os.FileObserver.CLOSE_WRITE, "Main.kt")
+            assertEquals(listOf(true, false), events)
+            handle.close()
+            assertTrue(callbacks.isEmpty())
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
+
     @Test fun aliasesEscapesAndSymbolicLinksCannotRetargetWorkspaceWatch() {
         val base = Files.createTempDirectory("document-watch-alias-").toFile()
         val root = base.resolve("project").apply { mkdir() }

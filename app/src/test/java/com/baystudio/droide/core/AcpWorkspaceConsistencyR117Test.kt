@@ -67,10 +67,13 @@ class AcpWorkspaceConsistencyR117Test {
             rpc.beginTurn(WorkspaceAgentMode.EDIT)
         }
 
-        @Synchronized fun request(id: String, method: String, path: String, content: String? = null) {
+        @Synchronized fun request(id: String, method: String, path: String, content: String? = null,
+                                  line: Int? = null, limit: Int? = null) {
             val params = buildJsonObject {
                 put("sessionId", "session-one"); put("path", path)
                 content?.let { put("content", it) }
+                line?.let { put("line", it) }
+                limit?.let { put("limit", it) }
             }
             val frame = buildJsonObject { put("jsonrpc", "2.0"); put("id", id); put("method", method); put("params", params) }
             peerOutput.write((frame.toString() + "\n").toByteArray()); peerOutput.flush()
@@ -194,6 +197,65 @@ class AcpWorkspaceConsistencyR117Test {
         f.read("dependency", relative)
         assertEquals("CLI installed dependency", content(f.reply("dependency")))
         assertEquals("canonical dependency", File(f.source, relative).readText())
+    }
+
+    @Test fun readThenCliChangeRequiresFreshReadBeforeWriting() = fixture { f ->
+        f.read("before", "file.txt")
+        assertEquals("original", content(f.reply("before")))
+        val working = File(f.working, "file.txt")
+        working.writeText("new from CLI")
+        f.write("stale", "file.txt", "based on original")
+        assertError(f.reply("stale"))
+        assertEquals("original", File(f.source, "file.txt").readText())
+        assertEquals("new from CLI", working.readText())
+        assertTrue(f.rpc.drainDirectWrites().isEmpty())
+        f.read("again", "file.txt")
+        assertEquals("new from CLI", content(f.reply("again")))
+        f.write("fresh", "file.txt", "based on new from CLI")
+        assertNotNull(f.reply("fresh")["result"])
+        assertEquals(working.readText(), File(f.source, "file.txt").readText())
+        assertEquals("based on new from CLI", working.readText())
+    }
+
+    @Test fun expiredReadsRequireReviewAndUnrelatedFirstWritesStillWork() {
+        val history = AcpReadVersions(capacity = 2)
+        val base = AcpReadVersions.Version("old", null)
+        for (path in listOf("old.kt", "seen.kt", "last.kt")) history.record(path, base)
+        assertFalse(history.permits("old.kt", "old", "new", true))
+        assertFalse(history.permits("old.kt", null, null, true))
+        assertTrue(history.permits("other.kt", "exists", "exists", true))
+        assertTrue(history.permits("new.kt", null, null, true))
+        history.record("old.kt", AcpReadVersions.Version("new", null))
+        assertTrue(history.permits("old.kt", "old", "new", true))
+        history.clear()
+        assertTrue(history.permits("seen.kt", "fresh", "fresh", true))
+    }
+
+    @Test fun excludedDependencyPreservesCanonicalEditAfterAcpRead() = fixture { f ->
+        val name = "node_modules/pkg/index.js"
+        val canonical = File(f.source, name).apply { parentFile.mkdirs(); writeText("A") }
+        File(f.working, name).apply { parentFile.mkdirs(); writeText("installed") }
+        f.read("read", name)
+        assertEquals("installed", content(f.reply("read")))
+        canonical.writeText("B")
+        f.write("stale", name, "C")
+        assertError(f.reply("stale"))
+        assertEquals("B", canonical.readText())
+        assertEquals("installed", File(f.working, name).readText())
+    }
+
+    @Test fun readHonorsLongRangesAndVersionsTheEntireFile() = fixture(initial =
+        mapOf("file.txt" to (1..10_005).joinToString("\n"))) { f ->
+        val name = File(f.working, "file.txt")
+        f.request("range", "fs/read_text_file", name.path, line = 2, limit = 10_002)
+        val lines = content(f.reply("range")).lines()
+        assertEquals(10_002, lines.size)
+        assertEquals("2", lines.first())
+        assertEquals("10003", lines.last())
+        name.appendText("\nextra")
+        f.write("stale", "file.txt", "rewrite")
+        assertError(f.reply("stale"))
+        assertTrue(name.readText().endsWith("extra"))
     }
 
     @Test fun approvedWriteAfterShellEditPublishesAndUpdatesSameExecutionView() = fixture { f ->

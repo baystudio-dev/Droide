@@ -280,7 +280,10 @@ internal fun IdeScreen(
     DisposableEffect(terminalReadiness) { onDispose { terminalReadiness.close() } }
     val terminalEnvironmentRevision by terminalReadiness.revision.collectAsState()
     LaunchedEffect(lsp, terminalReadiness, terminalEnvironmentRevision) {
-        if (terminalEnvironmentRevision > 0L) lsp.environmentInvalidated()
+        if (terminalEnvironmentRevision > 0L) {
+            lsp.environmentInvalidated()
+            explorerRefresh.requestWorkspaceChange()
+        }
     }
     val terminalSnapshot by terminalManager.snapshot.collectAsState()
     val activeSession = terminalSnapshot.activeTab?.session
@@ -338,9 +341,9 @@ internal fun IdeScreen(
     }
     fun open(path: String): Boolean = runUiCatching(onError = { showActionFailure("Cannot open file", it) }) {
         captureActiveForLsp()
-        val nextTabs = EditorTabRetention.open(openFiles, path, activeFile, allowExistingDirtyOverflow = true) { editorState.peek(it)?.dirty == true }
+        val nextTabs = EditorTabRetention.open(openFiles, path, activeFile, allowExistingDirtyOverflow = true) { editorState.peek(it)?.hasPendingTabWork == true }
         if (nextTabs == null) {
-            launchUserAction { snackbarHostState.showSnackbar("All editor tabs contain unsaved changes. Save or close a tab before opening another file.") }
+            launchUserAction { snackbarHostState.showSnackbar("All editor tabs have pending work. Save or close a tab before opening another file.") }
             return@runUiCatching false
         }
         EditorTabRetention.closeEvicted(openFiles, nextTabs, editorState) { evicted -> launchUserAction { runSuspendCatching { lsp.didClose(evicted) } } }
@@ -654,7 +657,7 @@ internal fun IdeScreen(
         editorBridge.capture()
         val updates = LspWorkspaceEditPreflight.prepare(edit, editorState, files)
         editorState.requireMutableOwner()
-        val plannedTabs = EditorTabRetention.planWorkspaceEdit(openFiles, updates.keys, activeFile) { editorState.peek(it)?.dirty == true }
+        val plannedTabs = EditorTabRetention.planWorkspaceEdit(openFiles, updates.keys, activeFile) { editorState.peek(it)?.hasPendingTabWork == true }
         // Final pure guard after all-edit preflight, before the first mutation.
         // This safe preparation is not rollback; applying this batch may retire its captured owner.
         LspWorkspaceEditPreflight.requireCurrent(edit)
@@ -1219,7 +1222,7 @@ internal fun IdeScreen(
                         )
                         1 -> EditorSurface()
                         2 -> TerminalSurface()
-                        3 -> GitPanel(git, onOpen = { open(it) }, onWorkspaceChanged = explorerState::requestRefresh)
+                        3 -> GitPanel(git, workspaceRevision = explorerState.workspaceRevision, onOpen = { open(it) }, onWorkspaceChanged = explorerState::requestRefresh)
                         4 -> FocusedWorkbenchBrowser(
                             sidebarOwnsBrowser = sidebarOwnsBrowser,
                             browser = { WorkspaceBrowserPlaceholder(browserPlacement, WorkspaceBrowserSlot.MAIN) },
@@ -1269,7 +1272,7 @@ internal fun IdeScreen(
                                 onDeleted = ::onPathDeleted, safLinked = safLinked, onReconcileSaf = onReconcileSaf,
                             )
                             DroideRailTool.Search -> SearchPanel(files, documents, { editorBridge.capture() }, onOpen = ::openLocation)
-                            DroideRailTool.Git -> GitPanel(git, onOpen = { open(it) }, onWorkspaceChanged = explorerState::requestRefresh)
+                            DroideRailTool.Git -> GitPanel(git, workspaceRevision = explorerState.workspaceRevision, onOpen = { open(it) }, onWorkspaceChanged = explorerState::requestRefresh)
                             DroideRailTool.Run -> DebugSurface()
                             DroideRailTool.Web -> WorkspaceBrowserPlaceholder(browserPlacement, WorkspaceBrowserSlot.SIDEBAR)
                             DroideRailTool.Extensions -> ExtensionsPane(extensions, androidDevelopment, deviceBridge, activeFile, agentExtensionFamilyId, environmentRevision = terminalEnvironmentRevision,
@@ -1307,6 +1310,7 @@ internal fun IdeScreen(
             fun AgentSurface() {
                 Box(Modifier.fillMaxSize().workspaceApprovalAttention(WorkspaceApprovalSurface.AGENT) { approvalAttention = it }.droideContentMotion("agent", enabled = physicalLandscape && !typingImeActive)) {
                     AgentPane(agent = agent, uiState = agentUiState, providerConnections = providerConnections, localLlamaModels = localLlamaModels, agentPlugins = workspaceAgentPluginsForStartup(extensions.installedComponentsEnabled, agentPlugins), approvals = approvals, captureIdeContext = { editorBridge.capture(); captureAgentIdeContext(files.root, activeFile, activeLanguageName, openFiles, editorState, editorBridge.currentCursorLocation(), diagnostics, androidBuildDiagnostics) }, onSessions = { showSessions = true }, onUiError = { message -> scope.launchUiCatching { snackbarHostState.showSnackbar(message) } }, onComposerFocusChanged = { agentComposerFocused = it; if (physicalLandscape) accessoryInputFocus.onFocusChanged(agentFocusOwner, it); if (it) { editorBridge.yieldToAgentComposer(); approvalAttention = WorkspaceApprovalSurface.AGENT } }, onClose = { isChatVisible = false },
+                        hasUnsavedEditorText = editorState::hasDirtyDocuments,
                         onManageMcp = { openSettings("TOOLS") },
                         onManagePlugins = { openSettings("PLUGINS") },
                         onManageSkills = { openSettings("SKILLS") },

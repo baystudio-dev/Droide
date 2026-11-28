@@ -6,7 +6,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.eclipse.jgit.api.Git
-import org.eclipse.jgit.api.ResetCommand
+import org.eclipse.jgit.merge.MergeStrategy
+import org.eclipse.jgit.merge.ResolveMerger
 import org.eclipse.jgit.lib.Constants
 import org.eclipse.jgit.lib.ObjectId
 import org.eclipse.jgit.lib.Repository
@@ -336,6 +337,21 @@ class WorktreeManager(private val workDir: File) {
                         .call()
                     val imported = parentGit.repository.resolve(tempRef)
                         ?: return@withContext IsolatedWorkspaceMergeResult(false, message = "Failed to import child branch")
+                    // Resolve content conflicts without ever checking out conflict markers in the parent.
+                    // Fast-forwards only need JGit's normal dirty-path checkout checks.
+                    val head = ObjectId.fromString(originalHead)
+                    if (RevWalk(parentGit.repository).use { !it.isMergedInto(it.parseCommit(head), it.parseCommit(imported)) }) {
+                        val preview = MergeStrategy.RECURSIVE.newMerger(parentGit.repository, true) as ResolveMerger
+                        if (!preview.merge(head, imported)) {
+                            val conflicts = preview.unmergedPaths.orEmpty().sorted()
+                            return@withContext IsolatedWorkspaceMergeResult(false, conflicts = conflicts,
+                                message = "Merge conflicts require review in the isolated workspace: " + conflicts.take(20).joinToString())
+                        }
+                    }
+                    check(parentGit.repository.fullBranch == parentFullBranch &&
+                        parentGit.repository.resolve(Constants.HEAD) == head && parentGit.status().call().isClean) {
+                        "Parent workspace changed during merge preparation. Review the current changes and retry."
+                    }
                     val result = parentGit.merge()
                         .include(imported)
                         .setMessage(validateMergeMessage(commitMessage))
@@ -348,18 +364,18 @@ class WorktreeManager(private val workDir: File) {
                     }
 
                     val conflicts = result.conflicts?.keys?.sorted().orEmpty()
-                    val rollback = rollbackParent(parentGit, originalHead)
                     IsolatedWorkspaceMergeResult(
                         merged = false,
                         conflicts = conflicts,
                         message = buildString {
-                            append("Merge refused (${result.mergeStatus}). ").append(rollback)
+                            append("Merge refused (${result.mergeStatus}). Inspect the parent working tree before retrying.")
                             if (conflicts.isNotEmpty()) append(" Conflicts: ${conflicts.take(20).joinToString()}")
                         }
                     )
-                } catch (t: Throwable) {
-                    val rollback = rollbackParent(parentGit, originalHead)
-                    IsolatedWorkspaceMergeResult(false, message = "Merge failed: ${t.message}. $rollback")
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (t: Exception) {
+                    IsolatedWorkspaceMergeResult(false, message = "Merge failed: ${t.message}. Inspect the parent working tree before retrying.")
                 } finally {
                     runCatching {
                         parentGit.repository.updateRef(tempRef).apply { isForceUpdate = true }.delete()
@@ -427,24 +443,7 @@ class WorktreeManager(private val workDir: File) {
         }.getOrNull()
     }
 
-    private fun rollbackParent(parentGit: Git, originalHead: String): String = try {
-        parentGit.reset().setMode(ResetCommand.ResetType.HARD).setRef(originalHead).call()
-        val actual = parentGit.repository.resolve(Constants.HEAD)?.name
-        if (actual != originalHead) {
-            "Parent rollback could not confirm its original HEAD; inspect Git before continuing."
-        } else {
-            val after = parentGit.status().call()
-            val tracked = after.added + after.changed + after.modified + after.removed + after.missing + after.conflicting
-            when {
-                tracked.isNotEmpty() -> "Parent HEAD was restored, but tracked changes remain; inspect Git before continuing."
-                after.untracked.isNotEmpty() || after.untrackedFolders.isNotEmpty() ->
-                    "Parent HEAD was restored; untracked files were preserved for review and may include merge residue."
-                else -> "Parent HEAD and tracked working tree were restored."
-            }
-        }
-    } catch (error: Exception) {
-        "Parent rollback could not be confirmed (${error.message ?: error::class.java.simpleName}); inspect Git before continuing."
-    }
+
 
     private fun validateMergeMessage(message: String): String {
         val clean = message.replace('\u0000', ' ').trim()

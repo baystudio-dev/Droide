@@ -24,6 +24,24 @@ class GitPanelReadActionsTest {
     private val git = GitManager(root)
     @After fun cleanup() { root.deleteRecursively() }
 
+    @Test fun externalStagingUpdatesTheVisiblePanelAtWorkspaceInvalidation() {
+        runBlocking {
+            git.init()
+            git.configureIdentity("Test", "test@example.invalid")
+        }
+        root.resolve("edited.txt").writeText("from terminal")
+        val revision = androidx.compose.runtime.mutableLongStateOf(0L)
+        compose.setContent { DroideTheme { GitPanel(git, revision.longValue, {}, {}) } }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Log") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange))
+        list.performScrollToNode(hasText("Changes (1)"))
+        runBlocking { git.stage("edited.txt") }
+        compose.runOnIdle { revision.longValue++ }
+        compose.waitUntil(5_000) { compose.onAllNodes(hasText("Changes (0)")).fetchSemanticsNodes().isNotEmpty() }
+        list.performScrollToNode(hasText("Staged Changes (1)"))
+        compose.onNodeWithText("Staged Changes (1)").assertExists()
+    }
+
     @Test fun blockedReadReportsExportConflictAndRecoversWithoutCrashing() {
         runBlocking { git.init() }
         root.resolve("keep.txt").writeText("unsaved working tree content")

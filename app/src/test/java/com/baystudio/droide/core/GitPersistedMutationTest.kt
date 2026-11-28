@@ -3,6 +3,7 @@ package com.baystudio.droide.core
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,6 +39,53 @@ class GitPersistedMutationTest {
         } finally {
             PathSecurity.deleteTreeNoFollow(root)
         }
+    }
+
+    @Test fun discardCannotConsumeAChangedWorktreeOrIndexSelection() = runBlocking {
+        val root = Files.createTempDirectory("droide-stale-discard-").toFile()
+        try {
+            val git = GitManager(root)
+            git.init()
+            git.configureIdentity("Droide Test", "test@example.invalid")
+            val file = root.resolve("note.txt")
+            file.writeText("base")
+            git.stage(file.name)
+            git.commitStaged("base")
+            file.writeText("edit A")
+            val reviewed = git.prepareDiscard(file.name)
+            file.writeText("edit B")
+            assertTrue(git.discardWorkingTree(reviewed).contains("changed", ignoreCase = true))
+            assertEquals("edit B", file.readText())
+            val beforeStage = git.prepareDiscard(file.name)
+            file.writeText("new index")
+            git.stage(file.name)
+            git.commitStaged("new baseline")
+            file.writeText("edit B")
+            assertTrue(git.discardWorkingTree(beforeStage).contains("changed", ignoreCase = true))
+            file.writeText("edit C")
+            assertTrue(git.discardWorkingTree(git.prepareDiscard(file.name)).contains("Discarded"))
+            assertEquals("new index", file.readText())
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
+    }
+
+    @Test fun failedCommitWithInvalidIdentityLeavesUnstagedEditAlone() = runBlocking {
+        val root = Files.createTempDirectory("droide-git-identity-").toFile()
+        try {
+            val git = GitManager(root)
+            git.init()
+            git.configureIdentity("Test", "test@example.invalid")
+            val file = root.resolve("file.txt")
+            file.writeText("base")
+            git.stage(file.name)
+            git.commitStaged("base")
+            org.eclipse.jgit.api.Git.open(root).use { repository ->
+                repository.repository.config.apply { setString("user", null, "email", "invalid"); save() }
+            }
+            file.writeText("draft")
+            assertTrue(runCatching { git.commitAll("agent request") }.isFailure)
+            assertFalse(git.changes().any { it.staged })
+            assertEquals("draft", file.readText())
+        } finally { PathSecurity.deleteTreeNoFollow(root) }
     }
 
     @Test fun applyingAnOlderSelectionUsesItsOriginalObjectAfterAnotherStashIsCreated() = runBlocking {

@@ -140,45 +140,86 @@ class GitManager(
         "Initialized Git repository"
     }
 
+    private fun statusSummary(git: Git, s: org.eclipse.jgit.api.Status): String =
+        buildString {
+            appendLine("Added: ${summarizePaths(s.added)}")
+            appendLine("Changed: ${summarizePaths(s.changed)}")
+            appendLine("Modified: ${summarizePaths(s.modified)}")
+            appendLine("Removed: ${summarizePaths(s.removed + s.missing)}")
+            appendLine("Untracked: ${summarizePaths(s.untracked)}")
+            appendLine("Branch: ${runCatching { git.repository.branch }.getOrNull() ?: "?"}")
+            val identity = GitIdentityPolicy.effective(git.repository)
+            appendLine("Identity: ${identity?.let { id -> "${id.name} <${id.email}>" } ?: "(not configured)"}")
+            val remotes = git.remoteList().call().asSequence()
+                .flatMap { r -> r.getURIs().asSequence() }
+                .map { uri -> GitRemoteSecurity.redact(uri.toString()) }
+                .take(10)
+                .joinToString()
+            if (remotes.isNotBlank()) appendLine("Remotes: $remotes")
+        }.take(16_000)
+
+    private fun changedPaths(s: org.eclipse.jgit.api.Status): List<GitChange> =
+        buildList {
+            s.added.sorted().forEach { path -> add(GitChange(path, GitChangeKind.ADDED, true)) }
+            s.changed.sorted().forEach { path -> add(GitChange(path, GitChangeKind.MODIFIED, true)) }
+            s.removed.sorted().forEach { path -> add(GitChange(path, GitChangeKind.DELETED, true)) }
+            s.modified.sorted().forEach { path -> add(GitChange(path, GitChangeKind.MODIFIED, false)) }
+            s.missing.sorted().forEach { path -> add(GitChange(path, GitChangeKind.DELETED, false)) }
+            s.untracked.sorted().forEach { path -> add(GitChange(path, GitChangeKind.UNTRACKED, false)) }
+            s.conflicting.sorted().forEach { path -> add(GitChange(path, GitChangeKind.CONFLICT, false)) }
+        }.distinctBy { Triple(it.path, it.kind, it.staged) }
+
+    internal data class StatusSnapshot(val summary: String, val changes: List<GitChange>, val directories: Set<String>)
+
+    // The panel only observes a small sample of tracked directories and the current changes.
+    // Building this list never walks the filesystem.
+    private fun panelDirectories(git: Git, changes: List<GitChange>): Set<String> = buildSet {
+        add(""); add(".git"); add(".git/refs"); add(".git/refs/heads")
+        fun include(path: String) { add(path.substringBeforeLast('/', "")) }
+        changes.asSequence().take(128).takeWhile { size < 20 }.forEach { include(it.path) }
+        val index = git.repository.readDirCache()
+        for (i in 0 until minOf(256, index.entryCount)) {
+            if (size >= 20) break
+            include(index.getEntry(i).pathString)
+        }
+    }
+
+    internal suspend fun observePanelDirectories(directories: Set<String>, changed: () -> Unit): Nothing =
+        withContext(Dispatchers.IO) {
+            val handles = mutableListOf<AutoCloseable>()
+            try {
+                for (path in directories) {
+                    val handle = try {
+                        val directory = PathSecurity.resolveWithin(workDir, path)
+                        val watchedMetadata = setOf("index", "HEAD", "packed-refs", "config", "refs")
+                        WorkspaceDirectoryEvents.subscribe(directory) { event, name ->
+                            if (event and (WorkspaceDirectoryEvents.STRUCTURE or android.os.FileObserver.CLOSE_WRITE) != 0 &&
+                                (path != ".git" || name == null || name in watchedMetadata) &&
+                                name != ".droide" && (!path.startsWith(".git/") || name?.endsWith(".lock") != true)) changed()
+                        }
+                    } catch (_: Exception) { null }
+                    if (handle != null) handles += handle
+                }
+                kotlinx.coroutines.awaitCancellation()
+            } finally { handles.forEach { it.close() } }
+        }
+
+
+    internal suspend fun panelStatus(): StatusSnapshot? = gitIo {
+        openExisting()?.use { git ->
+            val status = git.status().call()
+            val changes = changedPaths(status)
+            StatusSnapshot(statusSummary(git, status), changes, panelDirectories(git, changes))
+        }
+    }
+
     suspend fun status(): String = gitIo {
-        val g = openExisting() ?: return@gitIo "(not a git repository)"
-        try {
-            g.use {
-                val s = it.status().call()
-                buildString {
-                    appendLine("Added: ${summarizePaths(s.added)}")
-                    appendLine("Changed: ${summarizePaths(s.changed)}")
-                    appendLine("Modified: ${summarizePaths(s.modified)}")
-                    appendLine("Removed: ${summarizePaths(s.removed + s.missing)}")
-                    appendLine("Untracked: ${summarizePaths(s.untracked)}")
-                    appendLine("Branch: ${runCatching { it.repository.branch }.getOrNull() ?: "?"}")
-                    val identity = GitIdentityPolicy.effective(it.repository)
-                    appendLine("Identity: ${identity?.let { id -> "${id.name} <${id.email}>" } ?: "(not configured)"}")
-                    val remotes = it.remoteList().call().asSequence()
-                        .flatMap { r -> r.getURIs().asSequence() }
-                        .map { uri -> GitRemoteSecurity.redact(uri.toString()) }
-                        .take(10)
-                        .joinToString()
-                    if (remotes.isNotBlank()) appendLine("Remotes: $remotes")
-                }.take(16_000)
-            }
-        } catch (e: Exception) { "git error: ${e.message}" }
+        try { openExisting()?.use { statusSummary(it, it.status().call()) } ?: "(not a git repository)" }
+        catch (failure: Exception) { "git error: ${failure.message}" }
     }
 
     suspend fun changes(): List<GitChange> = gitIo {
-        val g = openExisting() ?: return@gitIo emptyList()
-        g.use {
-            val s = it.status().call()
-            buildList {
-                s.added.sorted().forEach { path -> add(GitChange(path, GitChangeKind.ADDED, true)) }
-                s.changed.sorted().forEach { path -> add(GitChange(path, GitChangeKind.MODIFIED, true)) }
-                s.removed.sorted().forEach { path -> add(GitChange(path, GitChangeKind.DELETED, true)) }
-                s.modified.sorted().forEach { path -> add(GitChange(path, GitChangeKind.MODIFIED, false)) }
-                s.missing.sorted().forEach { path -> add(GitChange(path, GitChangeKind.DELETED, false)) }
-                s.untracked.sorted().forEach { path -> add(GitChange(path, GitChangeKind.UNTRACKED, false)) }
-                s.conflicting.sorted().forEach { path -> add(GitChange(path, GitChangeKind.CONFLICT, false)) }
-            }.distinctBy { Triple(it.path, it.kind, it.staged) }
-        }
+        openExisting()?.use { changedPaths(it.status().call()) }.orEmpty()
     }
 
     suspend fun stage(path: String, allowConflictResolution: Boolean = false): String = gitIo {
@@ -271,7 +312,25 @@ class GitManager(
         "Unstaged $repoPath"
     }
 
-    suspend fun discardWorkingTree(path: String): String = mutatePersisted("Discard") { gitIo {
+    internal data class DiscardSelection(
+        val path: String, val file: StreamFileVersion?, val linkTarget: java.nio.file.Path?,
+        val indexId: org.eclipse.jgit.lib.ObjectId, val indexMode: Int,
+    )
+
+    internal suspend fun prepareDiscard(path: String): DiscardSelection = gitIo {
+        val relative = validateRepoPath(path)
+        requireNotNull(openExisting()).use { git ->
+            val entry = requireNotNull(git.repository.readDirCache().getEntry(relative)) { "Path is no longer tracked" }
+            val leaf = workDir.resolve(relative).toPath()
+            val link = if (java.nio.file.Files.isSymbolicLink(leaf)) java.nio.file.Files.readSymbolicLink(leaf) else null
+            DiscardSelection(relative, if (link == null) StreamFileVersion.capture(workDir, relative) else null,
+                link, entry.objectId, entry.rawMode)
+        }
+    }
+
+    internal suspend fun discardWorkingTree(selection: DiscardSelection): String = discardWorkingTree(selection.path, selection)
+    suspend fun discardWorkingTree(path: String): String = discardWorkingTree(path, null)
+    private suspend fun discardWorkingTree(path: String, selection: DiscardSelection?): String = mutatePersisted("Discard") { gitIo {
         val repoPath = validateRepoPath(path)
         val g = openExisting() ?: return@gitIo "git error: not a git repository"
         g.use {
@@ -282,6 +341,18 @@ class GitManager(
                 "Unstage $repoPath before discarding working-tree changes"
             }
             require(repoPath in s.modified || repoPath in s.missing) { "No discardable working-tree change for $repoPath" }
+            if (selection != null) {
+                val index = it.repository.readDirCache().getEntry(repoPath)
+                check(index?.objectId == selection.indexId && index.rawMode == selection.indexMode) {
+                    "The Git index changed. Review this path again before discarding."
+                }
+                selection.file?.requireMatches(workDir, repoPath)
+                selection.linkTarget?.let { expected ->
+                    check(java.nio.file.Files.readSymbolicLink(workDir.resolve(repoPath).toPath()) == expected) {
+                        "The link changed. Review this path again before discarding."
+                    }
+                }
+            }
             it.checkout().addPath(repoPath).call()
         }
         "Discarded working-tree changes in $repoPath"
@@ -643,9 +714,9 @@ class GitManager(
             val candidates = before.added + before.changed + before.modified + before.untracked + before.untrackedFolders + before.removed + before.missing
             val sensitive = candidates.filter(SensitivePathPolicy::isSensitive).sorted()
             require(sensitive.isEmpty()) { "Refusing to commit sensitive path(s): ${sensitive.take(8).joinToString()}" }
+            val identity = GitIdentityPolicy.require(it.repository)
             it.add().addFilepattern(".").call()
             it.add().setUpdate(true).addFilepattern(".").call()
-            val identity = GitIdentityPolicy.require(it.repository)
             val c = it.commit()
                 .setMessage(safeMessage)
                 .setAuthor(identity.name, identity.email)

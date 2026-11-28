@@ -17,7 +17,7 @@ class LspZlsProfileTest {
             assertFalse(LanguageServerRegistry.forPath(path).contains(spec))
         assertEquals("zig",LanguageRegistry.forFile("build.zig.zon")!!.id)
         assertNull(LanguageRegistry.runPlanFor("build.zig.zon"));assertNull(LanguageRegistry.runPlanFor("build.zig.ZON"))
-        assertNotNull(LanguageRegistry.runPlanFor("a.zig"));assertEquals(55,LanguageRegistry.all.size)
+        assertNotNull(LanguageRegistry.runPlanFor("a.zig"));assertEquals(56,LanguageRegistry.all.size)
         assertEquals(listOf("zls"),spec.commands.single())
     }
     @Test fun nearestExactPinOverridesAValidAncestorPin() = root { root ->

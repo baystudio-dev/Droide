@@ -1,6 +1,7 @@
 package com.baystudio.droide.ui
 
 import android.os.FileObserver
+import com.baystudio.droide.core.WorkspaceDirectoryEvents
 import com.baystudio.droide.core.ExplorerFilePolicy
 import java.io.File
 
@@ -13,16 +14,9 @@ internal class AndroidExplorerDirectoryWatch(private val root: File) : ExplorerD
         val directory = if (path.isEmpty()) root else File(root, path)
         if (!directory.isDirectory) return null
         // One observer per directory is nonrecursive. Never inspect/resolve callback child paths.
-        @Suppress("DEPRECATION")
-        val observer = object : FileObserver(directory.absolutePath, EVENTS) {
-            override fun onEvent(event: Int, child: String?) {
-                if (event and EVENTS == 0) return
-                try { invalidate(event and (DELETE_SELF or MOVE_SELF) != 0) }
-                catch (_: Exception) { /* Do not escape the FileObserver callback thread. */ }
-            }
+        return WorkspaceDirectoryEvents.subscribe(directory) { event, _ ->
+            if (event and EVENTS != 0) invalidate(event and (FileObserver.DELETE_SELF or FileObserver.MOVE_SELF) != 0)
         }
-        observer.startWatching()
-        return AutoCloseable { observer.stopWatching() }
     }
 
     private companion object {

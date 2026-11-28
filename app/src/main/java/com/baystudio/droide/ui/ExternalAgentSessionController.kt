@@ -693,6 +693,7 @@ internal class ExternalAgentSessionController(
         runJob = scope.launch(start = CoroutineStart.LAZY) {
             var savedTurn = false
             var savedHistoryId: String? = null
+            val published = java.util.concurrent.atomic.AtomicReference<String?>(null)
             val eventOverflow = AtomicBoolean(false)
             val eventDeliveryFailure = AtomicBoolean(false)
             var completedNormally = false
@@ -757,6 +758,10 @@ internal class ExternalAgentSessionController(
                         requireAdmissionOpen()
                         host.runMediaTurn(agentId, prompt, media, this@ExternalAgentSessionController[agentId].historyId ?: mediaOwnerId,
                             mode, resumeSessionId = initial.sessionId) { event ->
+                            if (event is WorkspaceAgentEvent.Status && event.publishedFiles) {
+                                published.set(event.message)
+                                return@runMediaTurn
+                            }
                             when (events.tryOffer(event, event.retainedChars())) {
                                 RetainedEventChannel.Admission.ACCEPTED, RetainedEventChannel.Admission.CLOSED -> Unit
                                 RetainedEventChannel.Admission.OVERFLOW -> {
@@ -823,18 +828,20 @@ internal class ExternalAgentSessionController(
                 val resourceFailure = eventOverflow.get() || this@ExternalAgentSessionController[agentId].persistenceError?.startsWith("Output arrived faster") == true
                 val deliveryFailure = eventDeliveryFailure.get()
                 val failed = resourceFailure || deliveryFailure
-                val stopMessage = when {
+                val reason = when {
                     deliveryFailure -> "Agent updates could not be delivered. Work was stopped; saved partial history was kept."
                     resourceFailure -> "The Agent produced updates faster than they could be saved. Work was stopped to protect device memory; saved history was kept."
                     else -> "Stopped."
                 }
+                val stopMessage = listOfNotNull(reason, published.get()).joinToString("\n")
                 if (savedTurn) finishHistory(runId, agentId, checkNotNull(savedHistoryId), null, listOf(stopMessage), if (failed) PluginHistoryStatus.FAILED else PluginHistoryStatus.STOPPED)
                 if (activeRun?.runId == runId) {
                     val current = this@ExternalAgentSessionController[agentId]
                     states[agentId] = current.copy(
                         configuration = null,
                         messages = if (!savedTurn) current.messages + transcript.messages(current.liveText.takeIf { it.isNotBlank() },
-                            if (failed) PluginHistoryStatus.FAILED else PluginHistoryStatus.STOPPED, current.liveMedia) else current.messages,
+                            if (failed) PluginHistoryStatus.FAILED else PluginHistoryStatus.STOPPED, current.liveMedia) +
+                            listOfNotNull(published.get()?.let { AgentMessage("assistant", it) }) else current.messages,
                         streamParts = emptyList(),
                         progress = current.progress.finish(if (failed) AgentActivityKind.FAILED else AgentActivityKind.STOPPED),
                         liveText = "", liveThought = "", activity = listOf(stopMessage), persistenceError = if (failed) stopMessage else current.persistenceError)
@@ -844,9 +851,10 @@ internal class ExternalAgentSessionController(
                 if (activeRun?.runId != runId) return@launch
                 flushLivePreview(runId, agentId)
                 val current = this@ExternalAgentSessionController[agentId]
-                val message = if (error is WorkspaceProcessRecoveryRequiredException) {
+                val failureDetail = if (error is WorkspaceProcessRecoveryRequiredException) {
                     error.message ?: "CLI session recovery is required. Your workspace files were preserved."
                 } else "${spec.displayName} error: ${error.message ?: "unknown error"}"
+                val message = listOfNotNull(failureDetail, published.get()).joinToString("\n")
                 states[agentId] = current.copy(
                     configuration = null,
                     messages = current.messages + (if (!savedTurn) transcript.messages(current.liveText.takeIf { it.isNotBlank() },
@@ -1042,7 +1050,8 @@ internal class ExternalAgentSessionController(
         // Stop may win before the lazy history job reaches its cancellation catch.
         if (run == null && lifecycleBusyAgentId == null) recordUnverifiedInitialHistory(agentId)
         stoppingAgentId = agentId
-        states[agentId] = this[agentId].let { it.copy(configuration = null, progress = it.progress.finish(AgentActivityKind.STOPPED)) }
+        states[agentId] = this[agentId].let { it.copy(configuration = null, activity = listOf("Stopped."),
+            progress = it.progress.finish(AgentActivityKind.STOPPED)) }
         if (run == null) lifecycleId = null
         // Cancelling the owned operation also reaches a bootstrap that has not published a session id yet,
         // including a job not yet dispatched. Keep new submissions blocked until the old operation is cleaned up.
@@ -1056,7 +1065,7 @@ internal class ExternalAgentSessionController(
             catch (_: Exception) { /* Stop still cancels the exact UI-owned operation. */ }
             finally {
                 try { job?.join() } finally {
-                    states[agentId] = this@ExternalAgentSessionController[agentId].let { it.copy(configuration = null, liveText = "", liveThought = "", activity = listOf("Stopped."), progress = it.progress.finish(AgentActivityKind.STOPPED)) }
+                    states[agentId] = this@ExternalAgentSessionController[agentId].let { it.copy(configuration = null, liveText = "", liveThought = "") }
                     if (run == null) { lifecycleBusyAgentId = null; lifecycleJob = null; historyLoadingAgentId = null; historyJob = null }
                     else if (activeRun?.runId == run.runId) { activeRun = null; runJob = null }
                     stoppingAgentId = null

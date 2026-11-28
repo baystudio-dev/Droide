@@ -382,10 +382,16 @@ class NativePtyTerminalSession(
         execDelegate.execStreamingWithInput(cmd, timeoutMs, input, onOutput)
     override suspend fun execArgv(argv: List<String>, timeoutMs: Long): ExecResult = execDelegate.execArgv(argv, timeoutMs)
 
+    override suspend fun execProjectShell(root: File?, command: String, timeoutMs: Long, input: ProcessInputBuffer?,
+        onOutput: ((String) -> Unit)?): ExecResult = execDelegate.execProjectShell(root, command, timeoutMs, input, onOutput)
     override suspend fun execWorkspaceArgv(workspaceRoot: File, directory: File, command: List<String>, timeoutMs: Long): ExecResult =
         execDelegate.execWorkspaceArgv(workspaceRoot, directory, command, timeoutMs)
 
-    override suspend fun execInteractivePty(command: String, timeoutMs: Long, input: ProcessInputBuffer?, onOutput: (String) -> Unit): ExecResult = coroutineScope {
+    override suspend fun execInteractivePty(command: String, timeoutMs: Long, input: ProcessInputBuffer?, onOutput: (String) -> Unit): ExecResult =
+        execProjectPty(null, command, timeoutMs, input, onOutput)
+
+    override suspend fun execProjectPty(root: File?, command: String, timeoutMs: Long, input: ProcessInputBuffer?,
+        onOutput: (String) -> Unit): ExecResult = coroutineScope {
         require(timeoutMs in 0..86_400_000L) { "Invalid process timeout" }
         require(command.isNotBlank() && command.length <= 32_000 && '\u0000' !in command) { "Invalid interactive command" }
         val commandJob = currentCoroutineContext().get(Job) ?: error("Interactive command has no coroutine owner")
@@ -425,11 +431,14 @@ class NativePtyTerminalSession(
                         }
                     })
                     directoryIdentity?.requireCurrent()
-                    val cwd = TerminalCommandCwdPolicy.resolveHostCwd(workDir, workingDirectory.value, launchSpec.prefix.isEmpty())
+                    val commandDirectory = root?.let(AgentWorkspaceCommandPolicy::requireRoot)
+                    val reported = commandDirectory?.absolutePath ?: workingDirectory.value
+                    val cwd = TerminalCommandCwdPolicy.resolveHostCwd(workDir, reported, launchSpec.prefix.isEmpty())
                     val refreshed = LocalExecutionSubstrate.workspaceToolchainLaunchSpec(launchSpec, cwd, workDir) ?: launchSpec
-                    val spec = TerminalGuestCwdPolicy.withObservedCwd(refreshed, workDir, workingDirectory.value)
+                    val spec = TerminalGuestCwdPolicy.withObservedCwd(refreshed, workDir, reported)
                     LocalExecutionSubstrate.requireStorageLaunchCurrent(spec)
-                    val argv = spec.shellCommand(command, TerminalPtyEnvironment.variables + correlation.environment)
+                    val shell = commandDirectory?.let { AgentWorkspaceCommandPolicy.shell(it, command) } ?: command
+                    val argv = spec.shellCommand(shell, TerminalPtyEnvironment.variables + correlation.environment)
                     val pty = TermuxSession(argv.first(), cwd.absolutePath, argv.toTypedArray(), buildEnvironment(correlation.environment, includePrompt = false), 2_000, agentClient)
                     TerminalRawOutputBridge.attach(pty, recording::append)
                     ExecutionDiagnostics.record(workDir, "Agent interactive PTY", workingDirectory.value ?: cwd.absolutePath,
