@@ -51,7 +51,7 @@ class ExplorerRefreshController internal constructor(
     private val state: ExplorerWorkspaceState,
     private val scope: CoroutineScope,
     private val lane: Mutex,
-    private val load: suspend (String, DirectoryPageCursor?, DirectoryListingOptions, DiscoveryBudget, WorkspaceDiscoveryTraversal) -> DirectoryPage,
+    private val load: suspend (String, DirectoryPageCursor?, Int, DirectoryListingOptions, DiscoveryBudget, WorkspaceDiscoveryTraversal) -> DirectoryPage,
     private val watchFactory: ExplorerDirectoryWatchFactory,
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val now: () -> Long = { System.nanoTime() / 1_000_000L },
@@ -168,7 +168,9 @@ class ExplorerRefreshController internal constructor(
     }
 
     internal fun requestWorkspaceChange() {
-        if (closed || !visible) return
+        if (closed) return
+        state.workspaceRevision++
+        if (!visible) return
         val targets = (listOf("") + lease?.viewport.orEmpty()).distinct().take(limits.watches)
         for (path in targets) {
             val record = state.pageFreshness[path] ?: ExplorerPageFreshness()
@@ -475,12 +477,13 @@ class ExplorerRefreshController internal constructor(
                     }
                     state.pageFreshness[chosen.path] = previous.copy(dirtySince = null, attemptedAt = now())
                     state.loadingPages[chosen.path] = generation
+                    val pageSize = if (after == null) maxOf(250, state.children[chosen.path].orEmpty().size) else 250
                     try {
                         val page = withContext(io) {
                             budget.checkpoint()
                             budget.admitPath(chosen.path)
                             budget.requireCompleteDirectory(chosen.path)
-                            load(chosen.path, after, options, budget, traversal)
+                            load(chosen.path, after, pageSize, options, budget, traversal)
                         }
                         currentCoroutineContext().ensureActive()
                         budget.requireCompleteDirectory(chosen.path)

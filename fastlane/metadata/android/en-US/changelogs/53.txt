@@ -1,0 +1,1 @@
+Protect concurrent editor, Git and agent edits. Project commands use the selected project. Explorer keeps loaded pages, Git shows terminal staging changes, and chat records files written before Stop. Checking background jobs does less work. Pending saves to Android linked folders survive tab changes.

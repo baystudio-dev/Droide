@@ -18,6 +18,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.baystudio.droide.core.*
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 
@@ -25,13 +27,18 @@ import kotlinx.coroutines.launch
 
 
 @Composable
-fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged: () -> Unit = {}) {
+fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged: () -> Unit = {}) =
+    GitPanel(git, 0L, onOpen, onWorkspaceChanged)
+
+@Composable
+internal fun GitPanel(git: GitManager, workspaceRevision: Long, onOpen: (String) -> Unit, onWorkspaceChanged: () -> Unit) {
     val scope = rememberWorkspaceCoroutineScope()
     var changes by remember(git) { mutableStateOf<List<GitChange>>(emptyList()) }
     var stashes by remember(git) { mutableStateOf<List<GitStash>>(emptyList()) }
     var history by remember(git) { mutableStateOf<List<GitCommitSummary>>(emptyList()) }
     var statusText by remember(git) { mutableStateOf("Loading source control…") }
     var repositoryReady by remember(git) { mutableStateOf<Boolean?>(null) }
+    var directories by remember(git) { mutableStateOf(setOf("")) }
     var busy by remember(git) { mutableStateOf(false) }
     var branch by remember(git) { mutableStateOf("") }
     var commitMsg by remember(git) { mutableStateOf("") }
@@ -41,7 +48,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
     var identityEmail by remember(git) { mutableStateOf("") }
     var identityEditing by remember(git) { mutableStateOf(false) }
     var pendingStash by remember(git) { mutableStateOf<GitStash?>(null) }
-    var pendingDiscard by remember(git) { mutableStateOf<GitChange?>(null) }
+    var pendingDiscard by remember(git) { mutableStateOf<GitManager.DiscardSelection?>(null) }
     var pendingResolve by remember(git) { mutableStateOf<GitChange?>(null) }
     var conflictPreview by remember(git) { mutableStateOf<GitConflictPreview?>(null) }
     var conflictBusy by remember(git) { mutableStateOf(false) }
@@ -51,16 +58,16 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
     var diffBusy by remember(git) { mutableStateOf(false) }
 
     suspend fun refreshState(): String {
-        val repositoryResult = runSuspendCatching { git.isRepository() }
-        repositoryResult.exceptionOrNull()?.let { if (it is ExportCaptureBusyException) return "git error: ${it.message}" }
-        repositoryReady = repositoryResult.getOrDefault(false)
-        if (repositoryReady != true) {
+        val snapshot = runSuspendCatching { git.panelStatus() }.getOrElse {
+            return "git error: ${it.message}"
+        }
+        directories = snapshot?.directories ?: setOf("")
+        repositoryReady = snapshot != null
+        if (snapshot == null) {
             changes = emptyList(); stashes = emptyList(); history = emptyList(); branch = ""
             return "This folder is not a Git repository."
         }
-        val changesResult = runSuspendCatching { git.changes() }
-        changesResult.exceptionOrNull()?.let { if (it is ExportCaptureBusyException) return "git error: ${it.message}" }
-        changes = changesResult.getOrDefault(emptyList())
+        changes = snapshot.changes
         val stashesResult = runSuspendCatching { git.stashes() }
         stashesResult.exceptionOrNull()?.let { if (it is ExportCaptureBusyException) return "git error: ${it.message}" }
         stashes = stashesResult.getOrDefault(emptyList())
@@ -74,7 +81,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
             identityName = identity?.name.orEmpty()
             identityEmail = identity?.email.orEmpty()
         }
-        return runSuspendCatching { git.status() }.getOrElse { "git error: ${it.message}" }
+        return snapshot.summary
     }
 
     fun runOperation(block: suspend () -> String) {
@@ -115,14 +122,37 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
         }
     }
 
-    LaunchedEffect(git) {
-        busy = true
-        try { statusText = refreshState() }
-        finally { busy = false }
+    val resumed = rememberUiResumed()
+    val changesOnDisk = remember(git) { Channel<Unit>(Channel.CONFLATED) }
+    val currentRevision by rememberUpdatedState(workspaceRevision)
+    LaunchedEffect(git, directories, resumed) {
+        if (resumed) git.observePanelDirectories(directories) { changesOnDisk.trySend(Unit) }
+    }
+    LaunchedEffect(git, resumed) {
+        if (!resumed) return@LaunchedEffect
+        launch { snapshotFlow { currentRevision }.collect { changesOnDisk.trySend(Unit) } }
+        for (hint in changesOnDisk) {
+            if (repositoryReady != null) kotlinx.coroutines.delay(350)
+            snapshotFlow { busy }.first { !it }
+            changesOnDisk.tryReceive()
+            busy = true
+            try {
+                val previouslyReady = repositoryReady
+                val result = refreshState()
+                if (previouslyReady != true || result.startsWith("git error:") || repositoryReady != true ||
+                    statusText.startsWith("Added:")) statusText = result
+            } finally { busy = false }
+        }
     }
 
     if (repositoryReady == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) { CircularProgressIndicator() }
+        Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            if (busy || !statusText.startsWith("git error:")) CircularProgressIndicator()
+            else Column {
+                Text(statusText, style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { runRead { refreshState() } }) { Text("Retry") }
+            }
+        }
         return
     }
     if (repositoryReady == false) {
@@ -267,7 +297,10 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
                 primaryLabel = if (change.kind == GitChangeKind.CONFLICT) "Resolve" else "Stage",
                 onDiff = { showDiff(change) },
                 onDiscard = if (change.kind == GitChangeKind.MODIFIED || change.kind == GitChangeKind.DELETED) {
-                    { pendingDiscard = change }
+                    { runRead {
+                        pendingDiscard = git.prepareDiscard(change.path)
+                        statusText
+                    } }
                 } else null,
                 enabled = !busy,
             )
@@ -498,7 +531,7 @@ fun GitPanel(git: GitManager, onOpen: (String) -> Unit = {}, onWorkspaceChanged:
             confirmButton = {
                 Button(onClick = {
                     pendingDiscard = null
-                    runOperation { git.discardWorkingTree(change.path) }
+                    runOperation { git.discardWorkingTree(change) }
                 }) { Text("Discard") }
             },
             dismissButton = { TextButton(onClick = { pendingDiscard = null }) { Text("Cancel") } },

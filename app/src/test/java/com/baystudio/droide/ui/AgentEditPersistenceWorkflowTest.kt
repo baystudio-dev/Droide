@@ -69,6 +69,43 @@ class AgentEditPersistenceWorkflowTest {
         finally { owner.close(); PathSecurity.deleteTreeNoFollow(root) }
     }
 
+    @Test fun publishedAgentEditBlocksDiskOperationsEvenBeforeItsSaveStarts() = fixture {
+        open("a.kt")
+        val mutation = AgentWorkspaceMutation(files, authority)
+        val target = mutation.inspect("a.kt") as AgentWorkspaceMutation.Target.Live
+        mutation.replaceLive(target, target.snapshot.version, "changed by agent", "Agent edit")
+        assertEquals(listOf("a.kt"), authority.pendingAgentSavePaths())
+        assertEquals("original\n", root.resolve("a.kt").readText())
+        explicit("a.kt")
+        assertTrue(authority.pendingAgentSavePaths().isEmpty())
+        assertEquals("changed by agent", root.resolve("a.kt").readText())
+    }
+
+    @Test fun gitCommitReadsTheSavedAgentEditAfterExplicitSave() = fixture {
+        val document = open("a.kt")
+        val ctx = context()
+        ctx.git.init()
+        ctx.git.configureIdentity("Droide Test", "test@example.invalid")
+        ctx.git.stage("a.kt"); ctx.git.commitStaged("base")
+        val target = AgentWorkspaceMutation(files, authority).inspect("a.kt") as AgentWorkspaceMutation.Target.Live
+        AgentWorkspaceMutation(files, authority).replaceLive(target, target.snapshot.version, "agent result", "Agent edit")
+        val args = buildJsonObject { put("message", "commit edited file") }
+        val rejected = AgentTools.execute("git_commit", args, ctx)
+        assertEquals(AgentToolEvidenceState.FAILED, AgentToolResultSemantics.classify("git_commit", rejected).state)
+        org.eclipse.jgit.api.Git.open(root).use { assertEquals("base", it.log().call().first().fullMessage) }
+        explicit("a.kt")
+        assertFalse(document.dirty)
+        val accepted = AgentTools.execute("git_commit", args, ctx)
+        assertTrue(accepted, accepted.contains("Committed"))
+        org.eclipse.jgit.api.Git.open(root).use { git ->
+            val head = git.log().call().first()
+            assertEquals("commit edited file", head.fullMessage)
+            org.eclipse.jgit.treewalk.TreeWalk.forPath(git.repository, "a.kt", head.tree).use { tree ->
+                assertEquals("agent result", git.repository.open(tree.getObjectId(0)).bytes.decodeToString())
+            }
+        }
+    }
+
     @Test fun completedLiveEditSavesAndDoesNotTouchUnrelatedDraft() = fixture {
         val a = open("a.kt"); val b = open("b.kt"); b.capture("user draft")
         val mutation = AgentWorkspaceMutation(files, authority)

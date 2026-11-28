@@ -145,6 +145,7 @@ class ExplorerWorkspaceState {
     var query by mutableStateOf("")
     var searchResults by mutableStateOf<List<String>>(emptyList())
     var searchNotice by mutableStateOf<String?>(null)
+    internal var workspaceRevision by androidx.compose.runtime.mutableLongStateOf(0L)
     var refreshToken by mutableIntStateOf(0)
         private set
     fun requestRefresh() { refreshToken++ }

@@ -20,7 +20,7 @@ class ExplorerRefreshControllerTest {
     private fun dir(path: String) = FileEntry(path, true, 0, 0)
     private fun file(path: String) = FileEntry(path, false, 1, 0)
     private fun page(vararg entries: FileEntry) = DirectoryPage(entries.toList(), null)
-    private data class Call(val path: String, val after: DirectoryPageCursor?, val budget: DiscoveryBudget)
+    private data class Call(val path: String, val after: DirectoryPageCursor?, val budget: DiscoveryBudget, val size: Int)
     private class Watches : ExplorerDirectoryWatchFactory {
         data class Handle(val path: String, val invalidate: (Boolean) -> Unit, var closed: Boolean = false) : AutoCloseable {
             override fun close() { closed = true }
@@ -53,7 +53,7 @@ class ExplorerRefreshControllerTest {
         }
         val dispatcher: CoroutineDispatcher = ioDispatcher ?: StandardTestDispatcher(test.testScheduler)
         val owner = ExplorerRefreshController(state, test.backgroundScope, lane,
-            load = { path, after, _, budget, traversal -> calls += Call(path, after, budget); loader(path, after, budget, traversal) },
+            load = { path, after, size, _, budget, traversal -> calls += Call(path, after, budget, size); loader(path, after, budget, traversal) },
             watchFactory = watches, io = dispatcher, now = { test.testScheduler.currentTime }, limits = limits)
         var lease = owner.newUiLease()
         fun show(viewport: Set<String> = emptySet()) {
@@ -89,6 +89,32 @@ class ExplorerRefreshControllerTest {
         h.close()
     }
 
+
+    @Test fun refreshingAfterLoadingPageTwoKeepsTheLoadedWindowAndDropsDeletedEntries() = runTest {
+        val h = Harness(this)
+        val entries = (0..250).map { file("item-$it") }
+        val cursor = DirectoryPageCursor(entries[249].path, false, h.state.options)
+        var removed = false
+        h.loader = { _, after, _, _ ->
+            if (after != null) DirectoryPage(entries.drop(250), null)
+            else {
+                val disk = if (removed) entries.drop(1) + file("replacement") else entries
+                val size = h.calls.last().size
+                DirectoryPage(disk.take(size), cursor.takeIf { disk.size > size })
+            }
+        }
+        h.show(); h.current(); h.tick(2_000)
+        h.owner.requestMore(h.lease, ""); h.current()
+        assertEquals(251, h.state.children[""]!!.size)
+        removed = true
+        h.owner.requestWorkspaceChange(); h.current(); h.tick(2_000)
+        assertEquals(251, h.calls.last().size)
+        val refreshed = h.state.children[""]!!.map { it.path }
+        assertTrue("replacement" in refreshed)
+        assertFalse(entries.first().path in refreshed)
+        assertTrue(entries.last().path in refreshed)
+        h.close()
+    }
 
     @Test fun watchThenRepositoryInvalidationAlsoRejectsAnInflightAppend() = runTest {
         val h = Harness(this)

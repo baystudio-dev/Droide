@@ -62,6 +62,7 @@ fun AgentPane(
     onManageSkills: (() -> Unit)? = null,
     onOpenResult: ((String) -> Unit)? = null,
     onExportResult: ((String) -> Unit)? = null,
+    hasUnsavedEditorText: () -> Boolean = { false },
 ) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberWorkspaceCoroutineScope()
@@ -604,6 +605,10 @@ fun AgentPane(
                     TextButton(onClick = { externalController.pageHistory(agentBackendId, earlier = true) }, enabled = !externalBusy && window.hasEarlier) { Text("Earlier messages") }
                     TextButton(onClick = { externalController.pageHistory(agentBackendId, earlier = false) }, enabled = !externalBusy && window.hasLater) { Text("Latest messages") }
                 }
+            }
+            if (usingExternalAgent && hasUnsavedEditorText()) {
+                Text("CLI uses its saved working copy. Save editor changes to include them.",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (usingExternalAgent && externalController.historyLoadingAgentId == agentBackendId) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())

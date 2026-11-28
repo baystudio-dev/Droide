@@ -33,6 +33,8 @@ internal interface AgentWorkspaceIo {
     }
     /** Optional local execution view. Null preserves existing remote bridge semantics. */
     suspend fun readExecutionText(path: String): String? = null
+    suspend fun readExecutionVersion(path: String): AcpWorkspaceText.Read? =
+        readExecutionText(path)?.let { AcpWorkspaceText.Read(it, DiskFileVersion.fromText(it).sha256) }
     suspend fun prepareTextProjection(path: String, canonical: StreamFileVersion): AcpTextProjection? = null
     suspend fun pull(path: String, output: File)
     /** Typed media is streamed from the execution workspace, never substituted with source bytes. */
@@ -137,7 +139,8 @@ internal class LocalAgentWorkspaceProcessHost private constructor(
         override suspend fun baseline(): Map<String, String> { prepareWorkspace(); return mirror.baseline().mapValues { it.value.sha256 } }
         override suspend fun snapshotEntries(): Map<String, WorkspaceSyncManifest.Entry> { prepareWorkspace(); return mirror.inventoryEntries() }
         override suspend fun baselineEntries(): Map<String, WorkspaceSyncManifest.Entry> { prepareWorkspace(); return mirror.baseline() }
-        override suspend fun readExecutionText(path: String): String? {
+        override suspend fun readExecutionText(path: String): String? = readExecutionVersion(path)?.content
+        override suspend fun readExecutionVersion(path: String): AcpWorkspaceText.Read? {
             prepareWorkspace()
             return mirror.withExecutionRead {
                 requirePath(path)
@@ -164,6 +167,7 @@ internal class LocalAgentWorkspaceProcessHost private constructor(
                     }
                 }
                 object : AcpTextProjection {
+                    override val executionVersion = expected
                     override suspend fun requireUnchanged() = mirror.withExecutionRead {
                         expected.requireMatches(mirror.directory, relative)
                     }

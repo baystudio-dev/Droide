@@ -429,7 +429,8 @@ object AgentTools {
                 "Plugin: ${def.pluginId}\nTool: ${def.name}\nProject: ${c.workDir.absolutePath}\nTool SHA-256: ${def.fingerprint}\nTimeout ms: ${def.timeoutMs}", c)
             gate("shell_escape", resource, c, inputReviewFactory = review)?.let { return it }
             gate("shell", resource, c, inputReviewFactory = review)?.let { return it }
-            return manager.execute(def, input, c.terminal)
+            AgentEditPersistence.commandBlocker(c.documentAuthority)?.let { return it }
+            return c.diskBacked(realName, reconcileAfter = true) { manager.execute(def, input, c.terminal) }
         }
         if (realName.startsWith("custom_")) {
             val real = realName.removePrefix("custom_")
@@ -444,12 +445,10 @@ object AgentTools {
                 inputReviewFactory = review)?.let { return it }
             gate("shell", "custom:$real@sha:${fingerprint.take(20)} ${args.toString().take(120)}", c,
                 sessionGrantResource = "", inputReviewFactory = review)?.let { return it }
-            return custom.execute(
-                real,
-                input,
-                terminal = c.terminal,
-                expectedFingerprint = fingerprint,
-            )
+            AgentEditPersistence.commandBlocker(c.documentAuthority)?.let { return it }
+            return c.diskBacked(realName, reconcileAfter = true) {
+                custom.execute(real, input, terminal = c.terminal, expectedFingerprint = fingerprint)
+            }
         }
 
         if (realName in setOf("read_file", "view_image", "view_video", "send_media")) {
@@ -707,7 +706,8 @@ object AgentTools {
                             throw cancelled
                         }
                         AgentCommandSessions.renderForAgent(current, 0, "run_command",
-                            reconciliation = c.documentAuthority?.reconcilePersistedWorkspace(), includeContinuation = true).also { c.sourceCommand?.recordNormalReturn(it) }
+                            reconciliation = if (manager.reconcilesWorkspace) null else c.documentAuthority?.reconcilePersistedWorkspace(),
+                            includeContinuation = true).also { c.sourceCommand?.recordNormalReturn(it) }
                     }
                 }
             }
@@ -736,7 +736,7 @@ object AgentTools {
                     throw cancelled
                 }
                 AgentCommandSessions.renderForAgent(current, 0, "exec_command",
-                    reconciliation = c.documentAuthority?.reconcilePersistedWorkspace()).also { c.sourceCommand?.recordNormalReturn(it) }
+                    reconciliation = if (manager.reconcilesWorkspace) null else c.documentAuthority?.reconcilePersistedWorkspace()).also { c.sourceCommand?.recordNormalReturn(it) }
             }
             "write_stdin" -> {
                 val manager = c.backgroundCommands ?: return "ERROR: background command manager unavailable"
@@ -775,8 +775,7 @@ object AgentTools {
                         c.onProgress(AgentToolProgress(outputDelta = chunk, detail = "Streaming command output"))
                     }
                 } else manager.awaitOutput(id, cursor, yieldMs)
-                AgentCommandSessions.renderForAgent(result, cursor, "write_stdin", interrupt,
-                    reconciliation = c.documentAuthority?.reconcilePersistedWorkspace())
+                AgentCommandSessions.renderForAgent(result, cursor, "write_stdin", interrupt)
             }
             "environment_probe" -> AgentEnvironmentProbe.run(args, c)
             "ide" -> {
@@ -803,18 +802,16 @@ object AgentTools {
                 val manager = c.backgroundCommands ?: return "ERROR: background command manager unavailable"
                 val action = args["action"]?.jsonPrimitive?.contentOrNull ?: "list"
                 when (action) {
-                    "list" -> manager.list().joinToString("\n") { it.agentSummary() }.ifEmpty { "No background jobs." } + c.documentAuthority?.reconcilePersistedWorkspace().agentReconciliationNotice("background_job:list")
+                    "list" -> manager.list().joinToString("\n") { it.agentSummary() }.ifEmpty { "No background jobs." }
                     "status" -> {
                         val id = req(args, "job_id")
                         val job = manager.snapshot(id) ?: return "ERROR: background job not found: $id"
-                        job.agentSummary(includeDiskNotice = true) + c.documentAuthority?.reconcilePersistedWorkspace().agentReconciliationNotice("background_job:$id:status")
+                        job.agentSummary(includeDiskNotice = true)
                     }
                     "output" -> {
                         val id = req(args, "job_id")
                         val job = manager.snapshot(id) ?: return "ERROR: background job not found: $id"
-                        val reconciliation = c.documentAuthority?.reconcilePersistedWorkspace()
-                        job.agentSummary(includeDiskNotice = true) + "\n" + job.output.ifBlank { "(no output yet)" } +
-                            reconciliation.agentReconciliationNotice("background_job:$id:output")
+                        job.agentSummary(includeDiskNotice = true) + "\n" + job.output.ifBlank { "(no output yet)" }
                     }
                     "kill" -> {
                         if (c.mode != AgentMode.BUILD) return "DENIED (${c.mode} mode): background process termination requires BUILD mode."
@@ -822,7 +819,8 @@ object AgentTools {
                         val existing = manager.snapshot(id) ?: return "ERROR: background job not found: $id"
                         gate("shell", "background-job:$id:kill:${existing.command.take(200)}", c)?.let { return it }
                         val killed = manager.kill(id) ?: return "ERROR: background job not found: $id"
-                        killed.agentSummary() + c.documentAuthority?.reconcilePersistedWorkspace().agentReconciliationNotice("background_job:$id:kill")
+                        killed.agentSummary() + if (manager.reconcilesWorkspace) killed.workspaceNotice
+                            else c.documentAuthority?.reconcilePersistedWorkspace().agentReconciliationNotice("background_job:$id:kill")
                     }
                     else -> "ERROR: invalid background_job action: $action"
                 }
@@ -840,6 +838,7 @@ object AgentTools {
             "git_commit" -> c.diskBacked("git_commit", reconcileAfter = true) {
                 val message = req(args, "message")
                 gate("shell", "git commit -m <message>", c)?.let { return@diskBacked it }
+                AgentEditPersistence.commandBlocker(c.documentAuthority)?.let { return@diskBacked it }
                 c.git.commitAll(message)
             }
             "git_pull" -> c.diskBacked("git_pull", reconcileAfter = true) {

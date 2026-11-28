@@ -229,6 +229,7 @@ class ProfessionalLspManager(
         val vueIdentity: VueManagedLaunchIdentity? = null,
     ) {
         @Volatile var vueActive = true // lifecycle event token; acceptance never probes a process
+        var indexWatch: LspIndexInputWatch? = null
         var vueWatch: LspVueWatchAuthority? = null
         var vueObservation: LspVueWatchAuthority.Observation? = null
         var vueRequests: LspVueRequests? = null
@@ -280,6 +281,7 @@ class ProfessionalLspManager(
 
         fun close() {
             vueActive = false
+            indexWatch?.close()
             vueWatch?.close()
             vueDiagnosticRerun?.cancel()
             vueRequests?.close()
@@ -3522,6 +3524,16 @@ class ProfessionalLspManager(
             })
             var failureStage = LspStartupStage.PROCESS_START
             var state: ServerState? = null
+            val indexWatch = if (processHost.executionScope == ProcessExecutionScope.LOCAL_LINUX_ARM64 &&
+                (LspServerProfiles.isTerraform(spec) || LspServerProfiles.isBuf(spec) ||
+                    LspServerProfiles.isZls(spec) || LspServerProfiles.isLemMinx(spec))) {
+                LspIndexInputWatch(spec, projectRoot, changed = {
+                    managerScope.launch(Dispatchers.IO) {
+                        val owner = synchronized(lifetimeLock) { servers[key]?.takeIf { it.rpc === rpc } }
+                        if (owner != null) { retireServer(owner); statusChanged() }
+                    }
+                })
+            } else null
             val clojureState = java.util.concurrent.atomic.AtomicReference<ServerState?>(null)
             val earlyNotifications = if (startup?.background == true) managerScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 try {
@@ -3576,6 +3588,10 @@ class ProfessionalLspManager(
                         else if (LspMdxProfile.matches(spec)) LspMdxProfile.initializationOptions(executable)
                         else key.initializationOptions)
                     put("trace", "off")
+                }
+                indexWatch?.let { watch ->
+                    watch.watch(projectRoot)
+                    files.resolveChecked(path).parentFile?.let(watch::watch)
                 }
                 failureStage = LspStartupStage.INITIALIZE
                 val initResult = rpc.request("initialize", init, timeoutMs = if (startup?.background == true) requireNotNull(LspBackgroundPreparationPolicy.forSpec(spec)).initializeMs else 12_000)
@@ -3654,6 +3670,8 @@ class ProfessionalLspManager(
                     check(!closed && managerJob.isActive && (startup == null || startup.task.isActive)) { "Language-server manager was closed during initialization" }
                     requireCurrentAnalysis(permit)
                     requireCurrentStart()
+                    check(indexWatch?.dirty != true) { "Language-server inputs changed during initialization. Retry from the current files." }
+                    initializedState.indexWatch = indexWatch
                     initializedState.prismaDegraded = prismaDegraded.get()
                     startupFailures.remove(key)
                     servers[key] = initializedState
@@ -3664,12 +3682,14 @@ class ProfessionalLspManager(
                 return initializedState
             } catch (cancel: CancellationException) {
                 earlyNotifications?.cancel()
+                indexWatch?.close()
                 svelteWatch?.close()
                 state?.let { servers.remove(key, it); it.close() } ?: try { rpc.close() } finally { nimOwner?.close() }
                 if (cancel !is TimeoutCancellationException || !currentCoroutineContext().isActive) throw cancel
                 lastError = LspStartupFailure(spec.id, failureStage, timedOut = true, cause = cancel)
             } catch (t: Throwable) {
                 lastError = LspStartupFailure(spec.id, failureStage, timedOut = false, cause = t)
+                indexWatch?.close()
                 svelteWatch?.close()
                 earlyNotifications?.cancel()
                 state?.let { servers.remove(key, it); it.close() } ?: try { rpc.close() } finally { nimOwner?.close() }
@@ -3996,7 +4016,7 @@ class ProfessionalLspManager(
         LspServerProfiles.hasProjectRoots(state.spec) || state.analysisPermit != null || state.key.marksmanConfiguration != null
 
     private fun handlesDocument(state: ServerState, path: String): Boolean =
-        (state.analysisPermit == null || analysisConsent.isCurrent(state.analysisPermit)) && currentRoute(state.spec, state.key, path)
+        state.indexWatch?.dirty != true && (state.analysisPermit == null || analysisConsent.isCurrent(state.analysisPermit)) && currentRoute(state.spec, state.key, path)
 
     private fun matchingServers(path: String): List<ServerState> =
         if (closed) emptyList() else servers.values.filter { it.rpc.isRunning && clojureReady(it) && handlesDocument(it, path) }
@@ -4141,6 +4161,10 @@ class ProfessionalLspManager(
     }
 
     private suspend fun synchronizeServerDocument(state: ServerState, path: String, text: String): String {
+        state.indexWatch?.let { watch ->
+            files.resolveChecked(path).parentFile?.let(watch::watch)
+            check(!watch.dirty) { "Language-server inputs changed. Retry after the index refreshes." }
+        }
         if (LspServerProfiles.isVue(state.spec)) { synchronizeVue(state); return uriFor(state, path) }
         check(!closed && managerJob.isActive) { "Language-server manager has been closed" }
         requireCurrentAnalysis(state.analysisPermit)

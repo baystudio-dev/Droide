@@ -37,8 +37,8 @@ internal fun ComposeContentTestRule.TestFileExplorer(
     val scope = rememberCoroutineScope { StandardTestDispatcher(scheduler) }
     val refresh = remember(files, state) {
         ExplorerRefreshController(state, scope, Mutex(),
-            load = { path, after, options, budget, traversal ->
-                files.listFilesPageBounded(path, after, 250, options, budget, traversal)
+            load = { path, after, pageSize, options, budget, traversal ->
+                files.listFilesPageBounded(path, after, pageSize, options, budget, traversal)
             }, watchFactory = ExplorerDirectoryWatchFactory { _, _ -> null },
             now = { mainClock.currentTime })
     }

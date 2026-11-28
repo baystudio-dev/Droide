@@ -31,6 +31,56 @@ class AgentCommandSessionWorkflowTest {
         requireNotNull(manager.snapshot(id))
     }
 
+    @Test fun fiveEmptyJobPollsDoNotReconcileEditorBuffers() = runBlocking {
+        val root = Files.createTempDirectory("droide-empty-polls-").toFile()
+        val terminal = AgentWorkflowTerminal()
+        val jobs = BackgroundCommandManager(terminal)
+        val documents = AgentWorkflowDocuments(agentWorkflowSnapshot("a.txt", "saved"))
+        var reconciliations = 0
+        val authority = object : WorkspaceDocumentAuthority by documents {
+            override suspend fun reconcilePersistedWorkspace(): WorkspacePersistedReconciliation {
+                reconciliations++
+                return WorkspacePersistedReconciliation()
+            }
+        }
+        try {
+            val context = agentWorkflowContext(root, manager = jobs, documents = authority, terminal = terminal)
+            repeat(5) {
+                assertEquals("No background jobs.", AgentTools.execute("background_job",
+                    buildJsonObject { put("action", "list") }, context))
+            }
+            assertEquals(0, reconciliations)
+        } finally { jobs.closeAndJoin(); PathSecurity.deleteTreeNoFollow(root) }
+    }
+
+    @Test fun completedCommandRetainsItsConflictNoticeAcrossQueriesWithoutRescanning() = runBlocking {
+        val root = Files.createTempDirectory("droide-job-reconciliation-").toFile()
+        val terminal = AgentWorkflowTerminal()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val docs = AgentWorkflowDocuments(agentWorkflowSnapshot("draft.txt", "unsaved"))
+        val authority = object : WorkspaceDocumentAuthority by docs {
+            override suspend fun reconcilePersistedWorkspace(): WorkspacePersistedReconciliation {
+                calls.incrementAndGet()
+                return WorkspacePersistedReconciliation(conflicts = listOf("draft.txt"))
+            }
+        }
+        val jobs = BackgroundCommandManager(terminal, onCommandFinished = authority::reconcilePersistedWorkspace)
+        try {
+            val ctx = agentWorkflowContext(root, manager = jobs, documents = authority, terminal = terminal)
+            val result = AgentTools.execute("run_command", buildJsonObject { put("command", "true"); put("yield_time_ms", 1000) }, ctx)
+            val job = finished(jobs, jobs.list().single().id)
+            assertEquals(0, job.exitCode)
+            assertTrue(result, result.contains("draft.txt") || result.contains("Process continues"))
+            for (operation in listOf("status", "output", "status")) {
+                val notice = AgentTools.execute("background_job", buildJsonObject { put("action", operation); put("job_id", job.id) }, ctx)
+                assertTrue(notice, notice.contains("Conflict paths: draft.txt"))
+            }
+            val poll = AgentTools.execute("write_stdin", buildJsonObject { put("session_id", job.id); put("yield_time_ms", 0) }, ctx)
+            assertTrue(poll, poll.contains("Conflict paths: draft.txt"))
+            assertEquals(1, calls.get())
+        } finally { jobs.closeAndJoin(); PathSecurity.deleteTreeNoFollow(root) }
+    }
+
     @Test fun realPipeCommandAcceptsStdinAndReturnsIncrementalUnicodeOutput() = runBlocking {
         val manager = BackgroundCommandManager(AgentWorkflowTerminal())
         try {

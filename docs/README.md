@@ -82,6 +82,7 @@ Generated build output, backup archives and signing credentials are not reposito
 
 ## Release assets and evidence
 
+- [Droide 1.03.6 workspace synchronization and upgrade guidance](releases/1.03.6.md)
 - [Droide 1.03.5 release and upgrade guidance](releases/1.03.5.md)
 - [Droide 1.03.4 published release](https://github.com/baystudio-dev/Droide/releases/tag/v1.03.4) and [candidate notes](releases/1.03.4.md)
 - [Droide 1.03.3 release and upgrade guidance](releases/1.03.3.md)

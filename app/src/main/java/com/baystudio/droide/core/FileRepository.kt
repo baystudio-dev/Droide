@@ -311,6 +311,7 @@ class FileRepository internal constructor(
         pageSize: Int = 250,
         options: DirectoryListingOptions = DirectoryListingOptions(),
     ): DirectoryPage = withContext(Dispatchers.IO) {
+        require(pageSize in 1..MAX_DIRECTORY_ENTRIES) { "Invalid directory page size" }
         listFilesPageBounded(rel, after, pageSize, options, DiscoveryBudget(), WorkspaceDiscoveryTraversal())
     }
 
@@ -325,7 +326,7 @@ class FileRepository internal constructor(
         val normalized = normalizeRel(rel)
         val dir = resolve(normalized)
         require(dir.isDirectory) { "Not a directory: $rel" }
-        require(pageSize in 1..MAX_DIRECTORY_ENTRIES) { "Invalid directory page size" }
+        require(pageSize in 1..maxOf(MAX_DIRECTORY_ENTRIES, budget.limits.directoryProbes)) { "Invalid retained page size" }
         require(after == null || after.path.substringBeforeLast('/', "") == normalized) { "Directory cursor belongs to another folder" }
         require(after == null || after.options == options) { "Directory cursor belongs to another listing policy" }
         require(after == null || normalizeRel(after.path) == after.path) { "Invalid directory cursor path" }
@@ -1185,6 +1186,26 @@ class FileRepository internal constructor(
         return DeleteObservation(this, normalizeRel(rel), null, expected, barrier)
     }
 
+    internal class ExplorerDeleteSelection(
+        val entry: FileEntry, val file: StreamFileVersion?, val directory: LocalDirectoryDeleteCustody.Selection?,
+        internal val stamp: PathMutationVersion,
+    ) {
+        var locallyRemoved = false
+            internal set
+    }
+
+    internal suspend fun prepareExplorerDelete(entry: FileEntry): ExplorerDeleteSelection = withContext(Dispatchers.IO) {
+        val path = ExplorerFilePolicy.requireUserTarget(root, entry.path)
+        val stamp = checkNotNull(pathMutationVersion(resolve(path))) { "Item changed. Refresh Explorer and select it again." }
+        check(stamp.directory == entry.isDir && (entry.isDir || stamp.bytes == entry.size) &&
+            stamp.modified.toMillis() == entry.modified) { "Item changed. Refresh Explorer and select it again." }
+        ExplorerDeleteSelection(entry, if (entry.isDir) null else StreamFileVersion.capture(root, path),
+            if (entry.isDir) directoryCustody.select(path) else null, stamp)
+    }
+
+    internal suspend fun delete(selection: ExplorerDeleteSelection): Boolean =
+        deleteChecked(selection.entry.path, streamExpected = selection.file, explorerSelection = selection)
+
     suspend fun delete(rel: String): Boolean = deleteChecked(rel)
 
     suspend fun deleteFileIfUnchanged(rel: String, expected: DiskFileVersion): Boolean = deleteChecked(rel, expected)
@@ -1199,6 +1220,7 @@ class FileRepository internal constructor(
         streamExpected: StreamFileVersion? = null,
         beforeDelete: (suspend () -> Unit)? = null,
         deleteObservation: DeleteObservation? = null,
+        explorerSelection: ExplorerDeleteSelection? = null,
     ): Boolean =
         withContext(Dispatchers.IO) {
             val normalized = normalizeRel(rel)
@@ -1207,10 +1229,18 @@ class FileRepository internal constructor(
                 streamExpected?.requireMatches(root, normalized)
                 val f = resolve(normalized)
                 expected?.let { requireVersion(f, rel, it) }
+                fun checkSelection() {
+                    if (explorerSelection != null) check(pathMutationVersion(f) == explorerSelection.stamp) {
+                        "The selected item changed. Refresh Explorer and review it again."
+                    }
+                }
+                checkSelection()
                 if (!f.exists()) return@withMutation false
                 val directorySelection = if (f.isDirectory) {
                     check(ExplorerFilePolicy.requireUnaliasedProjectPath(root, rel) == normalized)
-                    directoryCustody.select(normalized)
+                    val selected = directoryCustody.select(normalized)
+                    check(explorerSelection == null || selected == explorerSelection.directory) { "Selected folder changed. Choose it again." }
+                    selected
                 } else null
                 invocation.admit()
                 // SAF owns its existing protected stage. Other local directory deletions,
@@ -1220,7 +1250,7 @@ class FileRepository internal constructor(
                     check(expected == null && streamExpected == null && deleteObservation == null) {
                         "Regular-file observations cannot authorize a directory deletion"
                     }
-                    return@withMutation deleteDirectoryRetained(directorySelection, invocation)
+                    return@withMutation deleteDirectoryRetained(directorySelection, invocation, ::checkSelection) { explorerSelection?.locallyRemoved = true }
                 }
                 if (directorySelection == null && onMutation == null && participant == null && deleteObservation == null) {
                     check(!f.isDirectory) { "Delete source became a directory during admission; choose it again" }
@@ -1231,7 +1261,8 @@ class FileRepository internal constructor(
                     streamExpected?.requireMetadataMatches(root, normalized)
                     // This branch was selected for a non-directory. Never recursively unlink
                     // a directory substituted during admission or immediately before deletion.
-                    return@withMutation Files.deleteIfExists(f.toPath())
+                    checkSelection()
+                    return@withMutation Files.deleteIfExists(f.toPath()).also { explorerSelection?.locallyRemoved = it }
                 }
 
                 val staged = selectedStage ?: invocation.prepareDeleteStage(normalized) ?: tempSibling(f)
@@ -1268,6 +1299,7 @@ class FileRepository internal constructor(
                         { action -> barrier.commitDiskOnly(normalized, action) }
                     }) {
                         streamExpected?.requireMetadataMatches(root, normalized)
+                        checkSelection()
                         check(pathMutationVersion(f) == original) { "Delete source changed during preparation" }
                         deleteObservation?.let {
                             requirePublicationParents(it.parents)
@@ -1278,7 +1310,7 @@ class FileRepository internal constructor(
                             check(pathMutationVersion(f) == original) { "Observed delete source changed while verifying" }
                         }
                         invocation.requireDeleteStage(staged)
-                        moveLocal(f, staged, requireExistingParent = participant != null)
+                        moveLocal(f, staged, requireExistingParent = participant != null).also { explorerSelection?.locallyRemoved = it }
                     }) { "Cannot stage deletion: $rel" }
                     val deleteReceipt = invocation.deleteStageReceipt(preparation)
                     try {
@@ -1287,7 +1319,10 @@ class FileRepository internal constructor(
                         deleteObservation?.synchronizationFailed = true
                         val restored = invocation.rollbackAllowed(t) && rollbackMovedFile(normalized, relPath(staged), f, staged, original)
                         invocation.reconcileBestEffort(Mutation.Sync(normalized))
-                        if (restored) throw t
+                        if (restored) {
+                            explorerSelection?.locallyRemoved = false
+                            throw t
+                        }
                         throw mutationSynchronizationFailure(t,
                             "Delete synchronization failed; newer workspace changes were preserved. " +
                                 "The original deletion was staged at ${relPath(staged)}; inspect that path and $normalized before recovery or retry.")
@@ -1321,6 +1356,8 @@ class FileRepository internal constructor(
     private suspend fun deleteDirectoryRetained(
         selection: LocalDirectoryDeleteCustody.Selection,
         invocation: MutationInvocation,
+        checkSelection: () -> Unit,
+        removed: () -> Unit,
     ): Boolean {
         directoryCustody.prepare(selection, invocation.guard).use { operation ->
             invocation.directoryDeleteToken = operation.token
@@ -1330,7 +1367,8 @@ class FileRepository internal constructor(
                 check(invocation.localEffect(preparation, File(root, operation.retainedPath),
                     beforeEffect = { invocation.recheckAdmission() }) {
                     WorkspaceProcessPathGuard.requireSafe(root, invocation.mutation)
-                    operation.move()
+                    checkSelection()
+                    operation.move().also { if (it) removed() }
                 })
                 val localReceipt = invocation.deleteStageReceipt(preparation)
                 // Durable local commitment precedes synchronization. Failure here is a pending

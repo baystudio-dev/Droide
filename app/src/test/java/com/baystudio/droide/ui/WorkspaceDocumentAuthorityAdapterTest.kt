@@ -28,6 +28,56 @@ class WorkspaceDocumentAuthorityAdapterTest {
         PathSecurity.deleteTreeNoFollow(root)
     }
 
+    @Test fun reconcilePreservesEvictedTabsWhileStillDetectingDeletions() = runBlocking {
+        val state = EditorWorkspaceState()
+        val authority = EditorWorkspaceDocumentAuthority(state, Dispatchers.Unconfined, files)
+        repeat(32) { index ->
+            val path = "f$index.txt"
+            root.resolve(path).writeText("text $index")
+            state.document(path).ensureLoaded(files)
+            state.protectActiveEditor(path)
+            state.trimInactiveCleanDocuments()
+        }
+        assertEquals(1, state.allDocuments().count { it.loaded })
+        root.resolve("f0.txt").writeText("new while inactive")
+        assertTrue(root.resolve("f1.txt").delete())
+        assertEquals(listOf("f1.txt"), authority.reconcilePersistedWorkspace().removed)
+        assertEquals(1, state.allDocuments().count { it.loaded })
+        val reopened = state.document("f0.txt")
+        reopened.ensureLoaded(files)
+        assertEquals("new while inactive", reopened.content)
+    }
+
+    @Test fun openingTab33RetainsLocallySavedTabUntilSafRetrySucceeds() = runBlocking {
+        var offline = true
+        var published = 0
+        val repo = FileRepository(root, onMutation = {
+            if (it is FileRepository.Mutation.Sync || it is FileRepository.Mutation.Write) {
+                published++
+                if (offline) error("provider offline")
+            }
+        })
+        val state = EditorWorkspaceState()
+        val tabs = (0 until 32).map { "t$it.txt" }
+        val first = state.document(tabs.first())
+        root.resolve(first.path).writeText("base")
+        first.ensureLoaded(repo)
+        first.capture("saved locally")
+        first.save(repo)
+        assertFalse(first.dirty)
+        assertTrue(first.saveSynchronizationPending)
+        val next = requireNotNull(EditorTabRetention.open(tabs, "extra.txt", tabs.last()) {
+            state.peek(it)?.hasPendingTabWork == true
+        })
+        EditorTabRetention.closeEvicted(tabs, next, state) {}
+        assertSame(first, state.peek(first.path))
+        val before = published
+        offline = false
+        first.save(repo).getOrThrow()
+        assertEquals(before + 1, published)
+        assertFalse(first.saveSynchronizationPending)
+    }
+
     @Test fun unchangedEditableFilesKeepTheirRevisionAndDirtyBuffersAcrossTheToolSizeLimit() = runBlocking {
         for (size in listOf(2_000_000, 2_000_001, 3_000_000)) {
             val target = root.resolve("sample-$size.txt")

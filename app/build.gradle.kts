@@ -290,8 +290,8 @@ android {
         applicationId = "com.baystudio.droide"
         minSdk = 29
         targetSdk = 36
-        versionCode = 52
-        versionName = "1.03.5"
+        versionCode = 53
+        versionName = "1.03.6"
         if (fdroidDistribution && !hostJvmOnly) {
             externalNativeBuild.cmake.cFlags += listOf(
                 "-ffile-prefix-map=${rootProject.projectDir}=.",

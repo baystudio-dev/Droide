@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal fun interface WorkspaceDocumentWatchFactory {
-    /** Watch one active document's parent/nearest existing ancestor, never a recursive tree. */
+    /** Watch the active document and changes to its ancestor directories. */
     fun open(path: String, invalidate: (rebind: Boolean) -> Unit): AutoCloseable?
 }
 

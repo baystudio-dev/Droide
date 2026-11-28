@@ -17,6 +17,15 @@ interface ITerminalSession {
         execOnce(cmd, timeoutMs)
     suspend fun execStreamingWithInput(cmd: String, timeoutMs: Long, input: ProcessInputBuffer, onOutput: (String) -> Unit): ExecResult =
         throw UnsupportedOperationException("This execution backend does not support command stdin; use exec_command with keep_stdin_open=false")
+    suspend fun execProjectShell(root: File?, command: String, timeoutMs: Long,
+        input: ProcessInputBuffer? = null, onOutput: ((String) -> Unit)? = null): ExecResult {
+        val shell = root?.let { AgentWorkspaceCommandPolicy.shell(it, command) } ?: command
+        return when {
+            input != null -> execStreamingWithInput(shell, timeoutMs, input, requireNotNull(onOutput))
+            onOutput != null -> execStreaming(shell, timeoutMs, onOutput)
+            else -> execOnce(shell, timeoutMs)
+        }
+    }
     suspend fun execArgv(argv: List<String>, timeoutMs: Long = 30_000): ExecResult
     fun interrupt()
     fun clear()
@@ -256,6 +265,14 @@ class TerminalSession(
     override suspend fun execArgv(argv: List<String>, timeoutMs: Long): ExecResult =
         executeProcess(argv, timeoutMs)
 
+    override suspend fun execProjectShell(root: File?, command: String, timeoutMs: Long,
+        input: ProcessInputBuffer?, onOutput: ((String) -> Unit)?): ExecResult {
+        val directory = root?.let(AgentWorkspaceCommandPolicy::requireRoot)
+        return executeProcess(emptyList(), timeoutMs, onOutput ?: {}, shellText = directory?.let {
+            AgentWorkspaceCommandPolicy.shell(it, command)
+        } ?: command, streamInput = input, workspaceInvocation = directory?.let { WorkspaceInvocation(it, it) })
+    }
+
     override suspend fun execWorkspaceArgv(workspaceRoot: File, directory: File, command: List<String>, timeoutMs: Long): ExecResult {
         require(PathSecurity.contains(workspaceRoot, directory)) { "Command cwd escaped workspace" }
         return executeProcess(command, timeoutMs, workspaceInvocation = WorkspaceInvocation(workspaceRoot, directory))
@@ -304,7 +321,7 @@ class TerminalSession(
                 TerminalGuestCwdPolicy.withObservedCwd(refreshed, workDir, observedCwd) else refreshed
             execution.ensureActive()
             val guestEnvironment = if (commandSpec.prefix.isEmpty()) emptyMap() else lease.environment
-            val commandArgv = workspaceInvocation?.let {
+            val commandArgv = workspaceInvocation?.takeIf { shellText == null }?.let {
                 WorkspaceCommandInvocation.argv(it.directory, payloadArgv, commandSpec.shell)
             } ?: payloadArgv
             val expandedLimits = if (shellText != null && shellText.length > 32_000)

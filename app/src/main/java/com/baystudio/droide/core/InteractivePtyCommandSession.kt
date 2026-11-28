@@ -12,6 +12,9 @@ interface InteractivePtyCommandSession {
         input: ProcessInputBuffer?,
         onOutput: (String) -> Unit,
     ): ExecResult
+    suspend fun execProjectPty(root: java.io.File?, command: String, timeoutMs: Long, input: ProcessInputBuffer?,
+        onOutput: (String) -> Unit): ExecResult = execInteractivePty(
+            root?.let { AgentWorkspaceCommandPolicy.shell(it, command) } ?: command, timeoutMs, input, onOutput)
 }
 
 /** Ownership is separate from the user's shell and rejects stale completion callbacks. */

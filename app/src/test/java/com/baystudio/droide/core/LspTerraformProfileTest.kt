@@ -16,7 +16,7 @@ class LspTerraformProfileTest {
         for(p in listOf("main.TF","vars.TFVARS","main.tf.json","vars.tfvars.json","a.hcl",".terraform.lock.hcl","stack.tfcomponent.hcl"))
             assertFalse(LanguageServerRegistry.forPath(p).contains(spec))
         assertEquals(listOf("terraform-ls","serve"),spec.commands.single())
-        assertEquals(55,LanguageRegistry.all.size)
+        assertEquals(56,LanguageRegistry.all.size)
     }
     @Test fun canonicalDocumentDirectoryIsBoundedWithoutAncestorMarkerPromotion() {
         val root=Files.createTempDirectory("terraform-root-").toFile().canonicalFile

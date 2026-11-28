@@ -45,7 +45,7 @@ class AgentWorkspaceMutation(
         expected: WorkspaceDocumentVersion,
         content: String,
         reason: String,
-    ): WorkspaceDocumentMutationResult = documents?.replaceText(target.path, expected, content, reason)
+    ): WorkspaceDocumentMutationResult = documents?.replaceAgentText(target.path, expected, content, reason)
         ?: WorkspaceDocumentMutationResult.NotLive
 
     fun expectedVersion(args: JsonObject): WorkspaceDocumentVersion? {

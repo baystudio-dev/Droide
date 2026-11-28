@@ -50,7 +50,7 @@ internal object AgentCommandSessions {
             "\nProcess continues. Resume with write_stdin(session_id=\"${job.id}\", output_cursor=next_output_cursor, yield_time_ms=1000) or inspect background_job. Do not restart this command or claim completion."
             else ""
         return renderPage(job, cursor, interrupted, prefix,
-            continuation + reconciliation.agentCommandReconciliationNotice(operation), PRIMARY_COMMAND_CHARS)
+            continuation + job.workspaceNotice.ifEmpty { reconciliation.agentCommandReconciliationNotice(operation) }, PRIMARY_COMMAND_CHARS)
     }
 
     /** Embedded callers have no cursor. Retain their exit wrapper and mark clipping explicitly. */

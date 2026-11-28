@@ -22,13 +22,15 @@ import kotlinx.coroutines.withContext
 class BackgroundCommandManager private constructor(
     private val terminal: ITerminalSession,
     private val heartbeatIntervalMs: Long,
-    private val onCommandFinished: suspend () -> Unit,
+    private val onCommandFinished: (suspend () -> WorkspacePersistedReconciliation?)?,
 ) {
     constructor(terminal: ITerminalSession, heartbeatIntervalMs: Long = 20_000) :
-        this(terminal, heartbeatIntervalMs, {})
+        this(terminal, heartbeatIntervalMs, null)
 
-    internal constructor(terminal: ITerminalSession, onCommandFinished: suspend () -> Unit) :
+    internal constructor(terminal: ITerminalSession, onCommandFinished: suspend () -> WorkspacePersistedReconciliation?) :
         this(terminal, 20_000, onCommandFinished)
+
+    internal val reconcilesWorkspace get() = onCommandFinished != null
 
     init { require(heartbeatIntervalMs in 20..30_000) }
     enum class State { RUNNING, EXITED, FAILED, TIMED_OUT, KILLED }
@@ -47,6 +49,7 @@ class BackgroundCommandManager private constructor(
         val stdinAvailable: Boolean = false,
         val interactivePty: Boolean = false,
         val outputIncomplete: Boolean = false,
+        val workspaceNotice: String = "",
     )
 
     private data class Entry(
@@ -64,6 +67,7 @@ class BackgroundCommandManager private constructor(
         var inertReservation: Boolean = false,
         var outputEndCursor: Long = 0,
         var outputIncomplete: Boolean = false,
+        var workspaceNotice: String = "",
         val input: ProcessInputBuffer? = null,
         val stopWithAgent: Boolean = false,
         val requiresTty: Boolean = false,
@@ -259,7 +263,11 @@ class BackgroundCommandManager private constructor(
                 if (!executionStarted || completionNotified) return
                 completionNotified = true
                 try {
-                    withContext(NonCancellable) { onCommandFinished() }
+                    val callback = onCommandFinished ?: return
+                    val notice = withContext(NonCancellable) { callback() }.agentCommandReconciliationNotice("background_job:$id:completion")
+                    if (notice.isNotEmpty()) synchronized(lock) {
+                        entries[id]?.let { current -> current.workspaceNotice = notice; current.changed() }
+                    }
                 } catch (failure: Exception) {
                     appendOutput(id, "\n[workspace refresh pending] ${failure.message?.take(300) ?: failure.javaClass.simpleName}\n")
                 }
@@ -602,6 +610,7 @@ class BackgroundCommandManager private constructor(
         stdinAvailable = input?.isClosed == false && state == State.RUNNING,
         interactivePty = requiresTty,
         outputIncomplete = outputIncomplete,
+        workspaceNotice = workspaceNotice,
     )
 
     private fun Entry.changed() { changes.value += 1 }

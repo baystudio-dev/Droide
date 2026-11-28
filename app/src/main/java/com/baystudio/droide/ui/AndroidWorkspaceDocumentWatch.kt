@@ -1,33 +1,44 @@
 package com.baystudio.droide.ui
 
 import android.os.FileObserver
+import com.baystudio.droide.core.WorkspaceDirectoryEvents
 import com.baystudio.droide.core.ExplorerFilePolicy
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 
-/** One nonrecursive watch, with exact child filtering; unrelated build output is ignored. */
-internal class AndroidWorkspaceDocumentWatch(private val root: File) : WorkspaceDocumentWatchFactory {
+/** Nonrecursive watches along the active path; ancestor bindings only accept structural events. */
+internal class AndroidWorkspaceDocumentWatch(
+    private val root: File,
+    private val subscribe: (File, (Int, String?) -> Unit) -> AutoCloseable? = WorkspaceDirectoryEvents::subscribe,
+) : WorkspaceDocumentWatchFactory {
     internal data class Target(val directory: File, val child: String, val watchingAncestor: Boolean)
 
     override fun open(path: String, invalidate: (Boolean) -> Unit): AutoCloseable? {
         val target = target(root, path) ?: return null
-        @Suppress("DEPRECATION")
-        val observer = object : FileObserver(target.directory.absolutePath, EVENTS) {
-            override fun onEvent(event: Int, child: String?) {
-                if (event and EVENTS == 0) return
-                val selfChanged = event and (DELETE_SELF or MOVE_SELF) != 0
-                if (!selfChanged && child != target.child) return
-                try { invalidate(selfChanged || target.watchingAncestor) }
-                catch (_: Exception) { /* Never escape the Android observer callback thread. */ }
+        val subscriptions = mutableListOf<AutoCloseable>()
+        val base = root.canonicalFile
+        var current = target
+        try {
+            while (true) {
+                val bound = current
+                val mask = if (bound.watchingAncestor) WorkspaceDirectoryEvents.STRUCTURE else EVENTS
+                subscribe(bound.directory) { event, child ->
+                    val selfChanged = event and (FileObserver.DELETE_SELF or FileObserver.MOVE_SELF) != 0
+                    if (event and mask != 0 && (selfChanged || child == bound.child)) {
+                        invalidate(selfChanged || bound.watchingAncestor)
+                    }
+                }?.let(subscriptions::add)
+                if (bound.directory == base) break
+                current = if (subscriptions.size >= 31)
+                    Target(base, path.substringBefore('/'), true)
+                else Target(bound.directory.parentFile ?: break, bound.directory.name, true)
             }
-        }
-        try { observer.startWatching() }
-        catch (failure: Exception) {
-            observer.stopWatching()
+        } catch (failure: Throwable) {
+            subscriptions.forEach { it.close() }
             throw failure
         }
-        return AutoCloseable { observer.stopWatching() }
+        return AutoCloseable { subscriptions.forEach { it.close() } }
     }
 
     internal companion object {

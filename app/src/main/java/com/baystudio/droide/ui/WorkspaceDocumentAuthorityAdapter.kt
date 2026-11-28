@@ -165,6 +165,13 @@ internal class EditorWorkspaceDocumentAuthority(
         withContext(editorDispatcher) { editorState.captureSearchSnapshots(request) }
 
 
+    override suspend fun replaceAgentText(path: String, expected: WorkspaceDocumentVersion, content: String,
+        reason: String): WorkspaceDocumentMutationResult = withContext(editorDispatcher) {
+        replaceTextNow(path, expected, content, reason, published = { change ->
+            editorState.pendingAgentSaves[path] = requireNotNull(change.after.documentId)
+        })
+    }
+
     override suspend fun replaceText(
         path: String,
         expected: WorkspaceDocumentVersion,
@@ -370,6 +377,9 @@ internal class EditorWorkspaceDocumentAuthority(
         val path = baseline.path
         return try {
             val attributes = repository.attributesIfPresent(path) ?: return DiskState.Missing
+            // Evicted clean tabs resolve type and contents on their next open. Missing paths
+            // still reach reconciliation so a terminal deletion removes the tab.
+            if (!baseline.loaded && !baseline.pendingPathWork) return DiskState.Unchanged
             if (!attributes.isRegularFile) return DiskState.Other
             val saved = baseline.diskVersion
             if (baseline.loaded && baseline.kind == EditorDocumentKind.TEXT && saved?.existed == true &&

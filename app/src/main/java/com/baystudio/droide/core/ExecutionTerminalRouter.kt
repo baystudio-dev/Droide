@@ -31,11 +31,8 @@ class ExecutionTerminalRouter(
         selected()?.prepareCommandInput() == true
 
     override suspend fun execStreamingWithInput(cmd: String, timeoutMs: Long, input: ProcessInputBuffer, onOutput: (String) -> Unit): ExecResult {
-        return tracked { it.execStreamingWithInput(workspaceCommand(cmd), timeoutMs, input, onOutput) }
+        return tracked { it.execProjectShell(workspaceRoot, cmd, timeoutMs, input, onOutput) }
     }
-
-    private fun workspaceCommand(command: String): String =
-        workspaceRoot?.let { AgentWorkspaceCommandPolicy.shell(it, command) } ?: command
 
     private suspend fun workspaceArgv(target: ITerminalSession, argv: List<String>, timeoutMs: Long): ExecResult {
         val root = workspaceRoot?.let(AgentWorkspaceCommandPolicy::requireRoot)
@@ -66,11 +63,11 @@ class ExecutionTerminalRouter(
     }
 
     override suspend fun execOnce(cmd: String, timeoutMs: Long): ExecResult {
-        return tracked { it.execOnce(workspaceCommand(cmd), timeoutMs) }
+        return tracked { it.execProjectShell(workspaceRoot, cmd, timeoutMs) }
     }
 
     override suspend fun execStreaming(cmd: String, timeoutMs: Long, onOutput: (String) -> Unit): ExecResult {
-        return tracked { it.execStreaming(workspaceCommand(cmd), timeoutMs, onOutput) }
+        return tracked { it.execProjectShell(workspaceRoot, cmd, timeoutMs, onOutput = onOutput) }
     }
 
     override suspend fun execArgv(argv: List<String>, timeoutMs: Long): ExecResult {
@@ -97,7 +94,7 @@ class ExecutionTerminalRouter(
                     val pty = it as? InteractivePtyCommandSession
                         ?: error("The selected terminal backend does not support an Agent-owned visible PTY")
                     check(pty.supportsInteractivePty) { "Interactive PTY is unavailable in the selected terminal" }
-                    pty.execInteractivePty(workspaceCommand(command), timeoutMs, input, onOutput)
+                    pty.execProjectPty(workspaceRoot, command, timeoutMs, input, onOutput)
                 }
             override suspend fun <T> protectCommand(block: suspend () -> T): T {
                 val backend = pinned as? DevelopmentOperationSession
@@ -114,11 +111,11 @@ class ExecutionTerminalRouter(
             override fun start() = Unit
             override fun send(cmd: String) = Unit
             override suspend fun execOnce(cmd: String, timeoutMs: Long): ExecResult =
-                tracked(pinned) { it.execOnce(workspaceCommand(cmd), timeoutMs) }
+                tracked(pinned) { it.execProjectShell(workspaceRoot, cmd, timeoutMs) }
             override suspend fun execStreaming(cmd: String, timeoutMs: Long, onOutput: (String) -> Unit): ExecResult =
-                tracked(pinned) { it.execStreaming(workspaceCommand(cmd), timeoutMs, onOutput) }
+                tracked(pinned) { it.execProjectShell(workspaceRoot, cmd, timeoutMs, onOutput = onOutput) }
             override suspend fun execStreamingWithInput(cmd: String, timeoutMs: Long, input: ProcessInputBuffer, onOutput: (String) -> Unit): ExecResult =
-                tracked(pinned) { it.execStreamingWithInput(workspaceCommand(cmd), timeoutMs, input, onOutput) }
+                tracked(pinned) { it.execProjectShell(workspaceRoot, cmd, timeoutMs, input, onOutput) }
             override suspend fun execArgv(argv: List<String>, timeoutMs: Long): ExecResult =
                 tracked(pinned) { workspaceArgv(it, argv, timeoutMs) }
             override suspend fun execWorkspaceArgv(workspaceRoot: java.io.File, directory: java.io.File,

@@ -173,6 +173,10 @@ interface WorkspaceDocumentAuthority : StreamedDiskCommitAuthority {
     ): WorkspaceDocumentMutationResult = WorkspaceDocumentMutationResult.NotLive
 
      
+    /** An inline Agent edit schedules explicit persistence. The editor records that intent with publication. */
+    suspend fun replaceAgentText(path: String, expected: WorkspaceDocumentVersion, content: String,
+        reason: String): WorkspaceDocumentMutationResult = replaceText(path, expected, content, reason)
+
     /** Optional native source publication. No disk fallback and no implicit save. The fence must wrap the entire
      * non-suspending native transaction, not just its preflight. */
     suspend fun replaceSourceText(
@@ -344,6 +348,10 @@ class WorkspaceDocumentAuthorityBridge(
         val capturedDelegate = currentDelegate()
         return capturedDelegate?.captureSearchSnapshots(request) ?: WorkspaceSearchCapture()
     }
+
+    override suspend fun replaceAgentText(path: String, expected: WorkspaceDocumentVersion, content: String,
+        reason: String): WorkspaceDocumentMutationResult = currentDelegate()?.replaceAgentText(path, expected, content, reason)
+        ?: WorkspaceDocumentMutationResult.NotLive
 
     override suspend fun replaceText(
         path: String,

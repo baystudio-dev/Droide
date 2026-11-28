@@ -105,7 +105,7 @@ sealed interface WorkspaceAgentEvent {
         }
     }
     data class Plan(val entries: List<ExternalAgentPlanEntry>) : WorkspaceAgentEvent
-    data class Status(val message: String) : WorkspaceAgentEvent
+    data class Status(val message: String, val publishedFiles: Boolean = false) : WorkspaceAgentEvent
     data class Usage(val snapshot: WorkspaceAgentUsageSnapshot) : WorkspaceAgentEvent
     data class SessionBound(val sessionId: String) : WorkspaceAgentEvent
     data class Configuration(val sessionId: String, val value: WorkspaceAgentSessionConfiguration) : WorkspaceAgentEvent
@@ -402,6 +402,12 @@ class WorkspaceAgentPluginHost internal constructor(
             // before this turn receives mutation authority and the prompt is admitted.
             val preparationEpoch = session.rpc.prepareTurn()
             val turnGeneration = session.steering.begin()
+            fun reportPublished(paths: Set<String>) {
+                if (paths.isEmpty()) return
+                val names = paths.asSequence().take(12).map { it.replace('\n', ' ').replace('\r', ' ').take(120) }.joinToString()
+                onEvent(WorkspaceAgentEvent.Status("Saved to project (" + paths.size + "): " + names +
+                    if (paths.size > 12) " …" else "", publishedFiles = true))
+            }
             var steerSignal: Job? = null
             var attachmentAccess: AcpAttachmentAccess.Lease? = null
             try {
@@ -557,7 +563,6 @@ class WorkspaceAgentPluginHost internal constructor(
                 attachmentAccess?.finish()
                 val mirrorEditGrant = if (stop == "end_turn") session.rpc.freezeForReconciliation()
                     else { session.rpc.freezeMutations(); null }
-                val authorizedWrites = session.rpc.drainDirectWrites()
                 val reconciliation = try { if (deferredSync != null) {
                     deferSynchronization(session.mapper, deferredSync, onEvent)
                 } else try {
@@ -573,6 +578,8 @@ class WorkspaceAgentPluginHost internal constructor(
                 } catch (failure: Exception) {
                     deferSynchronization(session.mapper, synchronizationFailureNotice(failure), onEvent)
                 } } finally { mirrorEditGrant?.revoke() }
+                val authorizedWrites = session.rpc.drainDirectWrites()
+                reportPublished(authorizedWrites)
                 WorkspaceAgentTurnResult(
                     agentId = agentId,
                     sessionId = session.sessionId,
@@ -588,7 +595,7 @@ class WorkspaceAgentPluginHost internal constructor(
                         "CLI cleanup is not confirmed. The session is still owned; retry cleanup before reconnecting."
                     else "The turn ended before synchronization completed. Review the retained CLI files before retrying.")
                 attachmentAccess?.finish()
-                session.rpc.drainDirectWrites()
+                reportPublished(session.rpc.drainDirectWrites())
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
                     runCatching { kotlinx.coroutines.withTimeout(15_000) { workspaceIo.refresh() } }
                 }
@@ -1284,6 +1291,7 @@ internal class AcpNdjsonConnection(
     internal val retainedInboundChars: Long get() = inboundRetention.retainedChars
     init { require(maxInboundIdChars > 0 && maxInboundRetainedRequests in 1..MAX_INBOUND_REQUESTS) }
     private val directWrites = ConcurrentHashMap.newKeySet<String>()
+    private val readVersions = AcpReadVersions()
     private val permissionLedger = AcpPermissionLedger()
     private var mirrorEdit: AcpMirrorEditGrant.Proposal? = null
     private var mirrorRevision = 0L
@@ -1470,6 +1478,7 @@ internal class AcpNdjsonConnection(
         approvals.clearSessionApprovals(approvalOwner, EXTERNAL_ACP_PERMISSION_SCOPE)
         approvalSessionId = approvalOwner; terminal.bindApprovalSession(approvalOwner)
         directWrites.clear()
+        readVersions.clear()
         sessionId = value
         readSessionBinding = Any()
     }
@@ -1863,13 +1872,20 @@ internal class AcpNdjsonConnection(
         ) }
         require(approved) { "ACP file read denied" }
         requireCurrentRead()
-        var content = workspaceIo.readExecutionText(path)
-            ?: files.readTextForEdit(rel, maxBytes = AcpWorkspaceText.MAX_BYTES)
+        val execution = workspaceIo.readExecutionVersion(path)
+        var content = execution?.content ?: files.readTextForEdit(rel, maxBytes = AcpWorkspaceText.MAX_BYTES)
+        // Ordinary mirror files also have a trusted synchronization baseline. Excluded files do not.
+        val canonicalHash = when {
+            execution == null -> DiskFileVersion.fromText(content).sha256
+            AgentWorkspacePathPolicy.visible(rel) -> null
+            else -> runSuspendCatching { AcpWorkspaceText.version(files, rel).sha256 }.getOrDefault("unavailable")
+        }
+        val version = AcpReadVersions.Version(execution?.sha256, canonicalHash)
         val line = params["line"]?.jsonPrimitive?.intOrNull
         val limit = params["limit"]?.jsonPrimitive?.intOrNull
         if (line != null || limit != null) {
             val start = (line ?: 1).coerceAtLeast(1) - 1
-            val count = (limit ?: 2_000).coerceIn(1, 10_000)
+            val count = limit?.coerceAtLeast(1) ?: Int.MAX_VALUE
             content = content.lineSequence().drop(start).take(count).joinToString("\n")
         }
         // IO and the owned writer may both suspend. Revalidate at the writer's
@@ -1878,14 +1894,20 @@ internal class AcpNdjsonConnection(
         send(buildJsonObject {
             put("jsonrpc", "2.0"); put("id", id)
             put("result", buildJsonObject { put("content", content) })
-        }, beforeWrite = ::requireCurrentRead)
+        }, beforeWrite = {
+            synchronized(this) {
+                requireCurrentRead()
+                readVersions.record(rel, version)
+            }
+        })
     }
 
     private suspend fun handleWrite(params: JsonObject, receivedEpoch: Long): JsonObject {
         accessPolicy.requireMutation("filesystem write")
         val path = params["path"]?.jsonPrimitive?.contentOrNull ?: error("ACP write path is missing")
         val content = params["content"]?.jsonPrimitive?.contentOrNull ?: error("ACP write content is missing")
-        require(content.toByteArray(Charsets.UTF_8).size <= 2_000_000) { "ACP write is too large" }
+        val bytes = content.toByteArray(Charsets.UTF_8)
+        require(bytes.size <= AcpWorkspaceText.MAX_BYTES) { "ACP write is too large" }
         val local = mapper.remoteToLocal(path) ?: error("ACP write escaped the workspace")
         val rel = local.relativeTo(files.root).invariantSeparatorsPath
         val canonicalRemotePath = mapper.localToRemote(local)
@@ -1912,6 +1934,10 @@ internal class AcpNdjsonConnection(
         requireCurrentWrite()
         val expected = AcpWorkspaceText.version(files, rel)
         val projection = workspaceIo.prepareTextProjection(canonicalRemotePath, expected)
+        check(readVersions.permits(rel, expected.sha256.takeIf { expected.existed },
+            projection?.executionVersion?.takeIf { it.existed }?.sha256, projection != null)) {
+            "The file changed or its read version expired. Read $rel again before writing."
+        }
         requireCurrentWrite()
         val approved = approvals.withApprovalOwner(ApprovalOwnerAdmission(this) {
             caller.isActive && authorityEpoch.get() == receivedEpoch && transportFailure == null && readSessionBinding === binding && mutationTurnBinding === turn && sessionId == sid && approvalSessionId == owner && accessPolicy.allowsWorkspaceMutation()
@@ -1932,7 +1958,7 @@ internal class AcpNdjsonConnection(
         require(approved) { "ACP file write denied" }
         requireCurrentWrite()
         projection?.requireUnchanged()
-        val bytes = content.toByteArray(Charsets.UTF_8)
+        lateinit var savedHash: String
         files.writeStream(rel, bytes.inputStream(), expectedBytes = bytes.size.toLong(),
             requireAbsent = !expected.existed, expectedVersion = expected,
             beforePublication = {
@@ -1942,12 +1968,19 @@ internal class AcpNdjsonConnection(
             },
             publicationObserver = object : StreamPublicationObserver {
                 override fun beforePublish(preparation: StreamPublicationPreparation) = requireCurrentWrite()
-                override fun onPublished(receipt: StreamPublicationReceipt) { directWrites += rel }
+                override fun onPublished(receipt: StreamPublicationReceipt) {
+                    savedHash = receipt.preparation.sha256
+                    directWrites += rel
+                }
             })
         try {
             requireCurrentWrite()
             if (projection != null) projection.publish(content, ::requireCurrentWrite)
             else workspaceIo.push(local, canonicalRemotePath)
+            synchronized(this) {
+                requireCurrentWrite()
+                readVersions.record(rel, AcpReadVersions.Version(savedHash.takeIf { projection != null }, savedHash))
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
             throw IllegalStateException("Project file was saved at $rel, but CLI projection needs review. " +

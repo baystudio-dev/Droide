@@ -1,0 +1,1 @@
+Perubahan file dari editor, Git dan agent lebih terlindungi saat dikerjakan bersamaan. Perintah terminal memakai proyek yang dipilih. Explorer mempertahankan halaman yang sudah dimuat, panel Git mengikuti staging dari terminal, dan chat mencatat file yang sudah ditulis saat Stop ditekan. Pemeriksaan job lebih ringan. Simpan tertunda ke folder Android tetap bisa dilanjutkan.

@@ -19,8 +19,8 @@ class ExplorerRefreshSourceContractTest {
         RefreshBranch("uncertain move", "} else if (observation.uncertain) {", "failure?.let {"),
         RefreshBranch("create file", "if (showNewFile) AlertDialog(", "if (showNewFolder) AlertDialog("),
         RefreshBranch("create folder", "if (showNewFolder) AlertDialog(", "if (showRename != null) AlertDialog("),
-        RefreshBranch("rename", "if (showRename != null) AlertDialog(", "showDelete?.let { target ->", renameThroughMove),
-        RefreshBranch("delete", "showDelete?.let { target ->", "private fun savedFileSyncMessage("),
+        RefreshBranch("rename", "if (showRename != null) AlertDialog(", "showDelete?.let { selection ->", renameThroughMove),
+        RefreshBranch("delete", "showDelete?.let { selection ->", "private fun savedFileSyncMessage("),
     )
 
     private fun branchRange(text: String, branch: RefreshBranch): IntRange {
